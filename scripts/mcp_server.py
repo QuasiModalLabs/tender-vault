@@ -201,5 +201,37 @@ def archive(filename: str, reason: str) -> dict:
     return tender_tools.cmd_archive(args)
 
 
+def _preload_in_background() -> None:
+    """
+    Start loading ChromaDB + the embedding model the moment the server starts.
+
+    Without this, the first search/get/similar call pays the full cold-start
+    cost (importing torch, loading the sentence-transformer, opening the DB) —
+    60-90s on a typical machine, which exceeds Claude Desktop's tool-call
+    timeout. Loading in a daemon thread at startup means the model warms up
+    while the user is still typing their first message.
+
+    The thread is a daemon so it never blocks server shutdown. If a tool call
+    arrives before loading finishes, load_collection() is idempotent and the
+    call simply waits for the same load (module-level state, single process).
+    """
+    import threading
+
+    def _load():
+        try:
+            tender_tools.load_collection()
+        except SystemExit:
+            # ChromaDB not built yet (ingest never run) — tools will surface
+            # the real error message when actually called.
+            pass
+        except Exception:
+            # Same: don't crash the server at startup; let the tool call
+            # report the failure with context.
+            pass
+
+    threading.Thread(target=_load, daemon=True).start()
+
+
 if __name__ == "__main__":
+    _preload_in_background()
     mcp.run()

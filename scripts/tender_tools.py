@@ -101,13 +101,28 @@ class BM25:
 _collection = None
 _bm25 = None
 doc_index: list[dict] = []  # Parallel to BM25 corpus, for ID lookup
+_load_lock = __import__("threading").Lock()
 
 
 def load_collection():
-    """Lazy-load ChromaDB and build BM25 index."""
+    """
+    Lazy-load ChromaDB and build BM25 index. Thread-safe: the MCP server
+    preloads in a background thread at startup, and a tool call may arrive
+    mid-load — the lock makes the second caller wait for the first load
+    instead of racing it.
+    """
     global _collection, _bm25, doc_index
     if _collection is not None:
         return _collection
+
+    with _load_lock:
+        if _collection is not None:  # Loaded while we waited for the lock
+            return _collection
+        return _do_load()
+
+
+def _do_load():
+    global _collection, _bm25, doc_index
 
     if not DB_PATH.exists():
         sys.stderr.write(
