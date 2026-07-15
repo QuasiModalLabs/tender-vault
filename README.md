@@ -15,13 +15,13 @@ This project is the rewrite. The retrieval layer is smaller (a Python module, ~3
 ```
           ┌─────────────────────────┐
           │   Canada Buys CSV       │
-          │   (~2,800 active)       │
+          │   (open notices, ~850)  │
           └────────────┬────────────┘
                        │  python scripts/ingest.py
                        │  (weekly via GitHub Actions)
                        ▼
           ┌─────────────────────────┐
-          │   Filter by profile     │  ← aggressive: 2,800 → ~200
+          │   Filter by profile     │  ← aggressive, profile-driven
           │   → ChromaDB (local)    │
           └────────────┬────────────┘
                        │
@@ -65,7 +65,7 @@ pip install -r requirements.txt
 # Edit your profile first — the ingest filter reads from its frontmatter
 $EDITOR vault/profiles/my-company.md
 
-# First ingest (downloads ~80MB CSV, builds embeddings, takes ~2 min)
+# First ingest (downloads the open-notices CSV, builds embeddings, ~2 min)
 python scripts/ingest.py
 ```
 
@@ -82,26 +82,32 @@ Claude Code picks up `vault/CLAUDE.md` automatically and uses `scripts/tender_to
 
 ### Using Claude Desktop (via MCP)
 
-Edit your Claude Desktop config:
-- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+**Find the right config file first** — this varies by install:
 
-Add this (using the **absolute** path to your clone):
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows (direct installer):** `%APPDATA%\Claude\claude_desktop_config.json`
+- **Windows (Microsoft Store version):** the app sandboxes its config elsewhere. Don't guess the path — in Claude Desktop open **Settings → Developer → Edit Config**, which opens the file the app actually reads.
+
+Add an `mcpServers` block. Point `command` at the **virtual environment's Python** (not system Python, or the server won't find its dependencies), with absolute paths:
 
 ```json
 {
   "mcpServers": {
     "tender-vault": {
-      "command": "python",
-      "args": ["/absolute/path/to/tender-vault/scripts/mcp_server.py"]
+      "command": "C:\\code\\tender-vault\\.venv\\Scripts\\python.exe",
+      "args": ["C:\\code\\tender-vault\\scripts\\mcp_server.py"]
     }
   }
 }
 ```
 
-Quit Claude Desktop completely and reopen it. A hammer icon appears in the input box — click it to verify `search`, `get_tender`, `find_similar`, `list_watching`, `list_parked`, `promote`, `park`, `archive` are all there.
+(macOS/Linux: `command` is `/path/to/tender-vault/.venv/bin/python`.) If the config file already has content, merge `mcpServers` in as a sibling key — don't paste a second top-level `{}` object; the JSON must have exactly one root.
 
-One caveat: Claude Desktop doesn't auto-read `CLAUDE.md` the way Claude Code does. When starting a conversation, either paste the contents of `vault/CLAUDE.md` into a project, or mention it: *"First, read vault/CLAUDE.md for how to work with this repo."*
+**Restart properly:** quitting means killing the tray/background process (Windows: system tray → right-click → Quit, or Task Manager), not just closing the window. The config is only read at startup.
+
+**Verify:** in a chat, open the `+` menu → **Connectors** — `tender-vault` should be listed with a toggle. (Do **not** use "Add custom connector" — that dialog is for remote MCP servers with URLs, not local ones.) Test with *"list the tenders in my watching folder."*
+
+Two behaviors to expect: the first ChromaDB-backed call of a session (search/get/similar) takes 30–90 seconds while the embedding model loads — subsequent calls are fast. And Claude Desktop doesn't auto-read `CLAUDE.md` the way Claude Code does — paste its contents into a Claude Project's instructions and do tender work in that project.
 
 ## Weekly auto-ingest via GitHub Actions
 
@@ -126,7 +132,7 @@ The digest that *does* get committed is the portfolio artifact: a month of diges
 
 **Determinism.** Two runs of the same query won't produce identical reasoning paths. That's okay for research, bad for a product that needs to be reproducible.
 
-**Scale.** This works because the corpus is ~200 tenders after filtering. At 10,000 the vault pattern starts to strain (too many files, context windows get tight). For a mid-size consulting firm it's the right size.
+**Scale.** This works because the corpus is small after filtering (tens to low hundreds). At 10,000 the vault pattern starts to strain (too many files, context windows get tight). For a mid-size consulting firm it's the right size.
 
 **Value extraction defaults to a crude regex.** By default `ingest.py` grabs the first dollar amount in the description — often right, sometimes it catches a bond amount or insurance minimum instead. Running `python scripts/ingest.py --extract-values` replaces this with an LLM extraction pass (Anthropic API, `ANTHROPIC_API_KEY` required, a few cents per ingest) that reads the description and pulls the actual contract value. The regex remains the default and the per-tender fallback so the repo stays runnable with zero credentials.
 
@@ -144,7 +150,7 @@ exclude: [janitorial, landscaping, catering, food service]
 min_days_until_close: 10
 ```
 
-Going from 2,800 active tenders to ~200 happens in four filters: date, exclusions, competency match, value range. The funnel is printed when you run ingest so you can tune the criteria against your actual distribution.
+The funnel — date, exclusions, competency match, value range — is printed on every ingest so you can tune criteria against the live distribution. With the default (deliberately narrow) profile, a recent run went 852 open tenders → 22. Literal substring matching on competencies is the big reducer; broaden the terms in the profile to widen the corpus.
 
 ## Files worth reading, in order
 
