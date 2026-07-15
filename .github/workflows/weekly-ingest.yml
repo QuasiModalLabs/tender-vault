@@ -1,0 +1,64 @@
+name: Weekly tender ingest
+
+# Runs every Monday at 06:00 UTC (02:00 Toronto in summer, 01:00 in winter).
+# Also runs on manual trigger from the Actions tab.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+# Only one ingest can run at a time. If a new run starts, cancel any pending one.
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed to push the digest commit back to the repo
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Cache HuggingFace model
+        # sentence-transformers downloads ~90MB on first use. Caching it keeps
+        # the Monday run fast and stays well within GitHub's free tier.
+        # Cache key is tied to the model name so we re-download only if we
+        # change models (not just because requirements.txt changed).
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2-v1
+
+      - name: Run ingest
+        # ChromaDB is rebuilt into a gitignored directory — we don't commit it.
+        # What we DO commit (in the next step) is the digest file: a
+        # human-readable markdown summary of what arrived this week.
+        run: python scripts/ingest.py --force
+
+      - name: Generate weekly digest
+        run: python scripts/digest.py
+
+      - name: Commit digest if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vault/digests/
+          if git diff --cached --quiet; then
+            echo "No new digest to commit"
+          else
+            DATE=$(date -u +%Y-%m-%d)
+            git commit -m "digest: weekly ingest ${DATE}"
+            git push
+          fi

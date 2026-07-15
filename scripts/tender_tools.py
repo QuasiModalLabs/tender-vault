@@ -1,0 +1,504 @@
+"""
+Tools for Claude Code to work with the tender corpus.
+
+This is the 'wrap' layer — Claude decides what to search for, when to fetch
+full details, when to promote, etc. These tools just execute cleanly and
+return JSON.
+
+Design principle: each command is a single verb. Each prints JSON to stdout.
+Errors go to stderr and non-zero exit codes. Claude can chain these freely.
+
+Usage:
+    python scripts/tender_tools.py search "cloud migration federal"
+    python scripts/tender_tools.py get W1234-567890
+    python scripts/tender_tools.py similar W1234-567890
+    python scripts/tender_tools.py list-watching
+    python scripts/tender_tools.py list-parked
+    python scripts/tender_tools.py promote W1234-567890
+    python scripts/tender_tools.py park some-file.md "no clearance" "after hiring cleared architect"
+    python scripts/tender_tools.py archive some-file.md "lost to competitor"
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import re
+import shutil
+import sys
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
+
+import chromadb
+from chromadb.utils import embedding_functions
+
+
+PROJECT_ROOT = Path(__file__).parent.parent
+DB_PATH = PROJECT_ROOT / "chroma_db"
+VAULT = PROJECT_ROOT / "vault"
+WATCHING = VAULT / "tenders" / "watching"
+ARCHIVED = VAULT / "tenders" / "archived"
+PARKED = VAULT / "tenders" / "parked"
+
+
+# ---------------------------------------------------------------------------
+# Lightweight BM25 — paired with ChromaDB's vector search for hybrid retrieval
+# ---------------------------------------------------------------------------
+# We keep this simple and in-process. At a few hundred tenders it's instant.
+
+class BM25:
+    def __init__(self, corpus: list[str], k1: float = 1.5, b: float = 0.75):
+        self.k1, self.b = k1, b
+        self.corpus_tokens = [self._tokenize(doc) for doc in corpus]
+        self.corpus_size = len(corpus)
+        self.avgdl = (
+            sum(len(t) for t in self.corpus_tokens) / self.corpus_size
+            if self.corpus_size else 0
+        )
+        self._build_index()
+
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        return re.findall(r"\b\w+\b", text.lower())
+
+    def _build_index(self):
+        self.doc_freqs = [Counter(tokens) for tokens in self.corpus_tokens]
+        self.doc_lens = [len(tokens) for tokens in self.corpus_tokens]
+        df: Counter = Counter()
+        for tokens in self.corpus_tokens:
+            df.update(set(tokens))
+        self.idf = {
+            term: math.log((self.corpus_size - freq + 0.5) / (freq + 0.5) + 1)
+            for term, freq in df.items()
+        }
+
+    def search(self, query: str, top_k: int = 20) -> list[tuple[int, float]]:
+        query_tokens = self._tokenize(query)
+        scores = []
+        for idx in range(self.corpus_size):
+            doc_freqs = self.doc_freqs[idx]
+            doc_len = self.doc_lens[idx]
+            score = 0.0
+            for term in query_tokens:
+                if term not in doc_freqs:
+                    continue
+                freq = doc_freqs[term]
+                idf = self.idf.get(term, 0)
+                numerator = freq * (self.k1 + 1)
+                denominator = freq + self.k1 * (1 - self.b + self.b * doc_len / self.avgdl)
+                score += idf * numerator / denominator
+            if score > 0:
+                scores.append((idx, score))
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return scores[:top_k]
+
+
+# ---------------------------------------------------------------------------
+# ChromaDB access
+# ---------------------------------------------------------------------------
+
+_collection = None
+_bm25 = None
+doc_index: list[dict] = []  # Parallel to BM25 corpus, for ID lookup
+
+
+def load_collection():
+    """Lazy-load ChromaDB and build BM25 index."""
+    global _collection, _bm25, doc_index
+    if _collection is not None:
+        return _collection
+
+    if not DB_PATH.exists():
+        sys.stderr.write(
+            f"ChromaDB not found at {DB_PATH}.\n"
+            f"Run: python scripts/ingest.py\n"
+        )
+        sys.exit(2)
+
+    client = chromadb.PersistentClient(path=str(DB_PATH))
+    embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name="all-MiniLM-L6-v2"
+    )
+    _collection = client.get_collection("tenders", embedding_function=embedder)
+
+    # Pull everything once to build BM25 (this is fine at our scale)
+    all_data = _collection.get()
+    doc_index = [
+        {"id": tid, "metadata": meta, "document": doc}
+        for tid, meta, doc in zip(
+            all_data["ids"], all_data["metadatas"], all_data["documents"]
+        )
+    ]
+    _bm25 = BM25([d["document"] for d in doc_index])
+    return _collection
+
+
+# ---------------------------------------------------------------------------
+# Reciprocal Rank Fusion — combine BM25 + semantic without tuning weights
+# ---------------------------------------------------------------------------
+
+def _rrf_fuse(
+    semantic: list[tuple[str, float]],
+    keyword: list[tuple[str, float]],
+    k: int = 60,
+) -> list[tuple[str, float]]:
+    """
+    Standard RRF. We score by rank position rather than the raw scores, which
+    dodges the problem of BM25 and cosine similarity being on different scales.
+    """
+    scores: dict[str, float] = {}
+    for rank, (doc_id, _) in enumerate(semantic, start=1):
+        scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank)
+    for rank, (doc_id, _) in enumerate(keyword, start=1):
+        scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank)
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+def cmd_search(args) -> dict:
+    """Hybrid search. Returns list of {tender_id, title, score, snippet}."""
+    load_collection()
+    n_pool = max(args.n * 3, 30)  # Pull more for fusion, then trim
+
+    # Semantic side — ChromaDB
+    semantic_results = _collection.query(query_texts=[args.query], n_results=n_pool)
+    semantic: list[tuple[str, float]] = []
+    if semantic_results["ids"] and semantic_results["ids"][0]:
+        for doc_id, distance in zip(
+            semantic_results["ids"][0],
+            semantic_results.get("distances", [[]])[0] or [0] * len(semantic_results["ids"][0]),
+        ):
+            # Convert cosine distance to a similarity-ish score
+            semantic.append((doc_id, 1 / (1 + distance)))
+
+    # Keyword side — BM25
+    bm25_hits = _bm25.search(args.query, top_k=n_pool)
+    keyword = [(doc_index[idx]["id"], score) for idx, score in bm25_hits]
+
+    # Fuse
+    fused = _rrf_fuse(semantic, keyword)[:args.n]
+
+    # Build response
+    id_to_doc = {d["id"]: d for d in doc_index}
+    results = []
+    for doc_id, fused_score in fused:
+        doc = id_to_doc.get(doc_id)
+        if not doc:
+            continue
+        snippet = doc["document"][:300].replace("\n", " ").strip() + "..."
+        results.append({
+            "tender_id": doc_id,
+            "title": doc["metadata"].get("title", ""),
+            "agency": doc["metadata"].get("agency", ""),
+            "closing_date": doc["metadata"].get("closing_date", ""),
+            "estimated_value": doc["metadata"].get("estimated_value", 0),
+            "matched_competencies": doc["metadata"].get("matched_competencies", ""),
+            "score": round(fused_score, 4),
+            "in_watching": (WATCHING / f"{_slugify(doc_id)}.md").exists(),
+            "snippet": snippet,
+        })
+    return {"query": args.query, "n": len(results), "results": results}
+
+
+def cmd_get(args) -> dict:
+    """Full details for one tender."""
+    load_collection()
+    id_to_doc = {d["id"]: d for d in doc_index}
+    doc = id_to_doc.get(args.tender_id)
+    if not doc:
+        return {"error": f"Tender {args.tender_id} not found in corpus"}
+    return {
+        "tender_id": doc["id"],
+        "metadata": doc["metadata"],
+        "document": doc["document"],
+        "in_watching": (WATCHING / f"{_slugify(doc['id'])}.md").exists(),
+    }
+
+
+def cmd_similar(args) -> dict:
+    """Find tenders similar to a given one (by its embedding)."""
+    load_collection()
+    # Query using the target tender's document text as the query
+    id_to_doc = {d["id"]: d for d in doc_index}
+    target = id_to_doc.get(args.tender_id)
+    if not target:
+        return {"error": f"Tender {args.tender_id} not found"}
+
+    results = _collection.query(
+        query_texts=[target["document"][:1000]],
+        n_results=args.n + 1,  # +1 because the target itself will match
+    )
+    similar = []
+    if results["ids"] and results["ids"][0]:
+        for doc_id, distance in zip(
+            results["ids"][0],
+            results.get("distances", [[]])[0] or [0] * len(results["ids"][0]),
+        ):
+            if doc_id == args.tender_id:
+                continue  # Skip self-match
+            doc = id_to_doc.get(doc_id)
+            if not doc:
+                continue
+            similar.append({
+                "tender_id": doc_id,
+                "title": doc["metadata"].get("title", ""),
+                "agency": doc["metadata"].get("agency", ""),
+                "similarity": round(1 / (1 + distance), 4),
+            })
+    return {"target": args.tender_id, "similar": similar[:args.n]}
+
+
+def cmd_list_watching(args) -> dict:
+    """List all tenders in the watching folder with basic metadata."""
+    if not WATCHING.exists():
+        return {"watching": []}
+    files = sorted(WATCHING.glob("*.md"))
+    tenders = []
+    for f in files:
+        content = f.read_text(encoding="utf-8")
+        # Extract a few fields from frontmatter without a full YAML parse
+        fm_match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
+        fields = {}
+        if fm_match:
+            for line in fm_match.group(1).split("\n"):
+                if ":" in line:
+                    k, _, v = line.partition(":")
+                    fields[k.strip()] = v.strip().strip('"')
+        tenders.append({
+            "filename": f.name,
+            "tender_id": fields.get("tender_id", ""),
+            "title": fields.get("title", ""),
+            "closing_date": fields.get("closing_date", ""),
+            "status": fields.get("status", ""),
+        })
+    return {"watching": tenders}
+
+
+def cmd_promote(args) -> dict:
+    """Copy a tender from ChromaDB into vault/tenders/watching/ as markdown."""
+    load_collection()
+    id_to_doc = {d["id"]: d for d in doc_index}
+    doc = id_to_doc.get(args.tender_id)
+    if not doc:
+        return {"error": f"Tender {args.tender_id} not found"}
+
+    meta = doc["metadata"]
+    filename = f"{_slugify(doc['id'])}.md"
+    target = WATCHING / filename
+    if target.exists():
+        return {"error": f"Already promoted: {filename}"}
+
+    WATCHING.mkdir(parents=True, exist_ok=True)
+
+    # Build the markdown file with YAML frontmatter
+    matched = meta.get("matched_competencies", "")
+    matched_list = [m.strip() for m in matched.split(",") if m.strip()]
+
+    content = f"""---
+tender_id: {doc['id']}
+title: "{meta.get('title', '').replace('"', "'")}"
+agency: "{meta.get('agency', '').replace('"', "'")}"
+closing_date: {meta.get('closing_date', '')}
+estimated_value: {meta.get('estimated_value', 0)}
+matched_competencies: [{', '.join(matched_list)}]
+status: watching
+promoted_at: {datetime.now().strftime('%Y-%m-%d')}
+---
+
+# {meta.get('title', 'Untitled')}
+
+**Agency:** {meta.get('agency', 'Unknown')}
+**Closes:** {meta.get('closing_date', 'Unknown')}
+**Estimated value:** ${meta.get('estimated_value', 0):,.0f}
+**Matched on:** {', '.join(matched_list) if matched_list else 'none'}
+
+## Description
+
+{doc['document']}
+
+## My notes
+
+<!-- Claude can append analysis here under "## Fit assessment" -->
+"""
+    target.write_text(content, encoding="utf-8")
+    return {"promoted": str(target.relative_to(PROJECT_ROOT))}
+
+
+def cmd_archive(args) -> dict:
+    """
+    Move a tender to archived/ with a reason. Source can be watching/ or parked/.
+
+    Archived = decision is final. Use park instead if you might revisit.
+    """
+    # Look in watching first, then parked
+    for source_dir in (WATCHING, PARKED):
+        candidate = source_dir / args.filename
+        if candidate.exists():
+            source = candidate
+            break
+    else:
+        return {
+            "error": f"Not found in watching/ or parked/: {args.filename}",
+        }
+
+    ARCHIVED.mkdir(parents=True, exist_ok=True)
+    target = ARCHIVED / args.filename
+
+    # Append the archive reason to the file before moving
+    content = source.read_text(encoding="utf-8")
+    stamp = datetime.now().strftime("%Y-%m-%d")
+    from_dir = source.parent.name
+    content += f"\n\n## Archived {stamp} (from {from_dir})\n\n{args.reason}\n"
+    target.write_text(content, encoding="utf-8")
+    source.unlink()
+    return {
+        "archived": str(target.relative_to(PROJECT_ROOT)),
+        "from": from_dir,
+        "reason": args.reason,
+    }
+
+
+def cmd_park(args) -> dict:
+    """
+    Move a watching tender to parked/ with a reason and a revisit trigger.
+
+    Park is for "not pursuing now but the situation might change." The trigger
+    is a freeform string describing what would make this worth re-evaluating
+    (e.g. "after we hire a cleared architect", "if reissued in 2027").
+    Distinct from archive, which is for permanent close-out.
+    """
+    source = WATCHING / args.filename
+    if not source.exists():
+        return {"error": f"Not in watching/: {args.filename}"}
+
+    PARKED.mkdir(parents=True, exist_ok=True)
+    target = PARKED / args.filename
+
+    content = source.read_text(encoding="utf-8")
+    stamp = datetime.now().strftime("%Y-%m-%d")
+    content += (
+        f"\n\n## Parked {stamp}\n\n"
+        f"**Reason:** {args.reason}\n\n"
+        f"**Revisit when:** {args.revisit_when}\n"
+    )
+    target.write_text(content, encoding="utf-8")
+    source.unlink()
+    return {
+        "parked": str(target.relative_to(PROJECT_ROOT)),
+        "reason": args.reason,
+        "revisit_when": args.revisit_when,
+    }
+
+
+def cmd_list_parked(args) -> dict:
+    """List all parked tenders with their revisit triggers."""
+    if not PARKED.exists():
+        return {"parked": []}
+    files = sorted(PARKED.glob("*.md"))
+    tenders = []
+    for f in files:
+        content = f.read_text(encoding="utf-8")
+        # Frontmatter — same lightweight parse as list-watching
+        fm_match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
+        fields = {}
+        if fm_match:
+            for line in fm_match.group(1).split("\n"):
+                if ":" in line:
+                    k, _, v = line.partition(":")
+                    fields[k.strip()] = v.strip().strip('"')
+        # Pull the most recent "Revisit when:" line from the body so Claude can
+        # see at a glance what would unstick this tender
+        revisit = ""
+        for match in re.finditer(r"\*\*Revisit when:\*\*\s*(.+)", content):
+            revisit = match.group(1).strip()
+        tenders.append({
+            "filename": f.name,
+            "tender_id": fields.get("tender_id", ""),
+            "title": fields.get("title", ""),
+            "closing_date": fields.get("closing_date", ""),
+            "revisit_when": revisit,
+        })
+    return {"parked": tenders}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _slugify(text: str, max_len: int = 80) -> str:
+    slug = re.sub(r"[^\w\s-]", "", text.lower())
+    slug = re.sub(r"[-\s]+", "-", slug).strip("-")
+    return slug[:max_len] or "untitled"
+
+
+# ---------------------------------------------------------------------------
+# CLI wiring
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="command", required=True)
+
+    s = sub.add_parser("search", help="Hybrid search the full corpus")
+    s.add_argument("query")
+    s.add_argument("--n", type=int, default=10)
+    s.set_defaults(func=cmd_search)
+
+    g = sub.add_parser("get", help="Full details for one tender")
+    g.add_argument("tender_id")
+    g.set_defaults(func=cmd_get)
+
+    sim = sub.add_parser("similar", help="Find tenders similar to a given one")
+    sim.add_argument("tender_id")
+    sim.add_argument("--n", type=int, default=5)
+    sim.set_defaults(func=cmd_similar)
+
+    lw = sub.add_parser("list-watching", help="List promoted tenders")
+    lw.set_defaults(func=cmd_list_watching)
+
+    lp = sub.add_parser("list-parked", help="List parked tenders with revisit triggers")
+    lp.set_defaults(func=cmd_list_parked)
+
+    pr = sub.add_parser("promote", help="Copy a tender into vault/tenders/watching/")
+    pr.add_argument("tender_id")
+    pr.set_defaults(func=cmd_promote)
+
+    pk = sub.add_parser(
+        "park",
+        help="Move a watching tender to parked/ (not pursuing now, might revisit)",
+    )
+    pk.add_argument("filename")
+    pk.add_argument("reason", help="Why we're parking it")
+    pk.add_argument(
+        "revisit_when",
+        help="What event would make this worth re-evaluating",
+    )
+    pk.set_defaults(func=cmd_park)
+
+    ar = sub.add_parser(
+        "archive",
+        help="Move a tender to archived/ (final). Source can be watching/ or parked/.",
+    )
+    ar.add_argument("filename")
+    ar.add_argument("reason")
+    ar.set_defaults(func=cmd_archive)
+
+    return p
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    result = args.func(args)
+    print(json.dumps(result, indent=2, default=str))
+    # Error responses → non-zero exit so Claude notices
+    if isinstance(result, dict) and "error" in result:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

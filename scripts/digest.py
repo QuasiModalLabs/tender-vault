@@ -1,0 +1,226 @@
+"""
+Generate a weekly digest of the tender corpus after ingest.
+
+Writes to vault/digests/YYYY-MM-DD.md. The digest is what gets committed
+by GitHub Actions — it's the human-readable trail of what changed over time.
+
+Keeps the file short on purpose (~2KB). It's meant to be read in 30 seconds
+on a Monday morning, not exhaustive.
+"""
+from __future__ import annotations
+
+import re
+import sys
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
+
+# Reuse the tools module's ChromaDB loading logic
+sys.path.insert(0, str(Path(__file__).parent))
+import tender_tools  # noqa: E402
+
+
+PROJECT_ROOT = Path(__file__).parent.parent
+DIGEST_DIR = PROJECT_ROOT / "vault" / "digests"
+PARKED_DIR = PROJECT_ROOT / "vault" / "tenders" / "parked"
+
+# Committed snapshot of last digest's tender IDs. Lives in vault/digests/
+# (not .cache/) so the GitHub Actions runner can see the previous week's
+# corpus — .cache/ doesn't survive between Actions runs.
+CORPUS_SNAPSHOT = DIGEST_DIR / "corpus-latest.txt"
+
+
+def _summarize_parked() -> str:
+    """
+    Return a markdown summary of parked tenders. Splits into:
+    - Still open (closing date in future) — most valuable to surface
+    - Already closed (closing date past) — flagged for archival
+    Returns empty string if there are no parked tenders.
+    """
+    if not PARKED_DIR.exists():
+        return ""
+    files = sorted(PARKED_DIR.glob("*.md"))
+    if not files:
+        return ""
+
+    today = datetime.now()
+    still_open: list[str] = []
+    closed: list[str] = []
+
+    for f in files:
+        content = f.read_text(encoding="utf-8")
+        # Lightweight frontmatter parse — same approach as cmd_list_parked
+        fm_match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
+        fields: dict[str, str] = {}
+        if fm_match:
+            for line in fm_match.group(1).split("\n"):
+                if ":" in line:
+                    k, _, v = line.partition(":")
+                    fields[k.strip()] = v.strip().strip('"')
+
+        # Most recent revisit trigger
+        revisit = ""
+        for match in re.finditer(r"\*\*Revisit when:\*\*\s*(.+)", content):
+            revisit = match.group(1).strip()
+
+        tender_id = fields.get("tender_id", "?")
+        title = fields.get("title", "Untitled")[:60]
+        closing_str = fields.get("closing_date", "")
+
+        is_open = False
+        if closing_str:
+            try:
+                closing = datetime.strptime(closing_str, "%Y-%m-%d")
+                is_open = closing >= today
+            except ValueError:
+                is_open = True  # Unparseable — assume open, surface it
+
+        line = f"- `{tender_id}` — {title}"
+        if revisit:
+            line += f" — *revisit when: {revisit}*"
+        (still_open if is_open else closed).append(line)
+
+    parts = []
+    if still_open:
+        parts.append("\n".join(still_open))
+    if closed:
+        parts.append(
+            "\n*The following parked tenders have closed — consider archiving:*\n"
+            + "\n".join(closed)
+        )
+    return "\n\n".join(parts)
+
+
+def generate_digest() -> str:
+    """Build the digest markdown. Returns the file contents as a string."""
+    tender_tools.load_collection()
+    docs = tender_tools.doc_index
+
+    if not docs:
+        return "# Weekly digest\n\nNo tenders in corpus.\n"
+
+    # Basic counts
+    total = len(docs)
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # Competency distribution
+    comp_counter: Counter = Counter()
+    for d in docs:
+        matched = d["metadata"].get("matched_competencies", "")
+        for comp in matched.split(","):
+            comp = comp.strip()
+            if comp:
+                comp_counter[comp] += 1
+
+    # Soonest-closing tenders (top 5 by days-until)
+    parseable = []
+    for d in docs:
+        closing_str = d["metadata"].get("closing_date", "")
+        if not closing_str:
+            continue
+        try:
+            closing = datetime.strptime(closing_str, "%Y-%m-%d")
+            days = (closing - datetime.now()).days
+            if days >= 0:
+                parseable.append((days, d))
+        except ValueError:
+            continue
+    parseable.sort(key=lambda x: x[0])
+
+    # Highest-value tenders with a parseable value (top 5)
+    valued = [
+        d for d in docs
+        if isinstance(d["metadata"].get("estimated_value"), (int, float))
+        and d["metadata"]["estimated_value"] > 0
+    ]
+    valued.sort(key=lambda d: d["metadata"]["estimated_value"], reverse=True)
+
+    # New since the last digest — the diff against the committed snapshot.
+    # First run (no snapshot) skips the section rather than listing everything.
+    current_ids = {d["id"] for d in docs}
+    new_ids: set[str] = set()
+    if CORPUS_SNAPSHOT.exists():
+        old_ids = {
+            line.strip()
+            for line in CORPUS_SNAPSHOT.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+        new_ids = current_ids - old_ids
+
+    # Build the markdown
+    lines = [
+        f"# Weekly digest — {today}",
+        "",
+        f"**Corpus size:** {total} tenders after filtering",
+        "",
+    ]
+
+    if new_ids:
+        id_to_doc = {d["id"]: d for d in docs}
+        lines += [f"## New this week ({len(new_ids)})", ""]
+        # Show up to 15, highest estimated value first so the interesting
+        # ones surface; the rest are findable via search
+        new_docs = sorted(
+            (id_to_doc[i] for i in new_ids),
+            key=lambda d: d["metadata"].get("estimated_value", 0) or 0,
+            reverse=True,
+        )
+        for d in new_docs[:15]:
+            title = d["metadata"].get("title", "Untitled")[:70]
+            closing = d["metadata"].get("closing_date", "?")
+            lines.append(f"- `{d['id']}` — {title} (closes {closing})")
+        if len(new_ids) > 15:
+            lines.append(f"- …and {len(new_ids) - 15} more")
+        lines.append("")
+
+    lines += [
+        "## Competency distribution",
+        "",
+    ]
+    for comp, count in comp_counter.most_common(10):
+        lines.append(f"- **{comp}**: {count}")
+
+    lines += ["", "## Closing soonest", ""]
+    for days, d in parseable[:5]:
+        title = d["metadata"].get("title", "Untitled")[:80]
+        lines.append(f"- `{d['id']}` — {title} ({days}d)")
+
+    lines += ["", "## Highest estimated value", ""]
+    for d in valued[:5]:
+        value = d["metadata"]["estimated_value"]
+        title = d["metadata"].get("title", "Untitled")[:80]
+        lines.append(f"- `{d['id']}` — {title} (${value:,.0f})")
+
+    # Parked tenders — surface ones still active so the user is reminded
+    # that their trigger conditions might still resolve in time
+    parked_section = _summarize_parked()
+    if parked_section:
+        lines += ["", "## Parked tenders to keep an eye on", "", parked_section]
+
+    lines += [
+        "",
+        "---",
+        "",
+        "_Generated automatically by `scripts/digest.py` after weekly ingest._",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def main():
+    DIGEST_DIR.mkdir(parents=True, exist_ok=True)
+    today = datetime.now().strftime("%Y-%m-%d")
+    output_path = DIGEST_DIR / f"{today}.md"
+    content = generate_digest()
+    output_path.write_text(content, encoding="utf-8")
+    print(f"Wrote digest: {output_path.relative_to(PROJECT_ROOT)}")
+
+    # Update the committed snapshot so next week's digest can diff against it.
+    # Must happen AFTER generate_digest() reads the old snapshot.
+    ids = sorted(d["id"] for d in tender_tools.doc_index)
+    CORPUS_SNAPSHOT.write_text("\n".join(ids) + "\n", encoding="utf-8")
+    print(f"Updated snapshot: {CORPUS_SNAPSHOT.relative_to(PROJECT_ROOT)} ({len(ids)} IDs)")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# CSV cache — re-downloaded when you run ingest
+.cache/
+
+# ChromaDB — rebuilt from scratch by ingest.py or the weekly Actions run.
+# Not committed, to keep the repo small. Anyone cloning runs ingest.py once.
+chroma_db/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# The vault IS committed — that's the whole point of this project.
+# The digests directory accumulates one markdown file per week from Actions.

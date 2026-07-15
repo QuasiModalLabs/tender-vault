@@ -1,0 +1,14 @@
+# Core retrieval
+chromadb>=0.4.18
+sentence-transformers>=2.2.2
+pandas>=2.0.0
+requests>=2.31.0
+pyyaml>=6.0
+
+# MCP server — optional, only needed if using Claude Desktop
+# Install with: pip install "mcp[cli]"
+mcp>=1.0.0
+
+# LLM value extraction — optional, only used by `ingest.py --extract-values`
+# (requires ANTHROPIC_API_KEY; default ingest path needs no credentials)
+anthropic>=0.40.0
