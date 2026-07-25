@@ -8,9 +8,9 @@ source: proactive-disclosure-contracts
 
 Auto-generated from the Proactive Publication of Contracts dataset (ingest 2026-07-25, period-overlap window). Unaudited data; vendor names are not normalized, so counts are directional.
 
-- **Contract families in our competency space:** 840
-- **Total awarded value:** $138,136,101
-- **Median contract value:** $24,592
+- **Contract families in our competency space:** 841
+- **Total awarded value:** $138,199,143
+- **Median contract value:** $24,616
 
 ## Top vendors by value
 
