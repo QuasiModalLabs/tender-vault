@@ -1,0 +1,48 @@
+name: Quarterly contracts refresh
+
+# The proactive-disclosure dataset updates quarterly. Runs on the 5th of
+# Jan/Apr/Jul/Oct at 07:00 UTC, and on manual trigger.
+on:
+  schedule:
+    - cron: "0 7 5 1,4,7,10 *"
+  workflow_dispatch:
+
+concurrency:
+  group: contracts
+  cancel-in-progress: false
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build contracts DB and agency intel
+        # Streams the large source CSV; only the filtered SQLite is persisted.
+        run: python scripts/contracts_ingest.py
+
+      - name: Commit DB and intel if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/contracts.db vault/intel/agencies/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            DATE=$(date -u +%Y-%m-%d)
+            git commit -m "contracts: quarterly refresh ${DATE}"
+            git push
+          fi

@@ -11,6 +11,10 @@ venv/
 # Not committed, to keep the repo small. Anyone cloning runs ingest.py once.
 chroma_db/
 
+# NOTE: data/contracts.db IS committed on purpose. It's a small filtered
+# SQLite derived from the Open Government Licence contracts dataset,
+# refreshed quarterly by Actions, and part of what this repo publishes.
+
 # OS
 .DS_Store
 Thumbs.db

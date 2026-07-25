@@ -27,6 +27,57 @@ exclude:
 
 # Timeline constraints
 min_days_until_close: 10
+
+# Contracts intelligence: keep contracts whose award date OR delivery period
+# falls within the last N years (captures recent awards + still-active work)
+contracts_window_years: 3
+
+# Contracts describe work as procurement CATEGORY labels, not prose, so the
+# contracts filter matches these (case-insensitive substring) rather than the
+# competencies above. Terms below are tuned for an IT consulting firm.
+# NOTE the data has spelling variants: "information technology" catches the two
+# big consultant buckets, but NOT the abbreviated "info. technology and
+# telecommunication consultants" variant — "technology and telecommunication"
+# is added to catch that one too.
+contracts_categories:
+  - information technology
+  - technology and telecommunication
+  - computer equipment
+  - application software
+  - application development
+  - informatics
+
+# --- Reference catalog: contract category vocabulary (NOT active config) ---
+# When adapting this profile for a different company, copy relevant terms from
+# here into contracts_categories above. These are real category labels from the
+# Proactive Disclosure dataset, by rough sector, with approximate volumes.
+# Matching is case-insensitive substring, so a short fragment catches variants.
+#
+# IT / software / tech:
+#   information technology and telecommunications consultants (~21k)
+#   information technology consultants (~7k)
+#   application software (including cots) and application development (~4k)
+#   computer equipment - small-desktop / large-medium mainframe (~4k)
+#   informatics
+#
+# Professional / business services:
+#   management consulting (~15k), scientific consultants (~6k),
+#   scientific services (~11k), temporary help services (~11k),
+#   training consultants, research contracts, accounting and audit services,
+#   communications professional services, translation services
+#
+# Engineering / construction:
+#   engineering consultants - construction (~4k), other engineering works,
+#   institutional buildings, marine installations
+#
+# Health / life sciences:
+#   pharmaceutical and other medicinal products (~9k),
+#   measuring, controlling, laboratory, medical and optical equipment (~11k),
+#   physicians and surgeons, other health services, welfare services
+#
+# Goods / other:
+#   road motor vehicles, office furniture, ships and boats, diesel fuel,
+#   printed matter, printing services, courier services
 ---
 
 # Company Profile

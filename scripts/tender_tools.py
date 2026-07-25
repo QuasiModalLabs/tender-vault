@@ -14,6 +14,7 @@ Usage:
     python scripts/tender_tools.py similar W1234-567890
     python scripts/tender_tools.py list-watching
     python scripts/tender_tools.py list-parked
+    python scripts/tender_tools.py contracts-intel "cloud"
     python scripts/tender_tools.py promote W1234-567890
     python scripts/tender_tools.py park some-file.md "no clearance" "after hiring cleared architect"
     python scripts/tender_tools.py archive some-file.md "lost to competitor"
@@ -30,8 +31,6 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-import chromadb
-from chromadb.utils import embedding_functions
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -123,6 +122,12 @@ def load_collection():
 
 def _do_load():
     global _collection, _bm25, doc_index
+
+    # Imported here rather than at module level so that SQLite-only commands
+    # (contracts-intel) and vault-only commands (list-watching, park, archive)
+    # run instantly without paying the ChromaDB/torch import cost.
+    import chromadb
+    from chromadb.utils import embedding_functions
 
     if not DB_PATH.exists():
         sys.stderr.write(
@@ -409,6 +414,78 @@ def cmd_park(args) -> dict:
     }
 
 
+def cmd_contracts_intel(args) -> dict:
+    """
+    Competitive intelligence from the proactive-disclosure contracts DB.
+
+    Pure SQLite. Deliberately does NOT touch ChromaDB, so it responds in
+    milliseconds regardless of embedding-model state. Aggregates per contract
+    family (procurement id) using each family's highest recorded value, which
+    approximates 'current value including amendments'.
+    """
+    import sqlite3
+
+    db = PROJECT_ROOT / "data" / "contracts.db"
+    if not db.exists():
+        return {"error": "Contracts DB not built. Run: python scripts/contracts_ingest.py"}
+
+    con = sqlite3.connect(db)
+    meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
+    like = f"%{args.query.lower()}%"
+
+    families = con.execute("""
+        SELECT family_id, vendor, org, MAX(value) AS v,
+               MAX(contract_date) AS d, MAX(period_end) AS pe, description
+        FROM contracts
+        WHERE lower(description) LIKE ? OR lower(matched_terms) LIKE ?
+        GROUP BY family_id
+    """, (like, like)).fetchall()
+    con.close()
+
+    if not families:
+        return {
+            "query": args.query,
+            "as_of": meta.get("ingest_date"),
+            "families": 0,
+            "note": "No matches. Try a broader term; matching is substring over descriptions.",
+        }
+
+    values = sorted(f[3] for f in families if f[3] and f[3] > 0)
+    vendor_totals: dict[str, float] = {}
+    org_counts: dict[str, int] = {}
+    for _fam, vendor, org, v, *_rest in families:
+        if vendor:
+            vendor_totals[vendor] = vendor_totals.get(vendor, 0) + (v or 0)
+        if org:
+            org_counts[org] = org_counts.get(org, 0) + 1
+
+    recent = sorted(families, key=lambda f: f[4] or "", reverse=True)[:5]
+    return {
+        "query": args.query,
+        "as_of": meta.get("ingest_date"),
+        "window_years": meta.get("window_years"),
+        "families": len(families),
+        "total_value": round(sum(values), 0),
+        "median_value": values[len(values) // 2] if values else 0,
+        "top_vendors": [
+            {"vendor": v, "total_value": round(t, 0)}
+            for v, t in sorted(vendor_totals.items(), key=lambda x: -x[1])[:8]
+        ],
+        "top_departments": [
+            {"org": o, "contract_families": n}
+            for o, n in sorted(org_counts.items(), key=lambda x: -x[1])[:8]
+        ],
+        "recent_examples": [
+            {"vendor": f[1], "org": f[2], "value": f[3],
+             "contract_date": f[4], "period_end": f[5],
+             "description": (f[6] or "")[:180]}
+            for f in recent
+        ],
+        "caveats": "Unaudited data; vendor names not normalized; families partially "
+                   "outside the filter window may be incomplete.",
+    }
+
+
 def cmd_list_parked(args) -> dict:
     """List all parked tenders with their revisit triggers."""
     if not PARKED.exists():
@@ -477,6 +554,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     lp = sub.add_parser("list-parked", help="List parked tenders with revisit triggers")
     lp.set_defaults(func=cmd_list_parked)
+
+    ci = sub.add_parser(
+        "contracts-intel",
+        help="Who won similar contracts: vendors, departments, values (SQLite, instant)",
+    )
+    ci.add_argument("query")
+    ci.set_defaults(func=cmd_contracts_intel)
 
     pr = sub.add_parser("promote", help="Copy a tender into vault/tenders/watching/")
     pr.add_argument("tender_id")

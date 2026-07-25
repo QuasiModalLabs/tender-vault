@@ -17,6 +17,9 @@ There are two storage layers and three lifecycle states for tenders.
 **Cold tier — ChromaDB (`chroma_db/`):**
 The full filtered corpus (~200-500 active federal tenders matching my profile). You access it through `scripts/tender_tools.py`. I re-run `scripts/ingest.py` when I want fresh data — check the timestamp on `chroma_db/` if it matters.
 
+**Outcome tier — contracts SQLite (`data/contracts.db`) and `vault/intel/agencies/`:**
+Awarded-contract intelligence from the Proactive Publication of Contracts dataset, filtered to my competencies with a period-overlap window (active incumbents stay in even if awarded years ago). Query it via `contracts-intel`. The `intel/agencies/` markdown files are auto-generated summaries per department — read them directly when I ask about a specific agency; don't edit them by hand, the ingest regenerates them.
+
 **Hot tier — the vault (`vault/tenders/`), with three states:**
 
 - `watching/` — tenders I've promoted because they look promising and I'm actively considering them. Each is a markdown file with frontmatter and accumulated notes. Read these directly.
@@ -32,6 +35,7 @@ All tools are Python scripts in `scripts/tender_tools.py`. Run them via `python 
 - `similar <tender_id> [--n 5]` — Find tenders similar to a given one.
 - `list-watching` — List tenders currently in `watching/`.
 - `list-parked` — List parked tenders with their revisit triggers.
+- `contracts-intel <keyword>` — Outcome intelligence from Canada's Proactive Publication of Contracts dataset: who won similar contracts, from which departments, at what values. Pure SQLite, instant. Use it when evaluating a promoted tender (check incumbents and typical values before writing a fit assessment) or when I ask about the competitive landscape. Always mention the as_of date; the data is unaudited and vendor names aren't normalized, so treat it as directional. If it errors that the DB isn't built, tell me to run `python scripts/contracts_ingest.py`.
 - `promote <tender_id>` — Copy a tender from ChromaDB into `watching/`.
 - `park <filename> <reason> <revisit_when>` — Move a watching tender to `parked/`. Requires both a reason and a concrete trigger event.
 - `archive <filename> <reason>` — Move a tender (from watching/ or parked/) to `archived/`. Final.

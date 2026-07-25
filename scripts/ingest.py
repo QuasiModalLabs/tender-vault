@@ -20,11 +20,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-import chromadb
 import pandas as pd
 import requests
 import yaml
-from chromadb.utils import embedding_functions
 
 
 # The "open tender notices" file: active tenders only. There's also a
@@ -70,11 +68,13 @@ def parse_profile(profile_path: Path) -> dict:
         "competencies": [c.lower() for c in fm.get("competencies", [])],
         "exclude": [e.lower() for e in fm.get("exclude", [])],
         "min_days_until_close": int(fm.get("min_days_until_close", 5)),
+        "contracts_window_years": int(fm.get("contracts_window_years", 3)),
+        "contracts_categories": [c.lower() for c in fm.get("contracts_categories", [])],
     }
 
 
 # ---------------------------------------------------------------------------
-# Data download — cache aggressively, the CSV is ~80MB
+# Data download — cache aggressively
 # ---------------------------------------------------------------------------
 
 def download_tenders(cache_path: Path, force: bool = False) -> pd.DataFrame:
@@ -187,8 +187,19 @@ def make_llm_value_extractor():
 
 
 def matched_competencies(text: str, competencies: list[str]) -> list[str]:
+    # Word-boundary matching, not bare substring: "aws" must not match inside
+    # "flaws", "withdrawals", or the French "travaux". The old substring version
+    # inflated the corpus with archaeology and bridge tenders that merely
+    # contained the letters a-w-s, and surfaced a $3.75M exhibits contract as a
+    # top "AWS" result in the weekly digest. Multi-word competencies like
+    # "it modernization" still match as a phrase with boundaries at each end.
     text_lower = text.lower()
-    return [c for c in competencies if c.lower() in text_lower]
+    matched = []
+    for c in competencies:
+        pattern = r"\b" + re.escape(c.lower()) + r"\b"
+        if re.search(pattern, text_lower):
+            matched.append(c)
+    return matched
 
 
 def contains_excluded(text: str, exclusions: list[str]) -> bool:
@@ -269,6 +280,12 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, value_extractor=None) -> pd
 
 def build_chroma(df: pd.DataFrame, db_path: Path) -> None:
     """Embed filtered tenders and write to a persistent ChromaDB collection."""
+    # Imported here, not at module level: this is the only function that needs
+    # ChromaDB, and contracts_ingest.py imports this module purely for its
+    # profile parser and HTTP headers.
+    import chromadb
+    from chromadb.utils import embedding_functions
+
     # Wipe the old DB — we want a clean snapshot, not accumulated cruft
     if db_path.exists():
         import shutil

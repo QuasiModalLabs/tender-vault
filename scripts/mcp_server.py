@@ -132,6 +132,34 @@ def promote(tender_id: str) -> dict:
 
 
 @mcp.tool()
+def contracts_intel(query: str) -> dict:
+    """
+    Competitive intelligence from Canada's Proactive Publication of Contracts
+    dataset: who actually WON contracts like this, from which departments, at
+    what values.
+
+    Use this when evaluating a promoted tender or discussing strategy:
+    incumbents, typical contract values, and which departments buy in this
+    space. Complements search (which covers open OPPORTUNITIES) with outcome
+    data (AWARDED contracts, period-overlap window of recent years).
+
+    Fast: pure SQLite, no model loading. Always relay the as_of date and the
+    caveats to the user. The data is unaudited and vendor names are not
+    normalized, so treat results as directional intelligence.
+
+    Args:
+        query: A keyword to match against contract descriptions
+               (e.g. "cloud", "migration", "cybersecurity").
+
+    Returns:
+        Dict with families count, total/median values, top_vendors,
+        top_departments, recent_examples, as_of, and caveats.
+    """
+    args = SimpleNamespace(query=query)
+    return tender_tools.cmd_contracts_intel(args)
+
+
+@mcp.tool()
 def list_parked() -> dict:
     """
     List tenders in the parked folder, with their revisit triggers.

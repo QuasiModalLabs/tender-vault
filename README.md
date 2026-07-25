@@ -36,7 +36,8 @@ This project is the rewrite. The retrieval layer is smaller (a Python module, ~3
     │                                             │
     │   calls:  search, get_tender, find_similar, │
     │           list_watching, list_parked,       │
-    │           promote, park, archive            │
+    │           promote, park, archive,           │
+    │           contracts_intel                   │
     │                                             │
     └─────────────────────────────────────────────┘
 ```
@@ -126,6 +127,27 @@ ChromaDB is deliberately not committed — it's a 30-80MB binary blob and commit
 
 The digest that *does* get committed is the portfolio artifact: a month of digests shows corpus trends at a glance.
 
+## Outcome intelligence: who actually won
+
+Tender notices tell you what's being *asked for*. They say nothing about who wins, at what price, or which departments actually buy in your space. That second half comes from a different dataset: Canada's [Proactive Publication of Contracts](https://open.canada.ca/data/en/dataset/d8f85d91-7dec-4fd1-8055-483b77225d8b), every federal contract over $10K.
+
+```bash
+python scripts/contracts_ingest.py          # quarterly; also runs via Actions
+python scripts/tender_tools.py contracts-intel "cloud migration"
+```
+
+Three design decisions worth explaining:
+
+**SQLite, not vectors.** Tender notices are prose, so embeddings earn their keep. Contract awards are records, and the questions are analytical ("top vendors by total value since 2022"). Semantic search answers that badly; SQL answers it exactly. Two retrieval systems, each matched to its data shape.
+
+**Period-overlap windowing, not award date.** A contract is kept if its *delivery period* overlaps the last N years (`contracts_window_years` in the profile, default 3). Incumbency depends on when a contract is active, not when it was signed. A five-year contract awarded four years ago is today's incumbent, and an award-date filter would silently delete it, producing a confident "no recent incumbents" that is simply false. Where end dates are missing, it falls back to award date rather than dropping the row.
+
+**Streaming ingest.** The source CSV is millions of rows. It's filtered chunk-by-chunk straight off the HTTP response; only matching rows are persisted. The full dataset never touches disk.
+
+Known limitations, stated rather than hidden: the data is unaudited, vendor names are not normalized (so "IBM Canada Ltd." and "IBM CANADA LIMITED" count separately), and reporting lags by a quarter. Amendments share a procurement id and are aggregated per family using the highest recorded value, which avoids double-counting but means a family whose rows straddle the filter window is partially represented. Treat the output as directional intelligence.
+
+The derived database (`data/contracts.db`) is committed to this repo and refreshed quarterly by GitHub Actions, along with auto-generated per-department summaries in `vault/intel/agencies/`. Since the SQLite file is a static asset, you can explore it in a browser with no server at all by pointing [Datasette Lite](https://lite.datasette.io/) at its raw GitHub URL.
+
 ## Tradeoffs I'm aware of
 
 **Speed.** The old system answered in ~3 seconds. A multi-step Claude session takes 20-60 seconds. For "which tenders should I look at today?" that's fine. For anything UI-driven it wouldn't be.
@@ -160,6 +182,15 @@ The funnel — date, exclusions, competency match, value range — is printed on
 4. [`scripts/mcp_server.py`](scripts/mcp_server.py) — thin MCP wrapper around the same functions.
 5. [`scripts/ingest.py`](scripts/ingest.py) — the filtering pipeline.
 6. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how fresh data flows in without me having to remember.
+
+## Data sources and licence
+
+- [CanadaBuys open tender notices](https://canadabuys.canada.ca/en/tender-opportunities) — active federal opportunities.
+- [Proactive Publication of Contracts](https://open.canada.ca/data/en/dataset/d8f85d91-7dec-4fd1-8055-483b77225d8b) — awarded federal contracts over $10K.
+
+Contains information licensed under the [Open Government Licence – Canada](https://open.canada.ca/en/open-government-licence-canada).
+
+Note on attachments: tender documents themselves are hosted on third-party commercial platforms (Ariba, MERX) behind account walls. This project deliberately does not scrape them. `scripts/probe_attachments.py` is the throwaway diagnostic that established this, kept in the repo because the negative result is part of the design record.
 
 ## What I might build next
 
