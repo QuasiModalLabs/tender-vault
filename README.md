@@ -1,6 +1,6 @@
 # Tender Vault
 
-An experiment in building an agentic tender research assistant over the Canadian government tender corpus, using Claude as the orchestrator and an Obsidian vault as persistent memory.
+An experiment in building an agentic research assistant over Canadian federal procurement data — using Claude as the orchestrator and an Obsidian vault as persistent memory. It pairs *opportunity* discovery (open tenders worth pursuing) with *outcome* intelligence (who wins this work, from which departments, at what value).
 
 ## What this is
 
@@ -8,39 +8,44 @@ A few months ago I built a RAG pipeline for matching my company's capabilities t
 
 > The system was solving *retrieval* really well. But tender research isn't a retrieval problem — it's a reasoning problem on top of retrieval.
 
-This project is the rewrite. The retrieval layer is smaller (a Python module, ~300 lines). The reasoning layer is Claude itself, operating on an Obsidian vault. Most of the interesting design is in two files: `vault/CLAUDE.md` (the agent's instructions) and `scripts/tender_tools.py` (the tools it calls).
+This project is the rewrite, and then some. The retrieval layer is smaller (a Python module, ~300 lines) and the reasoning layer is Claude itself, operating on an Obsidian vault. Then it grew a second data source: alongside the tender notices (what work is being *asked for*), it now ingests Canada's proactive-disclosure contracts data (who actually *won* past work, at what scale). Two datasets, two storage engines matched to their shapes, one agent reasoning across both. Most of the interesting design is in `vault/CLAUDE.md` (the agent's instructions) and `scripts/tender_tools.py` (the tools it calls).
 
 ## Architecture
 
 ```
-          ┌─────────────────────────┐
-          │   Canada Buys CSV       │
-          │   (open notices, ~850)  │
-          └────────────┬────────────┘
-                       │  python scripts/ingest.py
-                       │  (weekly via GitHub Actions)
-                       ▼
-          ┌─────────────────────────┐
-          │   Filter by profile     │  ← aggressive, profile-driven
-          │   → ChromaDB (local)    │
-          └────────────┬────────────┘
-                       │
-                       ▼
-    ┌──────────────────┴──────────────────────────┐
-    │                                             │
-    │   Claude (Claude Code OR Claude Desktop)    │
-    │                                             │
-    │   reads: vault/CLAUDE.md (instructions)     │
-    │          vault/profiles/my-company.md       │
-    │          vault/tenders/watching/*.md        │
-    │                                             │
-    │   calls:  search, get_tender, find_similar, │
-    │           list_watching, list_parked,       │
-    │           promote, park, archive,           │
-    │           contracts_intel                   │
-    │                                             │
-    └─────────────────────────────────────────────┘
+   OPPORTUNITIES (what's asked)          OUTCOMES (who won)
+  ┌─────────────────────────┐        ┌──────────────────────────┐
+  │   Canada Buys CSV       │        │  Proactive Disclosure    │
+  │   (open notices, ~850)  │        │  of Contracts (~1.3M rows)│
+  └────────────┬────────────┘        └─────────────┬────────────┘
+               │ ingest.py                         │ contracts_ingest.py
+               │ (weekly via Actions)              │ (quarterly via Actions)
+               ▼                                   ▼
+  ┌─────────────────────────┐        ┌──────────────────────────┐
+  │  Filter by profile      │        │ Filter by category +     │
+  │  (competencies, value,  │        │ recency window; Tier-1   │
+  │  word-boundary match)   │        │ vendor normalization     │
+  │  → ChromaDB (local)     │        │ → SQLite (committed)     │
+  └────────────┬────────────┘        │ + agency intel .md files │
+               │                     └─────────────┬────────────┘
+               │        ┌──────────────────────────┘
+               ▼        ▼
+    ┌────────────────────────────────────────────────┐
+    │   Claude (Claude Code OR Claude Desktop)        │
+    │                                                 │
+    │   reads: vault/CLAUDE.md (instructions)         │
+    │          vault/profiles/my-company.md           │
+    │          vault/tenders/watching/*.md            │
+    │          vault/intel/agencies/*.md              │
+    │                                                 │
+    │   calls:  search, get_tender, find_similar,     │
+    │           list_watching, list_parked,           │
+    │           promote, park, archive,               │
+    │           contracts_intel                       │
+    └─────────────────────────────────────────────────┘
 ```
+
+Two data pipelines, deliberately different. Tender notices are prose, so they go into a **vector database** (ChromaDB) where semantic search earns its keep. Contract awards are structured records, and the questions are analytical ("top vendors by value"), so they go into **SQLite** where SQL answers exactly. One system feeds *opportunity* discovery (what's open now), the other feeds *competitive intelligence* (who wins this work, at what scale). Claude reasons across both.
 
 **Option 3 hybrid storage.** Tenders live in two tiers. The ChromaDB corpus is the cold store — the full filtered set of opportunities. The vault (`vault/tenders/`) is the hot store, with three lifecycle states: `watching/` (actively considering), `parked/` (deferred but might revisit, with concrete trigger conditions), and `archived/` (decision was final). The hot tier accumulates notes, Claude's analyses, and the audit trail. The cold tier gets rebuilt from scratch by the weekly ingest.
 
@@ -56,6 +61,8 @@ The split matters because it matches how tender research actually works: most te
 
 **The scoring formula is gone.** The old system had a MetadataScorer class with hand-tuned weights for value, timeline, complexity. It worked, but the weights were guesses. Now Claude does this reasoning directly: "this tender is in range but requires Secret clearance, which we don't have — skip." No formula to tune.
 
+**Outcomes, not just opportunities.** The original tool only saw what was being *asked for*. It now also ingests awarded-contract data, so Claude can answer "who's the incumbent here?" and "what does this department typically pay for this work?" before I decide whether to pursue a tender. Opportunity discovery and competitive intelligence in one loop — see [Outcome intelligence](#outcome-intelligence-who-actually-won) below.
+
 ## Setup
 
 ```bash
@@ -68,6 +75,11 @@ $EDITOR vault/profiles/my-company.md
 
 # First ingest (downloads the open-notices CSV, builds embeddings, ~2 min)
 python scripts/ingest.py
+
+# Optional: build the outcome-intelligence layer. Downloads a large (~630MB)
+# contracts dataset once, filters it to your profile's categories, ~5-10 min.
+# Skip this if you only want tender/opportunity discovery.
+python scripts/contracts_ingest.py
 ```
 
 After that, you have two ways to use it.
@@ -182,8 +194,9 @@ The funnel — date, exclusions, competency match, value range — is printed on
 2. [`vault/profiles/my-company.md`](vault/profiles/my-company.md) — how user context is stored.
 3. [`scripts/tender_tools.py`](scripts/tender_tools.py) — the retrieval layer. Clean separation between retrieval (this file) and reasoning (Claude).
 4. [`scripts/mcp_server.py`](scripts/mcp_server.py) — thin MCP wrapper around the same functions.
-5. [`scripts/ingest.py`](scripts/ingest.py) — the filtering pipeline.
-6. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how fresh data flows in without me having to remember.
+5. [`scripts/ingest.py`](scripts/ingest.py) — the tender filtering pipeline.
+6. [`scripts/contracts_ingest.py`](scripts/contracts_ingest.py) — the outcome-intelligence pipeline: streaming filter into SQLite, with the design notes (category matching, recency windowing, vendor normalization) in the module docstring.
+7. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how fresh data flows in without me having to remember.
 
 ## Data sources and licence
 
