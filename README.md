@@ -140,11 +140,13 @@ Three design decisions worth explaining:
 
 **SQLite, not vectors.** Tender notices are prose, so embeddings earn their keep. Contract awards are records, and the questions are analytical ("top vendors by total value since 2022"). Semantic search answers that badly; SQL answers it exactly. Two retrieval systems, each matched to its data shape.
 
-**Period-overlap windowing, not award date.** A contract is kept if its *delivery period* overlaps the last N years (`contracts_window_years` in the profile, default 3). Incumbency depends on when a contract is active, not when it was signed. A five-year contract awarded four years ago is today's incumbent, and an award-date filter would silently delete it, producing a confident "no recent incumbents" that is simply false. Where end dates are missing, it falls back to award date rather than dropping the row.
+**Recency windowing on award date OR period end.** A contract is kept if `max(award_date, period_end)` falls within the last N years (`contracts_window_years` in the profile, default 3). This captures two signals at once: recent *awards* (who's winning work now — the market picture) and still-*active* older contracts (live incumbents). A strict period-overlap filter was tried first but the dataset skews heavily toward completed historical contracts, so "still active today" left almost nothing; a recently-awarded contract that has already ended is still exactly the competitive signal this layer exists to surface.
+
+**Category matching, not prose keywords.** Contracts describe work as standardized procurement categories ("Information technology and telecommunications consultants"), not free prose, so the contracts filter matches a separate `contracts_categories` list in the profile (case-insensitive substring) rather than the tender competencies. The profile ships a commented reference catalog of the dataset's real category vocabulary, organized by sector, so adapting to a different company is a copy-paste.
 
 **Streaming ingest.** The source CSV is millions of rows. It's filtered chunk-by-chunk straight off the HTTP response; only matching rows are persisted. The full dataset never touches disk.
 
-Known limitations, stated rather than hidden: the data is unaudited, vendor names are not normalized (so "IBM Canada Ltd." and "IBM CANADA LIMITED" count separately), and reporting lags by a quarter. Amendments share a procurement id and are aggregated per family using the highest recorded value, which avoids double-counting but means a family whose rows straddle the filter window is partially represented. Treat the output as directional intelligence.
+Known limitations, stated rather than hidden: the data is unaudited, vendor names are lightly normalized (corporate suffixes and punctuation stripped to collapse obvious duplicates, but not fuzzy-matched — so near-variants may still count separately), and reporting lags by a quarter. Amendments share a procurement id and are aggregated per family using the highest recorded value, which avoids double-counting but means a family whose rows straddle the filter window is partially represented. Treat the output as directional intelligence.
 
 The derived database (`data/contracts.db`) is committed to this repo and refreshed quarterly by GitHub Actions, along with auto-generated per-department summaries in `vault/intel/agencies/`. Since the SQLite file is a static asset, you can explore it in a browser with no server at all by pointing [Datasette Lite](https://lite.datasette.io/) at its raw GitHub URL.
 
@@ -172,7 +174,7 @@ exclude: [janitorial, landscaping, catering, food service]
 min_days_until_close: 10
 ```
 
-The funnel — date, exclusions, competency match, value range — is printed on every ingest so you can tune criteria against the live distribution. With the default (deliberately narrow) profile, a recent run went 852 open tenders → 22. Literal substring matching on competencies is the big reducer; broaden the terms in the profile to widen the corpus.
+The funnel — date, exclusions, competency match, value range — is printed on every ingest so you can tune criteria against the live distribution. With the default (deliberately narrow) profile, a recent run went 875 open tenders → 10. Word-boundary competency matching is the big reducer (word-boundary rather than substring, so "aws" matches Amazon Web Services but not "flaws" or "withdrawals"); broaden the terms in the profile to widen the corpus.
 
 ## Files worth reading, in order
 
