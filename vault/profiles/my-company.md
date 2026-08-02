@@ -32,6 +32,11 @@ min_days_until_close: 10
 # falls within the last N years (captures recent awards + still-active work)
 contracts_window_years: 3
 
+# Opportunity-shaping: minimum contract value for the expiring-contracts scan.
+# A future re-procurement below this isn't worth a proactive BD conversation.
+# Tune per company — a boutique might set this low, a large firm high.
+expiry_min_value: 500000
+
 # Contracts describe work as procurement CATEGORY labels, not prose, so the
 # contracts filter matches these (case-insensitive substring) rather than the
 # competencies above. Terms below are tuned for an IT consulting firm.

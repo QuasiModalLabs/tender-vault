@@ -31,9 +31,11 @@ some rows of a family match the filter, the family is partially represented.
 Documented, not hidden.
 
 DATA QUALITY. The dataset is unaudited. Vendor names are inconsistent
-("IBM Canada Ltd." vs "IBM CANADA LIMITED") and we do NOT normalize them in
-v1, so counts by vendor are slightly fragmented. Treat outputs as directional
-intelligence, not accounting.
+("IBM Canada Ltd." vs "IBM CANADA LIMITED"); Tier-1 normalization strips
+corporate suffixes and punctuation to collapse the obvious duplicates, but
+does NOT fuzzy-match (which would risk merging genuinely distinct firms). The
+raw name is kept for display, a normalized form is used for aggregation. Counts
+remain directional intelligence, not accounting.
 
 Usage:
     python scripts/contracts_ingest.py
@@ -218,8 +220,9 @@ def open_source(source: str | None):
                        on_bad_lines="skip", encoding="utf-8")
 
 
-def filter_chunk(chunk: pd.DataFrame, cols: dict, matchers, cutoff: datetime) -> pd.DataFrame:
-    """Apply competency + period-overlap filters to one chunk."""
+def filter_chunk(chunk: pd.DataFrame, cols: dict, matchers,
+                 cutoff: datetime) -> pd.DataFrame:
+    """Apply competency filter and keep rows within the recency window."""
     desc = chunk[cols["description"]].fillna("").astype(str).str.lower()
 
     def matched_terms(text: str) -> str:
@@ -233,24 +236,54 @@ def filter_chunk(chunk: pd.DataFrame, cols: dict, matchers, cutoff: datetime) ->
     sub = chunk[keep].copy()
     sub["_matched"] = terms[keep]
 
-    # Recency window: keep a contract if EITHER it was awarded recently OR its
-    # delivery period extends into the window. We use max(award_date, period_end).
-    #
-    # Why not strict period-overlap: this dataset skews heavily toward completed
-    # historical contracts, so "still active today" leaves almost nothing. But an
-    # IT contract awarded in 2024 that already ended still tells you who won what
-    # from whom at what value — exactly the market intelligence this layer is for.
-    # max(award, end) captures recent awards (market shape) AND old-but-active
-    # contracts (live incumbency) in one filter. A 2019-awarded, 2020-ended
-    # contract correctly drops; a 2024-awarded, 2025-ended one correctly stays.
+    # effective date = max(award, period_end). See the long note below for why
+    # this beats strict period-overlap: it captures recent awards (market shape)
+    # AND old-but-active contracts (live incumbency) in one comparison.
     if cols["period_end"]:
         end = pd.to_datetime(sub[cols["period_end"]], errors="coerce")
     else:
         end = pd.Series(pd.NaT, index=sub.index)
     awarded = pd.to_datetime(sub[cols["contract_date"]], errors="coerce")
-    # Row-wise max ignoring NaT: pandas max of two datetime series skips NaN.
     effective = pd.concat([awarded, end], axis=1).max(axis=1)
+
     return sub[effective >= cutoff]
+
+
+def normalize_vendor(name: str) -> str:
+    """
+    Tier-1 vendor normalization: deterministic cleanup, NOT fuzzy matching.
+
+    Collapses the common duplicate pattern where the same company appears with
+    different corporate suffixes / punctuation / bilingual tails, e.g.
+    "TEKSYSTEMS CANADA CORP." and "TEKSYSTEMS CANADA CORP./SOCIÉTÉ" both become
+    "TEKSYSTEMS". This catches the majority of obvious dupes without the
+    false-merge risk of similarity-threshold clustering (which would wrongly
+    merge genuinely distinct firms like "SI Systems" and "Systems Inc").
+
+    Deliberately conservative: when in doubt it leaves names apart rather than
+    merging them, because a wrong merge silently corrupts the intelligence while
+    a missed merge only mildly fragments the long tail.
+    """
+    if not name:
+        return ""
+    s = name.upper()
+    # Drop the French half of a bilingual "ENGLISH / FRANÇAIS" name
+    s = re.split(r"\s*/\s*", s)[0]
+    # Remove punctuation, collapse whitespace
+    s = re.sub(r"[.,'\"()]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    # Strip trailing corporate suffixes (repeatedly, e.g. "CANADA LTD")
+    suffixes = {
+        "INC", "LTD", "LTEE", "LTÉE", "CORP", "CORPORATION", "ULC", "LP", "LLP",
+        "SOCIETE", "SOCIÉTÉ", "CO", "COMPANY", "LIMITED", "INCORPORATED",
+        "CANADA", "AND", "&",
+    }
+    parts = s.split(" ")
+    while parts and parts[-1] in suffixes:
+        parts.pop()
+    result = " ".join(parts).strip()
+    # Never normalize a name completely away
+    return result or s
 
 
 def to_records(sub: pd.DataFrame, cols: dict) -> list[tuple]:
@@ -274,6 +307,7 @@ def to_records(sub: pd.DataFrame, cols: dict) -> list[tuple]:
             family,
             ref,
             _s(row.get(cols["vendor"]), 200),
+            normalize_vendor(_s(row.get(cols["vendor"]), 200)),
             _s(row.get(cols["org"]), 200),
             _s(row.get(cols["description"]), 1000),
             _s(row.get(cols["contract_date"]), 10),
@@ -292,7 +326,7 @@ def build_db(records_iter, window_years: int, source_note: str) -> int:
     con = sqlite3.connect(DB_PATH)
     con.execute("""
         CREATE TABLE contracts (
-            family_id TEXT, reference TEXT, vendor TEXT, org TEXT,
+            family_id TEXT, reference TEXT, vendor TEXT, vendor_norm TEXT, org TEXT,
             description TEXT, contract_date TEXT, period_start TEXT,
             period_end TEXT, value REAL, matched_terms TEXT
         )
@@ -300,9 +334,9 @@ def build_db(records_iter, window_years: int, source_note: str) -> int:
     con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
     total = 0
     for records in records_iter:
-        con.executemany("INSERT INTO contracts VALUES (?,?,?,?,?,?,?,?,?,?)", records)
+        con.executemany("INSERT INTO contracts VALUES (?,?,?,?,?,?,?,?,?,?,?)", records)
         total += len(records)
-    con.execute("CREATE INDEX idx_vendor ON contracts(vendor)")
+    con.execute("CREATE INDEX idx_vendor ON contracts(vendor_norm)")
     con.execute("CREATE INDEX idx_org ON contracts(org)")
     for k, v in [
         ("ingest_date", datetime.now().strftime("%Y-%m-%d")),
@@ -329,7 +363,7 @@ def write_agency_intel(top_n: int = 10) -> None:
     INTEL_DIR.mkdir(parents=True, exist_ok=True)
     for org, n_families in orgs:
         rows = con.execute("""
-            SELECT vendor, MAX(value) AS v FROM contracts
+            SELECT vendor_norm, MAX(value) AS v FROM contracts
             WHERE org = ? GROUP BY family_id
         """, (org,)).fetchall()
         values = sorted(r[1] for r in rows if r[1] and r[1] > 0)
@@ -352,8 +386,9 @@ def write_agency_intel(top_n: int = 10) -> None:
             f"# {org}",
             "",
             "Auto-generated from the Proactive Publication of Contracts dataset "
-            f"(ingest {ingest_date}, period-overlap window). Unaudited data; vendor "
-            "names are not normalized, so counts are directional.",
+            f"(ingest {ingest_date}, recency window). Unaudited data; vendor names "
+            "are lightly normalized (corporate suffixes and punctuation stripped, "
+            "but not fuzzy-matched), so counts are directional.",
             "",
             f"- **Contract families in our competency space:** {n_families}",
             f"- **Total awarded value:** ${total_value:,.0f}",
@@ -390,7 +425,7 @@ def main():
 
     cutoff = datetime.now() - timedelta(days=365 * window_years)
     matchers = build_matchers(categories)
-    print(f"Window: period overlap with last {window_years} years (cutoff {cutoff:%Y-%m-%d})")
+    print(f"Window: last {window_years} years (cutoff {cutoff:%Y-%m-%d})")
     print(f"Contract categories (substring): {categories}")
 
     if args.force and not args.source:
