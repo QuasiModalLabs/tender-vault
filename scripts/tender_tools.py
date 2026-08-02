@@ -36,6 +36,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 DB_PATH = PROJECT_ROOT / "chroma_db"
 VAULT = PROJECT_ROOT / "vault"
+PROFILE = VAULT / "profiles" / "my-company.md"
 WATCHING = VAULT / "tenders" / "watching"
 ARCHIVED = VAULT / "tenders" / "archived"
 PARKED = VAULT / "tenders" / "parked"
@@ -434,7 +435,7 @@ def cmd_contracts_intel(args) -> dict:
     like = f"%{args.query.lower()}%"
 
     families = con.execute("""
-        SELECT family_id, vendor, org, MAX(value) AS v,
+        SELECT family_id, vendor, vendor_norm, org, MAX(value) AS v,
                MAX(contract_date) AS d, MAX(period_end) AS pe, description
         FROM contracts
         WHERE lower(description) LIKE ? OR lower(matched_terms) LIKE ?
@@ -450,16 +451,16 @@ def cmd_contracts_intel(args) -> dict:
             "note": "No matches. Try a broader term; matching is substring over descriptions.",
         }
 
-    values = sorted(f[3] for f in families if f[3] and f[3] > 0)
+    values = sorted(f[4] for f in families if f[4] and f[4] > 0)
     vendor_totals: dict[str, float] = {}
     org_counts: dict[str, int] = {}
-    for _fam, vendor, org, v, *_rest in families:
-        if vendor:
-            vendor_totals[vendor] = vendor_totals.get(vendor, 0) + (v or 0)
+    for _fam, _vendor, vnorm, org, v, *_rest in families:
+        if vnorm:
+            vendor_totals[vnorm] = vendor_totals.get(vnorm, 0) + (v or 0)
         if org:
             org_counts[org] = org_counts.get(org, 0) + 1
 
-    recent = sorted(families, key=lambda f: f[4] or "", reverse=True)[:5]
+    recent = sorted(families, key=lambda f: f[5] or "", reverse=True)[:5]
     return {
         "query": args.query,
         "as_of": meta.get("ingest_date"),
@@ -476,13 +477,137 @@ def cmd_contracts_intel(args) -> dict:
             for o, n in sorted(org_counts.items(), key=lambda x: -x[1])[:8]
         ],
         "recent_examples": [
-            {"vendor": f[1], "org": f[2], "value": f[3],
-             "contract_date": f[4], "period_end": f[5],
-             "description": (f[6] or "")[:180]}
+            {"vendor": f[1], "org": f[3], "value": f[4],
+             "contract_date": f[5], "period_end": f[6],
+             "description": (f[7] or "")[:180]}
             for f in recent
         ],
-        "caveats": "Unaudited data; vendor names not normalized; families partially "
+        "caveats": "Unaudited data; vendor names lightly normalized (suffix/"
+                   "punctuation only, not fuzzy-matched); families partially "
                    "outside the filter window may be incomplete.",
+    }
+
+
+def cmd_expiring_contracts(args) -> dict:
+    """
+    Surface contracts whose delivery period ends inside a window — the highest
+    public signal for a future re-procurement.
+
+    The thesis: a contract in our competency space that expires in 6-24 months
+    is a near-certain future RFP. We already know the incumbent, the value, the
+    department, and (from the description) roughly what the work is — 12-18
+    months before the government formally asks for it. That head start is where
+    proactive business development actually happens.
+
+    This is deliberately NOT prediction. It's a lead list. It surfaces
+    candidates; a human (with Claude's help via the opportunity-shaping lens)
+    decides which are worth a proactive conversation.
+
+    Window comes from --months-min / --months-max (default 6-24). Ordered by
+    expiry soonest-first within the window, then by value, so the most urgent
+    and most consequential surface at the top.
+
+    Notes on signal quality, stated honestly:
+    - Aggregates per family; a family's latest period_end is its true expiry
+      (amendments extend contracts, so we take the MAX).
+    - Standing offers / supply arrangements often have far-future or open end
+      dates and are re-competed differently than project contracts; they'll
+      appear but are weaker signals — the description usually reveals which.
+    - Value is directional (see contracts-intel caveats).
+    """
+    import sqlite3
+    from datetime import datetime, timedelta
+
+    db = PROJECT_ROOT / "data" / "contracts.db"
+    if not db.exists():
+        return {"error": "Contracts DB not built. Run: python scripts/contracts_ingest.py"}
+
+    months_min = getattr(args, "months_min", None) or 6
+    months_max = getattr(args, "months_max", None) or 24
+    today = datetime.now()
+    lo = (today + timedelta(days=30 * months_min)).strftime("%Y-%m-%d")
+    hi = (today + timedelta(days=30 * months_max)).strftime("%Y-%m-%d")
+
+    # Minimum value: CLI flag overrides profile; profile default is
+    # expiry_min_value in the frontmatter (0 = no floor). This keeps the
+    # threshold tunable per company profile, like every other filter.
+    min_value = getattr(args, "min_value", None)
+    if min_value is None:
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(Path(__file__).parent))
+            from ingest import parse_profile
+            criteria = parse_profile(PROFILE)
+            min_value = criteria.get("expiry_min_value", 0)
+        except Exception:
+            min_value = 0
+
+    con = sqlite3.connect(db)
+    meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
+
+    # Per family: latest expiry, incumbent, department, value, description.
+    # Filter families whose MAX(period_end) lands in the window AND whose
+    # value clears the floor.
+    rows = con.execute("""
+        SELECT family_id,
+               MAX(period_end)   AS expiry,
+               vendor,
+               vendor_norm,
+               org,
+               MAX(value)        AS v,
+               MAX(contract_date) AS awarded,
+               description
+        FROM contracts
+        WHERE period_end != ''
+        GROUP BY family_id
+        HAVING expiry >= ? AND expiry <= ? AND v >= ?
+        ORDER BY expiry ASC, v DESC
+    """, (lo, hi, min_value)).fetchall()
+    con.close()
+
+    if not rows:
+        return {
+            "window": f"{months_min}-{months_max} months out ({lo} to {hi})",
+            "min_value": min_value,
+            "as_of": meta.get("ingest_date"),
+            "expiring": 0,
+            "note": "No contracts expiring in this window above the value floor. "
+                    "Lower expiry_min_value in the profile (or --min-value), or "
+                    "widen --months-max.",
+        }
+
+    def months_until(expiry: str) -> int:
+        try:
+            d = datetime.strptime(expiry, "%Y-%m-%d")
+            return round((d - today).days / 30)
+        except ValueError:
+            return -1
+
+    results = [
+        {
+            "incumbent": r[2],
+            "incumbent_norm": r[3],
+            "department": r[4],
+            "expiry": r[1],
+            "months_until_expiry": months_until(r[1]),
+            "value": r[5],
+            "awarded": r[6],
+            "description": (r[7] or "")[:220],
+        }
+        for r in rows
+    ]
+
+    return {
+        "window": f"{months_min}-{months_max} months out ({lo} to {hi})",
+        "min_value": min_value,
+        "as_of": meta.get("ingest_date"),
+        "expiring": len(results),
+        "contracts": results[:40],  # cap so the agent isn't flooded
+        "truncated": len(results) > 40,
+        "how_to_read": "Each row is a near-certain future re-procurement. The "
+                       "incumbent is who you'd displace; the description hints at "
+                       "the work. Not every row is worth pursuing — this is a lead "
+                       "list for human judgment, not a forecast.",
     }
 
 
@@ -561,6 +686,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ci.add_argument("query")
     ci.set_defaults(func=cmd_contracts_intel)
+
+    ec = sub.add_parser(
+        "expiring-contracts",
+        help="Contracts expiring in a window — near-certain future re-procurements",
+    )
+    ec.add_argument("--months-min", type=int, default=6,
+                    help="Earliest expiry, months from now (default 6)")
+    ec.add_argument("--months-max", type=int, default=24,
+                    help="Latest expiry, months from now (default 24)")
+    ec.add_argument("--min-value", type=float, default=None,
+                    help="Minimum contract value (overrides profile's "
+                         "expiry_min_value; default reads from profile)")
+    ec.set_defaults(func=cmd_expiring_contracts)
 
     pr = sub.add_parser("promote", help="Copy a tender into vault/tenders/watching/")
     pr.add_argument("tender_id")

@@ -70,6 +70,7 @@ def parse_profile(profile_path: Path) -> dict:
         "min_days_until_close": int(fm.get("min_days_until_close", 5)),
         "contracts_window_years": int(fm.get("contracts_window_years", 3)),
         "contracts_categories": [c.lower() for c in fm.get("contracts_categories", [])],
+        "expiry_min_value": float(fm.get("expiry_min_value", 0)),
     }
 
 
