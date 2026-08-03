@@ -636,6 +636,110 @@ def cmd_program_signals(args) -> dict:
     }
 
 
+def cmd_oag_signals(args) -> dict:
+    """
+    Surface OAG performance audits (and committee hearings) touching IT/systems,
+    ranked by IT-relevance — the independent-scrutiny pre-RFP signal.
+
+    Where contracts_intel says WHAT was bought, expiring_contracts says WHAT is
+    up for renewal, and program-signals says what a department PLANS, this says
+    what an independent authority has PUBLICLY found them failing at. "The AG
+    flagged your processing backlog in 2023" is the most citable pre-RFP opener
+    of all, and OAG/committee scrutiny is what forces a department to procure.
+
+    CONVERGENCE is the point: filter by --department to cross-reference against
+    program-signals (same dept planning to modernize?) and contracts-intel /
+    expiring-contracts (who holds their IT work, expiring when?). When OAG +
+    plans + an expiring contract point at the same department, that is the
+    strongest pre-RFP case — and a live tender from that department should rank
+    higher because of it.
+
+    Read each audit and judge IT-relevance + whether the finding is a real
+    opportunity. A lead list, not a forecast.
+
+    Filters:
+      --department SUBSTR : restrict to audits of matching departments
+      --min-score FLOAT   : only audits with it_score at/above this (default: none)
+      --doc-type TYPE     : performance_audit | committee_hearing | special_examination
+      --since YYYY        : only audits from this year onward
+      --limit N           : how many to return (default 20)
+    """
+    import sqlite3
+
+    db = PROJECT_ROOT / "data" / "oag.db"
+    if not db.exists():
+        return {"error": "OAG DB not built. Run: python scripts/oag_ingest.py"}
+
+    con = sqlite3.connect(db)
+    meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
+
+    where, params = ["it_score IS NOT NULL"], []
+    dept = getattr(args, "department", None)
+    if dept:
+        where.append("lower(department) LIKE ?")
+        params.append(f"%{dept.lower()}%")
+    min_score = getattr(args, "min_score", None)
+    if min_score is not None:
+        where.append("it_score >= ?")
+        params.append(min_score)
+    doc_type = getattr(args, "doc_type", None)
+    if doc_type:
+        where.append("doc_type = ?")
+        params.append(doc_type)
+    since = getattr(args, "since", None)
+    if since:
+        where.append("year >= ?")
+        params.append(since)
+
+    limit = getattr(args, "limit", None) or 20
+    rows = con.execute(f"""
+        SELECT year, doc_type, department, title, description,
+               it_score, html_url, pdf_url
+        FROM audits
+        WHERE {' AND '.join(where)}
+        ORDER BY it_score DESC, year DESC
+        LIMIT ?
+    """, params + [limit]).fetchall()
+    con.close()
+
+    if not rows:
+        return {"as_of": meta.get("ingest_date"), "audits": 0,
+                "note": "No audits matched. Loosen --min-score/--department/--since."}
+
+    results = []
+    for (year, dt, dept_, title, desc, score, html, pdf) in rows:
+        results.append({
+            "year": year,
+            "doc_type": dt,
+            "department": dept_,
+            "title": title,
+            "description": (desc or "")[:500],
+            "it_score": score,
+            "report_url": html or pdf,
+        })
+
+    return {
+        "as_of": meta.get("ingest_date"),
+        "audit_count_total": meta.get("audit_count"),
+        "returned": len(results),
+        "filters": {"department": dept, "min_score": min_score,
+                    "doc_type": doc_type, "since": since},
+        "audits": results,
+        "how_to_read": "Ranked by it_score — how strongly the audit reads as "
+                       "IT/systems/digital (vs financial/environmental/benefits), "
+                       "scored semantically. doc_type distinguishes a performance_"
+                       "audit (the AG's finding) from a committee_hearing (the "
+                       "scrutiny materialized before PACP/OGGO). The pre-RFP power "
+                       "is CONVERGENCE: take the department, then check program-"
+                       "signals (are they planning to modernize the same thing?) "
+                       "and expiring-contracts (who holds it, expiring when?). When "
+                       "OAG + plans + contract all align on one department, that's "
+                       "your strongest lead — and any live tender from them should "
+                       "rank higher. Read the report_url for citable specifics. "
+                       "A lead list, not a forecast.",
+    }
+
+
 def cmd_expiring_contracts(args) -> dict:
     """
     Surface contracts whose delivery period ends inside a window — the highest
@@ -860,6 +964,20 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Exclude Internal Services programs (included by default)")
     ps.add_argument("--limit", type=int, default=25, help="How many to return (default 25)")
     ps.set_defaults(func=cmd_program_signals)
+
+    og = sub.add_parser(
+        "oag-signals",
+        help="OAG audits touching IT/systems — independent-scrutiny pre-RFP signal",
+    )
+    og.add_argument("--department", help="Restrict to audits of matching departments")
+    og.add_argument("--min-score", type=float, default=None,
+                    help="Only audits with it_score at or above this")
+    og.add_argument("--doc-type", choices=["performance_audit", "committee_hearing",
+                                           "special_examination", "financial_audit"],
+                    help="Restrict to one document type")
+    og.add_argument("--since", type=int, default=None, help="Only audits from this year onward")
+    og.add_argument("--limit", type=int, default=20, help="How many to return (default 20)")
+    og.set_defaults(func=cmd_oag_signals)
 
     pr = sub.add_parser("promote", help="Copy a tender into vault/tenders/watching/")
     pr.add_argument("tender_id")

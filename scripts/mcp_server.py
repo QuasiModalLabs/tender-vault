@@ -234,6 +234,43 @@ def program_signals(department: str = None, min_score: float = None,
 
 
 @mcp.tool()
+def oag_signals(department: str = None, min_score: float = None,
+                doc_type: str = None, since: int = None, limit: int = 20) -> dict:
+    """
+    OAG performance audits touching IT/systems — the independent-scrutiny pre-RFP
+    signal, and the third leg of the convergence.
+
+    Contracts say what a department bought; expiring_contracts what's up for
+    renewal; program_signals what they PLAN to modernize; this says what the
+    Auditor General has PUBLICLY found them failing at. An OAG finding is the
+    most citable pre-RFP opener ("the AG flagged your backlog in 2023") and the
+    scrutiny that forces a department to procure a fix.
+
+    CONVERGENCE is the intended use: get an audit's department, then call
+    program_signals and expiring_contracts for that same department. When OAG +
+    plans + an expiring contract align on one department, that's the strongest
+    lead — and a live tender from them should rank higher. doc_type separates a
+    performance_audit (the finding) from a committee_hearing (scrutiny before
+    PACP/OGGO). Read report_url for citable specifics. A lead list, not a forecast.
+
+    Args:
+        department: Restrict to audits of matching departments (optional).
+        min_score: Only audits with it_score at or above this (optional).
+        doc_type: performance_audit | committee_hearing | special_examination |
+                  financial_audit (optional).
+        since: Only audits from this year onward (optional).
+        limit: How many to return (default 20).
+
+    Returns:
+        Dict of audits ranked by it_score, each with year, doc_type, department,
+        title, description, report_url; plus as_of and how_to_read.
+    """
+    args = SimpleNamespace(department=department, min_score=min_score,
+                           doc_type=doc_type, since=since, limit=limit)
+    return tender_tools.cmd_oag_signals(args)
+
+
+@mcp.tool()
 def list_parked() -> dict:
     """
     List tenders in the parked folder, with their revisit triggers.

@@ -123,6 +123,24 @@ plan_themes:
     - "increase mainly due to general support for program delivery"
     - "resources reallocated to internal services for departmental initiatives"
     - "no significant variance between actual and planned spending"
+
+# OAG audit IT-relevance theming (two-pole, like plan_themes). Scores each
+# audit's title+description toward IT/systems/digital audits, away from
+# financial/environmental/benefits audits. Tune the examples to reshape what
+# counts as an IT-relevant audit for your firm.
+oag_themes:
+  it_audit:
+    - "audit of the department's aging IT systems and technology modernization"
+    - "failures in a case management or processing system causing backlogs"
+    - "problems delivering a digital service or online application platform"
+    - "weaknesses in cyber security of government networks and systems"
+    - "delays and cost overruns in a major IT or software project"
+    - "modernizing legacy technology infrastructure to meet service demand"
+  non_it_audit:
+    - "audit of financial statements and public accounts"
+    - "environmental protection and climate change programs"
+    - "administration of benefits, grants and transfer payments"
+    - "physical infrastructure such as bridges, buildings and goods procurement"
 ---
 
 # Company Profile

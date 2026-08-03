@@ -72,6 +72,7 @@ def parse_profile(profile_path: Path) -> dict:
         "contracts_categories": [c.lower() for c in fm.get("contracts_categories", [])],
         "expiry_min_value": float(fm.get("expiry_min_value", 0)),
         "plan_themes": fm.get("plan_themes", {}),
+        "oag_themes": fm.get("oag_themes", {}),
     }
 
 
