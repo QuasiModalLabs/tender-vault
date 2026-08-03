@@ -15,6 +15,13 @@ chroma_db/
 # SQLite derived from the Open Government Licence contracts dataset,
 # refreshed quarterly by Actions, and part of what this repo publishes.
 
+# Sampling runs (--source, --max-audits) write here instead of over the
+# committed databases, and half-finished builds land in .part / .old.
+*.sample.db
+*.db.part
+chroma_db.sample/
+chroma_db.old/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -25,3 +32,5 @@ Thumbs.db
 
 # The vault IS committed — that's the whole point of this project.
 # The digests directory accumulates one markdown file per week from Actions.
+
+vault/.obsidian/

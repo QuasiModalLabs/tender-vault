@@ -49,7 +49,9 @@ import pandas as pd
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
-from ingest import REQUEST_HEADERS, parse_profile  # noqa: E402
+from ingest import (  # noqa: E402
+    REQUEST_HEADERS, output_path, parse_profile, staged_db,
+)
 
 PLANS_URL = (
     "https://open.canada.ca/data/en/datastore/dump/"
@@ -200,24 +202,11 @@ def _strip_md(text: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
-def build_db(df, intent_scores, pressure_scores, source_note: str) -> int:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if DB_PATH.exists():
-        DB_PATH.unlink()
-    con = sqlite3.connect(DB_PATH)
-    con.execute("""
-        CREATE TABLE programs (
-            year INTEGER, organization TEXT, core_responsibility TEXT,
-            program_id TEXT, program_name TEXT,
-            planned_spending REAL, actual_spending REAL,
-            planned_spending_next REAL, planned_spending_next2 REAL,
-            planned_ftes REAL, actual_ftes REAL,
-            variance_explanation TEXT, planning_explanation TEXT,
-            intent_score REAL, pressure_score REAL
-        )
-    """)
-    con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-
+def build_db(df, intent_scores, pressure_scores, source_note: str,
+             db_path: Path = DB_PATH) -> int:
+    # Build to a .part file and swap only once complete, so a failure part-way
+    # through the insert leaves the previous database untouched instead of
+    # leaving none at all.
     def num(x):
         try:
             return None if pd.isna(x) else float(x)
@@ -227,10 +216,21 @@ def build_db(df, intent_scores, pressure_scores, source_note: str) -> int:
     def txt(x):
         return "" if (x is None or (isinstance(x, float) and pd.isna(x))) else str(x)
 
+    def ident(x):
+        """organization_id is a stable numeric key (int64, no nulls in the
+        source). Keep it an int so a later join isn't comparing '1' to '1.0' —
+        which is exactly what txt() would produce if pandas ever widens the
+        column to float because one row went null."""
+        try:
+            return None if pd.isna(x) else int(x)
+        except (TypeError, ValueError):
+            return None
+
     rows = []
     for idx, r in df.iterrows():
         rows.append((
             _fy_to_year(r[COLS["year"]]),
+            ident(r[COLS["org_id"]]),
             txt(r[COLS["org"]]), txt(r[COLS["core"]]),
             txt(r[COLS["program_id"]]), txt(r[COLS["program"]]),
             num(r[COLS["planned_1"]]), num(r[COLS["actual"]]),
@@ -239,31 +239,44 @@ def build_db(df, intent_scores, pressure_scores, source_note: str) -> int:
             _strip_md(txt(r[COLS["variance"]])), _strip_md(txt(r[COLS["planning"]])),
             intent_scores.loc[idx], pressure_scores.loc[idx],
         ))
-    con.executemany(
-        "INSERT INTO programs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows
-    )
-    con.execute("CREATE INDEX idx_org ON programs(organization)")
-    con.execute("CREATE INDEX idx_intent ON programs(intent_score)")
-    con.execute("CREATE INDEX idx_score ON programs(pressure_score)")
-    con.execute("CREATE INDEX idx_year ON programs(year)")
-    for k, v in [
-        ("ingest_date", datetime.now().strftime("%Y-%m-%d")),
-        ("source", source_note),
-        ("row_count", str(len(rows))),
-        ("intent_scored", str(intent_scores.notna().sum())),
-        ("pressure_scored", str(pressure_scores.notna().sum())),
-        ("licence", "Open Government Licence - Canada"),
-    ]:
-        con.execute("INSERT INTO meta VALUES (?, ?)", (k, v))
-    con.commit()
-    con.close()
+    with staged_db(db_path) as con:
+        con.execute("""
+            CREATE TABLE programs (
+                year INTEGER, organization_id INTEGER, organization TEXT,
+                core_responsibility TEXT,
+                program_id TEXT, program_name TEXT,
+                planned_spending REAL, actual_spending REAL,
+                planned_spending_next REAL, planned_spending_next2 REAL,
+                planned_ftes REAL, actual_ftes REAL,
+                variance_explanation TEXT, planning_explanation TEXT,
+                intent_score REAL, pressure_score REAL
+            )
+        """)
+        con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        con.executemany(
+            "INSERT INTO programs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows
+        )
+        con.execute("CREATE INDEX idx_org ON programs(organization)")
+        con.execute("CREATE INDEX idx_org_id ON programs(organization_id)")
+        con.execute("CREATE INDEX idx_intent ON programs(intent_score)")
+        con.execute("CREATE INDEX idx_score ON programs(pressure_score)")
+        con.execute("CREATE INDEX idx_year ON programs(year)")
+        for k, v in [
+            ("ingest_date", datetime.now().strftime("%Y-%m-%d")),
+            ("source", source_note),
+            ("row_count", str(len(rows))),
+            ("intent_scored", str(intent_scores.notna().sum())),
+            ("pressure_scored", str(pressure_scores.notna().sum())),
+            ("licence", "Open Government Licence - Canada"),
+        ]:
+            con.execute("INSERT INTO meta VALUES (?, ?)", (k, v))
     return len(rows)
 
 
-def show_extremes(n: int = 8) -> None:
+def show_extremes(n: int = 8, db_path: Path = DB_PATH) -> None:
     """Print highest/lowest INTENT-scored planning explanations so you can
     eyeball whether the theme examples pull the right rows (tuning aid)."""
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(db_path)
     print("\n=== HIGHEST intent_score (should read as forward-looking IT/modernization intent) ===")
     for org, prog, sc, pe in con.execute("""
         SELECT organization, program_name, intent_score, planning_explanation
@@ -287,7 +300,18 @@ def main():
     parser.add_argument("--source", help="Local CSV path instead of downloading")
     parser.add_argument("--show-extremes", action="store_true",
                         help="Print top/bottom scored rows after ingest (tuning aid)")
+    parser.add_argument(
+        "--db", type=Path, default=None,
+        help=f"Output DB path (default {DB_PATH}). --source redirects output to a "
+             ".sample path unless this is given.",
+    )
     args = parser.parse_args()
+
+    db_path = output_path(
+        DB_PATH, args.db,
+        f"--source reads {args.source} instead of the published dataset"
+        if args.source else None,
+    )
 
     criteria = parse_profile(args.profile)
     themes = criteria.get("plan_themes") or {}
@@ -310,13 +334,13 @@ def main():
     intent_scores, pressure_scores = score_programs(
         df, intent_ex, noise_ex, pressure_ex, accounting_ex)
     source_note = args.source or PLANS_URL
-    n = build_db(df, intent_scores, pressure_scores, source_note)
-    print(f"\nWrote {n} rows to {DB_PATH} ({DB_PATH.stat().st_size/1e6:.1f} MB)")
+    n = build_db(df, intent_scores, pressure_scores, source_note, db_path)
+    print(f"\nWrote {n} rows to {db_path} ({db_path.stat().st_size/1e6:.1f} MB)")
     print(f"Intent-scored {intent_scores.notna().sum()} planning explanations, "
           f"pressure-scored {pressure_scores.notna().sum()} variance explanations")
 
     if args.show_extremes:
-        show_extremes()
+        show_extremes(db_path=db_path)
 
     print("\nAttribution: contains information licensed under the "
           "Open Government Licence - Canada.")

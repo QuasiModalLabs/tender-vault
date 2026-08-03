@@ -45,6 +45,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import itertools
 import re
 import sqlite3
 import sys
@@ -55,7 +56,9 @@ import pandas as pd
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
-from ingest import REQUEST_HEADERS, parse_profile  # noqa: E402
+from ingest import (  # noqa: E402
+    REQUEST_HEADERS, output_path, parse_profile, resolve_columns, staged_db,
+)
 
 CONTRACTS_URL = (
     "https://open.canada.ca/data/dataset/d8f85d91-7dec-4fd1-8055-483b77225d8b/"
@@ -70,9 +73,19 @@ CHUNK_ROWS = 50_000
 
 # Schema column names with fallbacks, resolved at runtime so a rename fails
 # loudly with the real column list rather than silently producing nothing.
+# resolve_columns itself lives in ingest.py — one guard, shared by all four
+# ingest scripts.
 COLUMN_CANDIDATES = {
     "vendor": ["vendor_name"],
+    # Left as a fallback list on purpose: the display title when present, the
+    # slug when it isn't.
     "org": ["owner_org_title", "owner_org"],
+    # The CKAN slug, captured SEPARATELY. As a fallback behind owner_org_title
+    # it was never once stored, because the title is always present. It's the
+    # stable machine key ("casdo-ocena") while the title is a bilingual display
+    # string ("Accessibility Standards Canada | Normes d'accessibilité Canada")
+    # that changes with rebrands and translations.
+    "owner_org": ["owner_org"],
     "contract_date": ["contract_date"],
     "period_start": ["contract_period_start"],
     "period_end": ["delivery_date", "contract_period_end"],
@@ -83,27 +96,10 @@ COLUMN_CANDIDATES = {
 }
 
 
-def resolve_columns(columns: list[str]) -> dict[str, str | None]:
-    lower = {c.lower().strip(): c for c in columns}
-    resolved: dict[str, str | None] = {}
-    for key, candidates in COLUMN_CANDIDATES.items():
-        found = None
-        for cand in candidates:
-            if cand in lower:
-                found = lower[cand]
-                break
-        resolved[key] = found
-    required = ["vendor", "org", "contract_date", "value", "description"]
-    missing = [k for k in required if resolved[k] is None]
-    if missing:
-        sys.stderr.write(
-            f"Schema mismatch. Could not find columns for: {missing}\n"
-            "Columns present in the file:\n"
-            + "\n".join(f"  {c}" for c in columns)
-            + "\nUpdate COLUMN_CANDIDATES in this script.\n"
-        )
-        sys.exit(2)
-    return resolved
+# owner_org is deliberately NOT required: an older CSV snapshot passed via
+# --source predates the column and should still ingest rather than exit, the
+# same way procurement_id and reference are treated.
+REQUIRED_COLUMNS = ["vendor", "org", "contract_date", "value", "description"]
 
 
 def build_matchers(terms: list[str]) -> list[tuple[str, str]]:
@@ -309,6 +305,7 @@ def to_records(sub: pd.DataFrame, cols: dict) -> list[tuple]:
             _s(row.get(cols["vendor"]), 200),
             normalize_vendor(_s(row.get(cols["vendor"]), 200)),
             _s(row.get(cols["org"]), 200),
+            _s(row.get(cols["owner_org"]), 100) if cols["owner_org"] else "",
             _s(row.get(cols["description"]), 1000),
             _s(row.get(cols["contract_date"]), 10),
             _s(row.get(cols["period_start"]), 10) if cols["period_start"] else "",
@@ -319,41 +316,41 @@ def to_records(sub: pd.DataFrame, cols: dict) -> list[tuple]:
     return records
 
 
-def build_db(records_iter, window_years: int, source_note: str) -> int:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if DB_PATH.exists():
-        DB_PATH.unlink()
-    con = sqlite3.connect(DB_PATH)
-    con.execute("""
-        CREATE TABLE contracts (
-            family_id TEXT, reference TEXT, vendor TEXT, vendor_norm TEXT, org TEXT,
-            description TEXT, contract_date TEXT, period_start TEXT,
-            period_end TEXT, value REAL, matched_terms TEXT
-        )
-    """)
-    con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-    total = 0
-    for records in records_iter:
-        con.executemany("INSERT INTO contracts VALUES (?,?,?,?,?,?,?,?,?,?,?)", records)
-        total += len(records)
-    con.execute("CREATE INDEX idx_vendor ON contracts(vendor_norm)")
-    con.execute("CREATE INDEX idx_org ON contracts(org)")
-    for k, v in [
-        ("ingest_date", datetime.now().strftime("%Y-%m-%d")),
-        ("window_years", str(window_years)),
-        ("source", source_note),
-        ("row_count", str(total)),
-        ("licence", "Open Government Licence - Canada"),
-    ]:
-        con.execute("INSERT INTO meta VALUES (?, ?)", (k, v))
-    con.commit()
-    con.close()
+def build_db(records_iter, window_years: int, source_note: str,
+             db_path: Path = DB_PATH) -> int:
+    # Staged write: nothing touches db_path until the new database is complete.
+    # The previous version unlinked the real DB here and then pulled from
+    # records_iter — which is where resolve_columns used to run — so a schema
+    # mismatch deleted a good 33,196-row database on its way to exiting 2.
+    with staged_db(db_path) as con:
+        con.execute("""
+            CREATE TABLE contracts (
+                family_id TEXT, reference TEXT, vendor TEXT, vendor_norm TEXT, org TEXT,
+                owner_org TEXT, description TEXT, contract_date TEXT, period_start TEXT,
+                period_end TEXT, value REAL, matched_terms TEXT
+            )
+        """)
+        con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        total = 0
+        for records in records_iter:
+            con.executemany("INSERT INTO contracts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", records)
+            total += len(records)
+        con.execute("CREATE INDEX idx_vendor ON contracts(vendor_norm)")
+        con.execute("CREATE INDEX idx_org ON contracts(org)")
+        for k, v in [
+            ("ingest_date", datetime.now().strftime("%Y-%m-%d")),
+            ("window_years", str(window_years)),
+            ("source", source_note),
+            ("row_count", str(total)),
+            ("licence", "Open Government Licence - Canada"),
+        ]:
+            con.execute("INSERT INTO meta VALUES (?, ?)", (k, v))
     return total
 
 
-def write_agency_intel(top_n: int = 10) -> None:
+def write_agency_intel(top_n: int = 10, db_path: Path = DB_PATH) -> None:
     """Generate vault/intel/agencies/<org>.md from the freshly built DB."""
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(db_path)
     ingest_date = con.execute("SELECT value FROM meta WHERE key='ingest_date'").fetchone()[0]
     orgs = con.execute("""
         SELECT org, COUNT(DISTINCT family_id) AS n
@@ -412,7 +409,20 @@ def main():
     parser.add_argument("--source", help="Local CSV path instead of downloading (testing)")
     parser.add_argument("--no-intel", action="store_true", help="Skip agency intel files")
     parser.add_argument("--force", action="store_true", help="Re-download even if cached")
+    parser.add_argument(
+        "--db", type=Path, default=None,
+        help=f"Output DB path (default {DB_PATH}). --source redirects output to a "
+             ".sample path unless this is given, so testing on a trimmed CSV "
+             "cannot replace the committed database.",
+    )
     args = parser.parse_args()
+
+    db_path = output_path(
+        DB_PATH, args.db,
+        f"--source reads {args.source} instead of the full dataset"
+        if args.source else None,
+    )
+    is_sample = db_path != DB_PATH
 
     criteria = parse_profile(args.profile)
     window_years = criteria.get("contracts_window_years", 3)
@@ -431,27 +441,46 @@ def main():
     if args.force and not args.source:
         download_to_cache(force=True)
     reader = open_source(args.source)
-    state = {"cols": None, "seen": 0}
+
+    # Resolve the schema off the FIRST chunk, before build_db opens anything.
+    # This used to happen lazily inside the generator, i.e. after build_db had
+    # already deleted the existing database — so a schema mismatch exited 2 and
+    # took the good data with it. Fail before writing, not during.
+    try:
+        first_chunk = next(reader)
+    except StopIteration:
+        sys.stderr.write(f"Source has no rows: {args.source or CONTRACTS_URL}\n")
+        sys.exit(2)
+    cols = resolve_columns(
+        list(first_chunk.columns), COLUMN_CANDIDATES, REQUIRED_COLUMNS,
+        "scripts/contracts_ingest.py",
+    )
+    print(f"Resolved columns: {cols}")
+
+    state = {"seen": 0}
 
     def records_gen():
-        for chunk in reader:
-            if state["cols"] is None:
-                state["cols"] = resolve_columns(list(chunk.columns))
-                print(f"Resolved columns: {state['cols']}")
+        for chunk in itertools.chain([first_chunk], reader):
             state["seen"] += len(chunk)
-            sub = filter_chunk(chunk, state["cols"], matchers, cutoff)
+            sub = filter_chunk(chunk, cols, matchers, cutoff)
             if len(sub):
-                yield to_records(sub, state["cols"])
+                yield to_records(sub, cols)
             if state["seen"] % 500_000 < CHUNK_ROWS:
                 print(f"  ...scanned {state['seen']:,} rows")
 
     source_note = args.source or CONTRACTS_URL
-    kept = build_db(records_gen(), window_years, source_note)
+    kept = build_db(records_gen(), window_years, source_note, db_path)
     print(f"\nScanned {state['seen']:,} rows, kept {kept:,} matching contract rows")
-    print(f"SQLite written to {DB_PATH} ({DB_PATH.stat().st_size / 1e6:.1f} MB)")
+    print(f"SQLite written to {db_path} ({db_path.stat().st_size / 1e6:.1f} MB)")
 
     if kept and not args.no_intel:
-        write_agency_intel()
+        if is_sample:
+            # vault/intel/agencies/ is committed content. A partial run would
+            # rewrite it from a subset, which is the same failure as clobbering
+            # the DB — just in markdown.
+            print("Skipping agency intel: sampling run must not rewrite vault/intel/.")
+        else:
+            write_agency_intel(db_path=db_path)
 
     print("\nAttribution: contains information licensed under the "
           "Open Government Licence - Canada.")

@@ -32,7 +32,10 @@ FAKE_DOC = {
     "metadata": {
         "tender_id": FAKE_ID,
         "title": "Test Tender for Lifecycle",
-        "agency": "Test Agency",
+        # Two separate fields, as ingest.build_chroma writes them. The display
+        # layer picks end user first and falls back to the contracting entity.
+        "contracting_entity": "Shared Services Canada",
+        "end_user_entity": "Test Agency",
         "closing_date": "2099-01-01",
         "estimated_value": 500000.0,
         "matched_competencies": "cloud,DevOps",

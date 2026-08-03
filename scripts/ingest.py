@@ -14,7 +14,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import re
+import shutil
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -43,6 +46,120 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DEFAULT_PROFILE = PROJECT_ROOT / "vault" / "profiles" / "my-company.md"
 DEFAULT_CACHE = PROJECT_ROOT / ".cache" / "tenders.csv"
 DEFAULT_DB = PROJECT_ROOT / "chroma_db"
+
+
+# ---------------------------------------------------------------------------
+# Schema resolution — the guard, shared with the other ingest scripts
+# ---------------------------------------------------------------------------
+# Column names with fallbacks, resolved at runtime against the real header so a
+# rename fails loudly with the actual column list instead of silently producing
+# nothing. This exists because it didn't: the agency field read a column name
+# that had never been in this file, `df.get(col, "")` returned the default, and
+# every tender carried an empty agency for weeks without a single error.
+TENDER_COLUMNS = {
+    "tender_id": ["referenceNumber-numeroReference"],
+    "title": ["title-titre-eng"],
+    "description": ["tenderDescription-descriptionAppelOffres-eng"],
+    "closing_date": ["tenderClosingDate-appelOffresDateCloture"],
+    "contracting_entity": ["contractingEntityName-nomEntitContractante-eng"],
+    "end_user": ["endUserEntitiesName-nomEntitesUtilisateurFinal-eng"],
+}
+# All of them: there is no tender worth indexing without any one of these.
+TENDER_REQUIRED = list(TENDER_COLUMNS)
+
+
+def resolve_columns(
+    columns: list[str],
+    candidates: dict[str, list[str]],
+    required: list[str],
+    source_label: str,
+) -> dict[str, str | None]:
+    """
+    Map logical field names to real header names, or exit(2) with the real list.
+
+    Shared by every ingest script. Matching is case-insensitive so a header
+    recased upstream doesn't count as a rename. Keys not in `required` resolve
+    to None and the caller decides what an absent column means.
+    """
+    lower = {c.lower().strip(): c for c in columns}
+    resolved: dict[str, str | None] = {}
+    for key, cands in candidates.items():
+        found = None
+        for cand in cands:
+            if cand.lower().strip() in lower:
+                found = lower[cand.lower().strip()]
+                break
+        resolved[key] = found
+    missing = [k for k in required if resolved[k] is None]
+    if missing:
+        sys.stderr.write(
+            f"Schema mismatch in {source_label}. Could not find columns for: {missing}\n"
+            "Columns present in the file:\n"
+            + "\n".join(f"  {c}" for c in columns)
+            + f"\nUpdate the column candidates in {source_label}.\n"
+        )
+        sys.exit(2)
+    return resolved
+
+
+# ---------------------------------------------------------------------------
+# Output safety — shared by every ingest script
+# ---------------------------------------------------------------------------
+
+def output_path(default_path: Path, explicit: Path | None,
+                sampling_reason: str | None) -> Path:
+    """
+    Decide where an ingest writes, keeping sampling runs off the real database.
+
+    A flag whose purpose is to spot-check the pipeline on a subset must not be
+    able to replace the corpus the rest of the repo reads. `--max-audits 20`
+    truncated a 364-row oag.db to 20; `--source <trimmed csv>` emptied a
+    33,196-row contracts.db. Both "worked" — they just destroyed the real data
+    on the way. Sampling now redirects to a sibling .sample path, and
+    overwriting the committed database takes an explicit --db.
+    """
+    if explicit is not None:
+        return Path(explicit)
+    if not sampling_reason:
+        return default_path
+    sample = default_path.with_name(default_path.stem + ".sample" + default_path.suffix)
+    print(
+        f"SAMPLING RUN ({sampling_reason}).\n"
+        f"  Writing to     {sample}\n"
+        f"  Leaving intact {default_path}\n"
+        f"  Pass --db {default_path} to overwrite the real one deliberately."
+    )
+    return sample
+
+
+@contextlib.contextmanager
+def staged_db(db_path: Path):
+    """
+    Yield a SQLite connection to a .part file, published over db_path on success.
+
+    Every ingest used to unlink its output and then build in place, so anything
+    that failed in between — a schema mismatch, a dropped connection, a bad row
+    — left no database at all. Here nothing touches db_path until the new
+    database is complete and committed; os.replace is atomic for files on
+    Windows and POSIX alike.
+
+    On failure the .part is removed as well, so a failed run leaves the tree
+    exactly as it found it rather than a stray half-written file for the next
+    person to wonder about.
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = db_path.with_name(db_path.name + ".part")
+    tmp_path.unlink(missing_ok=True)
+    con = sqlite3.connect(tmp_path)
+    try:
+        yield con
+        con.commit()
+    except BaseException:
+        con.close()
+        tmp_path.unlink(missing_ok=True)
+        raise
+    con.close()
+    tmp_path.replace(db_path)
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +327,8 @@ def contains_excluded(text: str, exclusions: list[str]) -> bool:
     return any(excl in text_lower for excl in exclusions)
 
 
-def filter_tenders(df: pd.DataFrame, criteria: dict, value_extractor=None) -> pd.DataFrame:
+def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
+                   value_extractor=None) -> pd.DataFrame:
     """
     Apply profile filters. Prints funnel stats so you can tune the profile.
 
@@ -225,7 +343,7 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, value_extractor=None) -> pd
     # Parse closing dates (timezone-naive for simplicity)
     df = df.copy()
     df["_closing"] = pd.to_datetime(
-        df.get("tenderClosingDate-appelOffresDateCloture"),
+        df[cols["closing_date"]],
         errors="coerce",
         utc=True,
     ).dt.tz_localize(None)
@@ -235,11 +353,9 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, value_extractor=None) -> pd
     print(f"  After date filter (>={criteria['min_days_until_close']} days out): {len(df):,}")
 
     # Combined text for matching (title + description)
-    title_col = "title-titre-eng"
-    desc_col = "tenderDescription-descriptionAppelOffres-eng"
     df["_text"] = (
-        df.get(title_col, "").fillna("").astype(str) + " "
-        + df.get(desc_col, "").fillna("").astype(str)
+        df[cols["title"]].fillna("").astype(str) + " "
+        + df[cols["description"]].fillna("").astype(str)
     )
 
     # Exclusions first (cheap, removes obvious misfits)
@@ -259,12 +375,9 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, value_extractor=None) -> pd
         df["_matched"] = [[] for _ in range(len(df))]
 
     # Value filter — only drop tenders where we can read a value AND it's out of range
-    if desc_col in df.columns:
-        if value_extractor is not estimate_value:
-            print(f"  Extracting values via LLM for {len(df):,} tenders...")
-        df["_value"] = df[desc_col].apply(value_extractor)
-    else:
-        df["_value"] = None
+    if value_extractor is not estimate_value:
+        print(f"  Extracting values via LLM for {len(df):,} tenders...")
+    df["_value"] = df[cols["description"]].apply(value_extractor)
     if criteria["value_min"] > 0 or criteria["value_max"] < 100_000_000:
         in_range = df["_value"].isna() | (
             (df["_value"] >= criteria["value_min"])
@@ -281,7 +394,15 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, value_extractor=None) -> pd
 # ChromaDB persistence — this is what Claude's tools read from
 # ---------------------------------------------------------------------------
 
-def build_chroma(df: pd.DataFrame, db_path: Path) -> None:
+def _meta_str(value, limit: int) -> str:
+    """NaN-safe string for ChromaDB metadata. float('nan') is truthy, so the
+    obvious `str(x) or ''` yields the literal string 'nan'."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    return str(value).strip()[:limit]
+
+
+def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict) -> None:
     """Embed filtered tenders and write to a persistent ChromaDB collection."""
     # Imported here, not at module level: this is the only function that needs
     # ChromaDB, and contracts_ingest.py imports this module purely for its
@@ -289,10 +410,54 @@ def build_chroma(df: pd.DataFrame, db_path: Path) -> None:
     import chromadb
     from chromadb.utils import embedding_functions
 
-    # Wipe the old DB — we want a clean snapshot, not accumulated cruft
+    # We want a clean snapshot, not accumulated cruft — but the old corpus is
+    # moved ASIDE rather than deleted, so a failure part-way through the build
+    # doesn't leave us with nothing.
+    #
+    # Why aside rather than the usual build-to-temp-and-rename: ChromaDB holds
+    # OS-level handles on its directory for the life of the client, so renaming
+    # a freshly built temp directory into place fails on Windows with
+    # PermissionError (verified). Renaming the OLD directory works, because
+    # nothing has it open yet.
+    retired = None
     if db_path.exists():
-        import shutil
-        shutil.rmtree(db_path)
+        retired = db_path.with_name(db_path.name + ".old")
+        if retired.exists():
+            shutil.rmtree(retired)
+        db_path.rename(retired)
+
+    try:
+        _write_chroma(df, db_path, cols)
+    except BaseException:
+        if retired is not None:
+            # Best effort: clear whatever partial exists and put the old corpus
+            # back. ChromaDB may still hold handles on a partial build, in which
+            # case the cleanup fails and we hand the user the two paths instead
+            # of pretending we recovered.
+            shutil.rmtree(db_path, ignore_errors=True)
+            if not db_path.exists():
+                retired.rename(db_path)
+                sys.stderr.write(
+                    f"\nIngest failed. Your previous corpus has been restored:\n"
+                    f"  {db_path}\n"
+                )
+            else:
+                sys.stderr.write(
+                    f"\nIngest failed. Your previous corpus was NOT deleted:\n"
+                    f"  {retired}\n"
+                    f"An incomplete build is at {db_path} and is still held open by\n"
+                    f"ChromaDB, so this process cannot swap the old one back itself.\n"
+                    f"To restore:  rm -rf {db_path} && mv {retired} {db_path}\n"
+                )
+        raise
+    if retired is not None:
+        shutil.rmtree(retired, ignore_errors=True)
+
+
+def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict) -> None:
+    """Embed and write. Split out so build_chroma owns the rollback logic."""
+    import chromadb
+    from chromadb.utils import embedding_functions
 
     client = chromadb.PersistentClient(path=str(db_path))
     embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -306,19 +471,32 @@ def build_chroma(df: pd.DataFrame, db_path: Path) -> None:
 
     documents, metadatas, ids = [], [], []
     for _, row in df.iterrows():
-        tender_id = str(row.get("referenceNumber-numeroReference", ""))
+        tender_id = str(row.get(cols["tender_id"], ""))
         if not tender_id or tender_id == "nan":
             continue
 
-        title = str(row.get("title-titre-eng", ""))[:300]
-        desc = str(row.get("tenderDescription-descriptionAppelOffres-eng", ""))[:2000]
+        title = str(row.get(cols["title"], ""))[:300]
+        desc = str(row.get(cols["description"], ""))[:2000]
         # We embed title + description — weighting title higher by repeating it
         document = f"{title}\n{title}\n\n{desc}"
 
         metadata = {
             "tender_id": tender_id,
             "title": title[:200],
-            "agency": str(row.get("contracting-organization-name-eng-nom-organisation-contractante-ang", ""))[:200],
+            # TWO fields, deliberately not merged and not collapsed to one.
+            # Federal IT is routinely bought by a central authority (SSC, PSPC)
+            # on behalf of the department that actually needs the work, so the
+            # contracting entity is frequently NOT the customer. End user is the
+            # demand signal; contracting entity is the fallback — it's always
+            # populated, while end user is blank on roughly half the rows.
+            "contracting_entity": _meta_str(row.get(cols["contracting_entity"]), 500),
+            # Multi-valued and slash-delimited: one tender can legitimately name
+            # several departments ("Department of National Defence (DND) /
+            # Department of Transport (TC) / ..."). Stored VERBATIM, all values
+            # kept. Do not re-join on commas — entity names contain commas
+            # ("Foreign Affairs, Trade And Development (Department Of)"), which
+            # would make the field unsplittable downstream.
+            "end_user_entity": _meta_str(row.get(cols["end_user"]), 500),
             "closing_date": row["_closing"].strftime("%Y-%m-%d") if pd.notna(row["_closing"]) else "",
             "estimated_value": float(row["_value"]) if pd.notna(row.get("_value")) else 0.0,
             "matched_competencies": ",".join(row.get("_matched", [])),
@@ -349,7 +527,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE)
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument(
+        "--db", type=Path, default=None,
+        help=f"Output corpus path (default {DEFAULT_DB}). Pointing --cache at a "
+             "non-default CSV redirects output to a .sample path unless this is "
+             "given, so a spot-check can't replace the real corpus.",
+    )
     parser.add_argument("--force", action="store_true", help="Re-download CSV even if cached")
     parser.add_argument(
         "--extract-values",
@@ -364,6 +547,12 @@ def main():
         print(f"Profile not found: {args.profile}", file=sys.stderr)
         sys.exit(1)
 
+    db_path = output_path(
+        DEFAULT_DB, args.db,
+        f"--cache points at {args.cache}, not the default"
+        if args.cache != DEFAULT_CACHE else None,
+    )
+
     criteria = parse_profile(args.profile)
     print(f"Profile: {args.profile}")
     print(f"  Competencies: {criteria['competencies']}")
@@ -375,13 +564,16 @@ def main():
         print("  Value extraction: LLM (Anthropic API)")
 
     df = download_tenders(args.cache, force=args.force)
-    df = filter_tenders(df, criteria, value_extractor=value_extractor)
+    cols = resolve_columns(
+        list(df.columns), TENDER_COLUMNS, TENDER_REQUIRED, "scripts/ingest.py"
+    )
+    df = filter_tenders(df, criteria, cols, value_extractor=value_extractor)
 
     if len(df) == 0:
         print("\nNo tenders passed the filter. Loosen your criteria.", file=sys.stderr)
         sys.exit(1)
 
-    build_chroma(df, args.db)
+    build_chroma(df, db_path, cols)
     print("\nDone. Claude Code can now search this corpus via scripts/tender_tools.py")
 
 
