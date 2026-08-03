@@ -46,7 +46,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 from ingest import (  # noqa: E402
-    REQUEST_HEADERS, output_path, parse_profile, resolve_columns, swap_into_place,
+    REQUEST_HEADERS, output_path, parse_profile, resolve_columns, staged_db,
 )
 # Reuse the proven scoring helpers from plans_ingest.
 from plans_ingest import theme_vector, _strip_md, EMBED_MODEL  # noqa: E402
@@ -190,21 +190,8 @@ def year_from_title(title: str) -> int | None:
 
 def build_db(records: list[dict], scores: list, source_note: str,
              cols: dict, res_cols: dict, db_path: Path = DB_PATH) -> int:
-    # Build to a .part file and swap only once complete, so a failure part-way
-    # through leaves the previous database untouched instead of leaving none.
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = db_path.with_name(db_path.name + ".part")
-    if tmp_path.exists():
-        tmp_path.unlink()
-    con = sqlite3.connect(tmp_path)
-    con.execute("""
-        CREATE TABLE audits (
-            oag_id TEXT, year INTEGER, doc_type TEXT,
-            title TEXT, description TEXT, department TEXT,
-            it_score REAL, html_url TEXT, pdf_url TEXT
-        )
-    """)
-    con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+    # Staged write: a failure part-way through leaves the previous database
+    # untouched instead of leaving none.
     rows = []
     for pkg, score in zip(records, scores):
         title = pkg.get(cols["title"], "") or ""
@@ -224,7 +211,15 @@ def build_db(records: list[dict], scores: list, source_note: str,
             extract_dept(title, notes),
             score, html_url, pdf_url,
         ))
-    try:
+    with staged_db(db_path) as con:
+        con.execute("""
+            CREATE TABLE audits (
+                oag_id TEXT, year INTEGER, doc_type TEXT,
+                title TEXT, description TEXT, department TEXT,
+                it_score REAL, html_url TEXT, pdf_url TEXT
+            )
+        """)
+        con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
         con.executemany("INSERT INTO audits VALUES (?,?,?,?,?,?,?,?,?)", rows)
         con.execute("CREATE INDEX idx_dept ON audits(department)")
         con.execute("CREATE INDEX idx_itscore ON audits(it_score)")
@@ -236,10 +231,6 @@ def build_db(records: list[dict], scores: list, source_note: str,
             ("licence", "Open Government Licence - Canada"),
         ]:
             con.execute("INSERT INTO meta VALUES (?, ?)", (k, v))
-        con.commit()
-    finally:
-        con.close()
-    swap_into_place(tmp_path, db_path)
     return len(rows)
 
 

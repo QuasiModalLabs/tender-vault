@@ -14,8 +14,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import re
 import shutil
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -130,18 +132,34 @@ def output_path(default_path: Path, explicit: Path | None,
     return sample
 
 
-def swap_into_place(tmp_path: Path, final_path: Path) -> None:
+@contextlib.contextmanager
+def staged_db(db_path: Path):
     """
-    Publish a finished database over the previous one, atomically.
+    Yield a SQLite connection to a .part file, published over db_path on success.
 
     Every ingest used to unlink its output and then build in place, so anything
     that failed in between — a schema mismatch, a dropped connection, a bad row
-    — left no database at all. Building to a .part file and swapping at the end
-    means a failed run leaves the previous good data exactly where it was.
-    os.replace is atomic on Windows and POSIX alike for files.
+    — left no database at all. Here nothing touches db_path until the new
+    database is complete and committed; os.replace is atomic for files on
+    Windows and POSIX alike.
+
+    On failure the .part is removed as well, so a failed run leaves the tree
+    exactly as it found it rather than a stray half-written file for the next
+    person to wonder about.
     """
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path.replace(final_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = db_path.with_name(db_path.name + ".part")
+    tmp_path.unlink(missing_ok=True)
+    con = sqlite3.connect(tmp_path)
+    try:
+        yield con
+        con.commit()
+    except BaseException:
+        con.close()
+        tmp_path.unlink(missing_ok=True)
+        raise
+    con.close()
+    tmp_path.replace(db_path)
 
 
 # ---------------------------------------------------------------------------

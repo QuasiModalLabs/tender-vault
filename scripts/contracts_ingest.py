@@ -57,7 +57,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 from ingest import (  # noqa: E402
-    REQUEST_HEADERS, output_path, parse_profile, resolve_columns, swap_into_place,
+    REQUEST_HEADERS, output_path, parse_profile, resolve_columns, staged_db,
 )
 
 CONTRACTS_URL = (
@@ -318,25 +318,19 @@ def to_records(sub: pd.DataFrame, cols: dict) -> list[tuple]:
 
 def build_db(records_iter, window_years: int, source_note: str,
              db_path: Path = DB_PATH) -> int:
-    # Build to a .part file and swap at the end. The previous version unlinked
-    # the real DB here and then pulled from records_iter — which is where
-    # resolve_columns runs — so a schema mismatch deleted a good 33,196-row
-    # database on its way to exiting 2. Nothing touches db_path until the new
-    # one is complete.
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = db_path.with_name(db_path.name + ".part")
-    if tmp_path.exists():
-        tmp_path.unlink()
-    con = sqlite3.connect(tmp_path)
-    con.execute("""
-        CREATE TABLE contracts (
-            family_id TEXT, reference TEXT, vendor TEXT, vendor_norm TEXT, org TEXT,
-            owner_org TEXT, description TEXT, contract_date TEXT, period_start TEXT,
-            period_end TEXT, value REAL, matched_terms TEXT
-        )
-    """)
-    con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-    try:
+    # Staged write: nothing touches db_path until the new database is complete.
+    # The previous version unlinked the real DB here and then pulled from
+    # records_iter — which is where resolve_columns used to run — so a schema
+    # mismatch deleted a good 33,196-row database on its way to exiting 2.
+    with staged_db(db_path) as con:
+        con.execute("""
+            CREATE TABLE contracts (
+                family_id TEXT, reference TEXT, vendor TEXT, vendor_norm TEXT, org TEXT,
+                owner_org TEXT, description TEXT, contract_date TEXT, period_start TEXT,
+                period_end TEXT, value REAL, matched_terms TEXT
+            )
+        """)
+        con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
         total = 0
         for records in records_iter:
             con.executemany("INSERT INTO contracts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", records)
@@ -351,10 +345,6 @@ def build_db(records_iter, window_years: int, source_note: str,
             ("licence", "Open Government Licence - Canada"),
         ]:
             con.execute("INSERT INTO meta VALUES (?, ?)", (k, v))
-        con.commit()
-    finally:
-        con.close()
-    swap_into_place(tmp_path, db_path)
     return total
 
 

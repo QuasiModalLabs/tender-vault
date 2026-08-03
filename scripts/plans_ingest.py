@@ -50,7 +50,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 from ingest import (  # noqa: E402
-    REQUEST_HEADERS, output_path, parse_profile, swap_into_place,
+    REQUEST_HEADERS, output_path, parse_profile, staged_db,
 )
 
 PLANS_URL = (
@@ -207,25 +207,6 @@ def build_db(df, intent_scores, pressure_scores, source_note: str,
     # Build to a .part file and swap only once complete, so a failure part-way
     # through the insert leaves the previous database untouched instead of
     # leaving none at all.
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = db_path.with_name(db_path.name + ".part")
-    if tmp_path.exists():
-        tmp_path.unlink()
-    con = sqlite3.connect(tmp_path)
-    con.execute("""
-        CREATE TABLE programs (
-            year INTEGER, organization_id INTEGER, organization TEXT,
-            core_responsibility TEXT,
-            program_id TEXT, program_name TEXT,
-            planned_spending REAL, actual_spending REAL,
-            planned_spending_next REAL, planned_spending_next2 REAL,
-            planned_ftes REAL, actual_ftes REAL,
-            variance_explanation TEXT, planning_explanation TEXT,
-            intent_score REAL, pressure_score REAL
-        )
-    """)
-    con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-
     def num(x):
         try:
             return None if pd.isna(x) else float(x)
@@ -258,7 +239,20 @@ def build_db(df, intent_scores, pressure_scores, source_note: str,
             _strip_md(txt(r[COLS["variance"]])), _strip_md(txt(r[COLS["planning"]])),
             intent_scores.loc[idx], pressure_scores.loc[idx],
         ))
-    try:
+    with staged_db(db_path) as con:
+        con.execute("""
+            CREATE TABLE programs (
+                year INTEGER, organization_id INTEGER, organization TEXT,
+                core_responsibility TEXT,
+                program_id TEXT, program_name TEXT,
+                planned_spending REAL, actual_spending REAL,
+                planned_spending_next REAL, planned_spending_next2 REAL,
+                planned_ftes REAL, actual_ftes REAL,
+                variance_explanation TEXT, planning_explanation TEXT,
+                intent_score REAL, pressure_score REAL
+            )
+        """)
+        con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
         con.executemany(
             "INSERT INTO programs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows
         )
@@ -276,10 +270,6 @@ def build_db(df, intent_scores, pressure_scores, source_note: str,
             ("licence", "Open Government Licence - Canada"),
         ]:
             con.execute("INSERT INTO meta VALUES (?, ?)", (k, v))
-        con.commit()
-    finally:
-        con.close()
-    swap_into_place(tmp_path, db_path)
     return len(rows)
 
 
