@@ -51,15 +51,29 @@
 #   The organization as it should be displayed today.
 #
 # observed_names
-#   How this organization is ACTUALLY SPELLED in the other two sources —
-#   oag.db's department column and the two entity columns of tenders.csv.
-#   Every string here was harvested from that data by `crosswalk.py --observed`
-#   and appears verbatim in at least one of those files. NOTHING HERE IS
-#   INVENTED. A plausible-looking variant nobody has ever published would turn
-#   evidence into guesswork, and the whole point of this list is that it is
-#   evidence. An empty list means those two sources have never named this
-#   organization at all — a fact worth recording, not an omission.
+#   How this organization is ACTUALLY SPELLED in the other two sources — the
+#   OAG audit TEXT (title and notes) and the two entity columns of tenders.csv.
+#   Every string here appears verbatim in at least one of those, and is
+#   proposed by `crosswalk.py --observed`. NOTHING HERE IS INVENTED. A
+#   plausible-looking variant nobody has ever published would turn evidence
+#   into guesswork, and the whole point of this list is that it is evidence.
+#   An empty list means those two sources have never named this organization
+#   at all — a fact worth recording, not an omission.
 #   Source of each string is noted inline: [oag], [tender], or both.
+#
+#   NOT FROM oag.db's department column. Until 2026-08 the OAG side was
+#   harvested from that column, which oag_ingest.py filled by substring-matching
+#   its own hardcoded KNOWN_DEPTS list. That made the "observed" claim circular:
+#   the list wrote the spelling, the harvest read it back as evidence for the
+#   list. Five entries got in that way and were removed — gac "Global Affairs",
+#   pspc "Public Services and Procurement", ised "Innovation, Science and
+#   Economic Development", ircc "Immigration, Refugees and Citizenship", eccc
+#   "Environment and Climate Change". None is a spelling OAG uses: the audit
+#   text says "Global Affairs Canada", and the truncation was KNOWN_DEPTS'.
+#   Removing them changed no attribution, because each entry's `name:` already
+#   carries the form OAG actually writes. Harvesting now reads the audit text
+#   directly and only proposes names that DON'T already resolve, so it cannot
+#   re-derive what the registry already asserts.
 #
 # not:
 #   Strings that must NEVER resolve to this entry, even if some future matcher
@@ -93,7 +107,6 @@ curated:
       Department of Foreign Affairs, Trade and Development. The slug still
       carries the older DFATD/MAECD initials.
     observed_names:
-      - Global Affairs                                    # [oag]
       - Department of Foreign Affairs, Trade and Development  # [tender]
       - Foreign Affairs, Trade And Development             # [tender] inverted form
     not: []
@@ -108,7 +121,6 @@ curated:
       Public Services and Procurement Canada, applied name since 2015. Legal
       name is still the Department of Public Works and Government Services.
     observed_names:
-      - Public Services and Procurement                    # [oag]
       - Department of Public Works and Government Services # [tender] most common
       - Public Works and Government Services Canada        # [tender]
     not:
@@ -127,7 +139,6 @@ curated:
       2015. Legal entity is the Department of Industry — hence the bare `ic`
       slug for Industry Canada.
     observed_names:
-      - Innovation, Science and Economic Development       # [oag]
       - Department of Industry                             # [tender]
     not: []
 
@@ -149,7 +160,6 @@ curated:
       Legal name remains the Department of Citizenship and Immigration; the
       slug is the pre-2015 CIC.
     observed_names:
-      - Immigration, Refugees and Citizenship              # [oag]
       - Department of Citizenship & Immigration            # [tender] ampersand
     not:
       # The known collision. Both begin with "Immigration" and are entirely
@@ -172,12 +182,13 @@ curated:
       CANADA Secretariat vs Treasury Board Secretariat — which the normalizer
       only strips from the end of a name, not the middle.
     observed_names:
-      # Both other sources use the bare short form, 40 occurrences between
-      # them. Strictly, Treasury Board is the Cabinet committee and TBS is the
-      # department that supports it; neither the audit titles nor the tender
-      # entity field observes that distinction, and in both files the string
-      # denotes the department. Recorded as observed usage, not as a claim
-      # that the two bodies are the same thing.
+      # Both other sources use the bare short form: 15 OAG records carry it
+      # independently of the full "Treasury Board of Canada Secretariat", and
+      # 1 tender row. Strictly, Treasury Board is the Cabinet committee and TBS
+      # is the department that supports it; neither the audit text nor the
+      # tender entity field observes that distinction, and in both sources the
+      # string denotes the department. Recorded as observed usage, not as a
+      # claim that the two bodies are the same thing.
       - Treasury Board                                     # [oag] [tender]
     not: []
 
@@ -320,7 +331,6 @@ curated:
       the single token "environment" — the largest department in the file
       resting on a one-word coincidence.
     observed_names:
-      - Environment and Climate Change                     # [oag]
       - Department of the Environment                      # [tender]
     not: []
 
@@ -487,6 +497,10 @@ curated:
       Matched exactly; listed only to refuse the names of its two oversight
       bodies, both of which open with the force's full name.
     observed_names:
+      # Identical to `name:` above, so it adds nothing to matching. Kept as a
+      # record that both sources do spell the force out in full — 4 OAG
+      # records, 19 tender rows — which is what makes the `not:` list below
+      # load-bearing rather than hypothetical.
       - Royal Canadian Mounted Police                      # [oag] [tender]
     not:
       - RCMP External Review Committee

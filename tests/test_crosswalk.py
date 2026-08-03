@@ -309,10 +309,10 @@ def test_canonical_keys_are_unique_and_stable():
 
 def test_observed_names_are_never_invented():
     """
-    THE seeding rule: every observed_name must appear verbatim in oag.db or
-    tenders.csv. This is the check that keeps the list evidence rather than
-    guesswork — a plausible variant nobody has ever published is exactly what
-    must not be in here, and it is the easiest thing to add by accident.
+    THE seeding rule: every observed_name must appear verbatim in the OAG audit
+    text or tenders.csv. This is the check that keeps the list evidence rather
+    than guesswork — a plausible variant nobody has ever published is exactly
+    what must not be in here, and it is the easiest thing to add by accident.
     """
     entries = cw.load_aliases()
     declared = {n for e in entries.values() for n in (e.get("observed_names") or [])}
@@ -327,6 +327,41 @@ def test_observed_names_are_never_invented():
     invented = sorted(declared - real)
     check(not invented,
           f"every observed_name appears in the source data; invented: {invented}")
+
+
+def test_a_truncated_name_is_not_attested_by_its_own_extension():
+    """
+    The specific hole that let five circular entries through review.
+
+    Until 2026-08 the OAG side of the provenance check read oag.db's
+    `department` column, which oag_ingest.py had filled from its own hardcoded
+    KNOWN_DEPTS list — so the list wrote the spelling and the check read it back
+    as proof. The names it admitted were TRUNCATIONS: "Global Affairs" for an
+    audit text that only ever says "Global Affairs Canada".
+
+    Plain containment cannot tell those apart, because the short form is a
+    substring of the long one. This asserts the stronger rule that replaced it —
+    a prefix must stand on its own somewhere to count as observed.
+    """
+    if not cw.OAG_DB.exists():
+        skip("truncation attestation", "no oag.db")
+        return
+    corpus = cw.oag_text_corpus()
+    if not corpus:
+        skip("truncation attestation", "no audit text in oag.db")
+        return
+    aliases = cw.load_aliases()
+
+    for full in ("Global Affairs Canada",
+                 "Environment and Climate Change Canada",
+                 "Immigration, Refugees and Citizenship Canada"):
+        truncated = full[: -len(" Canada")]
+        present = cw.attested_in_oag(full, corpus, cw._prefix_extensions(full, aliases))
+        bare = cw.attested_in_oag(truncated, corpus,
+                                  cw._prefix_extensions(truncated, aliases))
+        check(present > 0, f"{full!r} is attested in the audit text ({present})")
+        check(bare == 0,
+              f"{truncated!r} is NOT attested by {full!r} alone (got {bare})")
 
 
 def test_exclusions_are_symmetric_and_non_contradictory():

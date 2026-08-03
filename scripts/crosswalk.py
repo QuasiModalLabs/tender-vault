@@ -81,6 +81,10 @@ CHUNK_ROWS = 200_000
 # neither is joined here yet — they are read only to collect the surface forms
 # a future resolver will have to cope with. Both optional: absent means the
 # observed-name pass is skipped, not that the build fails.
+#
+# oag.db is read for its audit TEXT (title, description), never for a derived
+# department column — see oag_text_corpus() for why that distinction is the
+# whole provenance story.
 OAG_DB = PROJECT_ROOT / "data" / "oag.db"
 TENDERS_CSV = PROJECT_ROOT / ".cache" / "tenders.csv"
 TENDER_ENTITY_COLUMNS = {
@@ -207,15 +211,109 @@ def observed_variants(raw: str) -> list[str]:
     return out
 
 
+def oag_text_corpus() -> list[str]:
+    """
+    The OAG audit TEXT — title + description per record, normalized for search.
+
+    This is the OAG source of truth for observed names, and it replaces reading
+    oag.db's old `department` column. That column was written by oag_ingest.py
+    substring-matching its own hardcoded list, so harvesting it as "observed"
+    evidence was circular: the list produced the spelling and the harvest read
+    it back as proof of the spelling. Five entries reached org_aliases.yaml that
+    way. The audit text is what OAG actually published, and cannot be fabricated
+    by anything on this side of the pipeline.
+    """
+    if not OAG_DB.exists():
+        return []
+    con = sqlite3.connect(OAG_DB)
+    try:
+        rows = con.execute("SELECT title, description FROM audits").fetchall()
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        con.close()
+    return [_search_form(f"{t or ''} . {d or ''}") for t, d in rows]
+
+
+def _search_form(text: str) -> str:
+    """
+    Fold text for containment testing: case, accents, ampersands, punctuation.
+
+    Deliberately NOT normalize_org — that strips "Department of" and a trailing
+    "Canada", which on free prose reduces names to bare nouns ("health",
+    "environment", "finance") and would match almost anything. Affixes stay on.
+    """
+    s = unicodedata.normalize("NFKD", str(text))
+    s = "".join(c for c in s if not unicodedata.combining(c)).lower()
+    s = s.replace("&", " and ")
+    s = re.sub(r"[^\w\s]", " ", s)
+    return f" {re.sub(r'[ ]+', ' ', s).strip()} "
+
+
+def attested_in_oag(name: str, corpus: list[str], longer: list[str] = ()) -> int:
+    """
+    How many OAG records name this organization, as a MAXIMAL mention.
+
+    Plain containment is not enough, and the difference is the entire defect
+    this replaced. "Global Affairs" is a substring of every "Global Affairs
+    Canada" in the corpus, so containment would report it as attested and let a
+    truncation masquerade as an observed spelling — which is precisely how the
+    five circular entries survived review. An occurrence only counts when it is
+    not part of a longer name the registry already knows, so a prefix has to
+    stand on its own somewhere to earn the claim.
+
+    `longer` is the registry's other names that this one is a strict prefix of.
+
+    Ministerial titles are excluded on the same principle. "the Minister of
+    Environment and Climate Change" is the portfolio holder, not the
+    department, and it is the one place in this corpus where the bare form of a
+    removed name genuinely occurs — so counting it would have re-attested a
+    truncation on the strength of a construct that never names an organization.
+    """
+    needle = _search_form(name)
+    if needle == " ":
+        return 0
+    extended = [_search_form(l) for l in longer]
+    extended += [_search_form(f"Minister{s} of {name}") for s in ("", "s")]
+    hits = 0
+    for rec in corpus:
+        if needle not in rec:
+            continue
+        # Every position the bare name sits at must also be covered by one of
+        # its extensions for the mention to be non-maximal.
+        bare = rec.count(needle[1:-1])
+        covered = sum(rec.count(e[1:-1]) for e in extended)
+        if bare > covered:
+            hits += 1
+    return hits
+
+
+def _prefix_extensions(name: str, aliases: dict[str, dict]) -> list[str]:
+    """Registry names that `name` is a strict leading sub-phrase of."""
+    n = _search_form(name)
+    out = []
+    for entry in aliases.values():
+        for other in [entry.get("name")] + list(entry.get("observed_names") or []):
+            if not other:
+                continue
+            o = _search_form(other)
+            if o != n and o.startswith(n[:-1] + " "):
+                out.append(other)
+    return out
+
+
 def extract_observed_names() -> dict[str, dict]:
     """
-    Every department-ish string the OAG and tender sources actually contain.
+    Every department-ish string the tender source actually contains, plus the
+    declared OAG names that the audit text independently attests.
 
-    SEEDED FROM REAL DATA ONLY. Nothing here is invented or extrapolated: if a
-    spelling isn't in oag.db or tenders.csv, it doesn't appear. That's the point
-    — the value of this set is that it's evidence of how these departments get
-    written in the wild, and a plausible-looking variant nobody has ever
-    published would dilute it into guesswork.
+    SEEDED FROM REAL DATA ONLY. Nothing here is invented or extrapolated. The
+    two sides are collected differently because they are shaped differently: the
+    tender feed has an entity COLUMN whose values can be enumerated, while OAG
+    publishes prose, where the only honest question is whether a given string
+    appears in it. So OAG names are CONFIRMED here, not enumerated — discovery
+    of ones the registry is missing is `discover_oag_org_names()`, which is a
+    proposal for a human rather than an input to matching.
     """
     observed: dict[str, dict] = {}
 
@@ -225,15 +323,18 @@ def extract_observed_names() -> dict[str, dict]:
             entry["sources"].add(source)
             entry["count"] += n
 
-    if OAG_DB.exists():
-        con = sqlite3.connect(OAG_DB)
-        for dept, n in con.execute(
-            "SELECT department, COUNT(*) FROM audits WHERE department != '' GROUP BY 1"
-        ):
-            record(dept, "oag", n)
-        con.close()
+    corpus = oag_text_corpus()
+    if corpus:
+        aliases = load_aliases()
+        for entry in aliases.values():
+            for name in [entry.get("name")] + list(entry.get("observed_names") or []):
+                if not name:
+                    continue
+                hits = attested_in_oag(name, corpus, _prefix_extensions(name, aliases))
+                if hits:
+                    record(name, "oag", hits)
     else:
-        print(f"  (no {OAG_DB.name}; skipping OAG names)")
+        print(f"  (no {OAG_DB.name} audit text; skipping OAG names)")
 
     if TENDERS_CSV.exists():
         df = pd.read_csv(TENDERS_CSV, low_memory=False)
@@ -324,6 +425,78 @@ def attach_observed(rows: list[dict], observed: dict[str, dict],
     for r in rows:
         r["observed_names"] = "; ".join(sorted(set(r["observed_names"]))) or None
     return unattached, ambiguous
+
+
+# Organization-shaped proper-noun runs: capitalised words, optionally joined by
+# lowercase connectives, ending on a word that names a kind of body. Anchoring
+# on the tail is what keeps it from sweeping up ordinary Title Case prose —
+# "Federal Sustainable Development Strategy" has no body word and is not
+# proposed, while "Canadian Coast Guard" is.
+_ORG_TAIL = (
+    r"Canada|Agency|Board|Commission|Council|Service|Services|Secretariat|"
+    r"Establishment|Corporation|Department|Office|Centre|Forces|Guard|Police|"
+    r"Authority|Tribunal|Bureau|Institute"
+)
+_ORG_RUN = re.compile(
+    r"\b((?:[A-Z][\w‑-]+[ ,]{0,2}(?:of |the |and |for )?){1,7}(?:" + _ORG_TAIL + r"))\b"
+)
+
+# Constructs that are organization-SHAPED but never an audited department: the
+# parliamentary machinery an OAG record is addressed to, the auditor itself, and
+# the collective nouns for government at large. "Committee" is absent from
+# _ORG_TAIL for the same reason — the 231 "Standing Committee on X" mentions are
+# who the report was TABLED WITH, and attributing an audit to them would repeat,
+# in a new place, the mistake this whole change exists to remove.
+_NOT_AN_ORG = re.compile(
+    r"\bcommittee\b|\bparliament\b|\bsenate\b|\bhouse of commons\b|\bhoc\b|"
+    r"\bauditor general\b|\bgovernment of canada\b|\bpublic accounts of canada\b|"
+    r"^the office$|\bcrown corporation\b|\bprofessional services\b",
+    re.I,
+)
+# Audit titles are verb phrases — "Supplying the Canadian Armed Forces",
+# "Protecting Canada's Food System" — so a run that opens on a participle is a
+# title fragment that happens to end on a body word, not an organization.
+_TITLE_FRAGMENT = re.compile(r"^(?:The\s+)?\w+ing\b", re.I)
+
+
+def discover_oag_org_names(aliases: dict[str, dict]) -> list[dict]:
+    """
+    Organization-shaped strings in the OAG audit text that resolve to NOTHING.
+
+    The replacement for harvesting oag.db's `department` column. This is a
+    PROPOSAL PASS, not an input to matching: it reports what a curator might
+    want to add, and nothing it finds affects a join until a human writes it
+    into org_aliases.yaml. That asymmetry is the point — the old path let the
+    ingest script's own output become evidence for the registry that the ingest
+    script then resolved against.
+
+    Only non-resolving strings are proposed, so it cannot re-derive a name the
+    registry already asserts, which is what made the old loop circular.
+    """
+    if not OAG_DB.exists():
+        return []
+    con = sqlite3.connect(OAG_DB)
+    try:
+        records = con.execute("SELECT title, description FROM audits").fetchall()
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        con.close()
+
+    known = {normalize_org(n)
+             for e in aliases.values()
+             for n in [e.get("name")] + list(e.get("observed_names") or []) if n}
+    found: dict[str, int] = {}
+    for title, desc in records:
+        for m in _ORG_RUN.finditer(f"{title or ''} . {desc or ''}"):
+            name = re.sub(r"\s+", " ", m.group(1)).strip(" ,")
+            if len(name.split()) < 2 or normalize_org(name) in known:
+                continue
+            if _NOT_AN_ORG.search(name) or _TITLE_FRAGMENT.match(name):
+                continue
+            found[name] = found.get(name, 0) + 1
+    return [{"name": k, "count": v} for k, v in
+            sorted(found.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
 # ---------------------------------------------------------------------------
@@ -819,7 +992,7 @@ def find_prefix_collisions(rows: list[dict]) -> list[dict]:
 
 
 def report_observed(unattached: list[dict], ambiguous: list[dict],
-                    rows: list[dict]) -> None:
+                    rows: list[dict], proposals: list[dict] | None = None) -> None:
     """The review queue: source strings that bind to no organization."""
     attached = sum(len(r["observed_names"].split(";")) for r in rows
                    if r.get("observed_names"))
@@ -827,6 +1000,15 @@ def report_observed(unattached: list[dict], ambiguous: list[dict],
     print(f"  attached to an organization: {attached}")
     print(f"  ambiguous (>1 candidate):    {len(ambiguous)}")
     print(f"  UNATTACHED (review queue):   {len(unattached)}")
+
+    if proposals:
+        print(f"\n--- OAG discovery: org-shaped names that resolve to nothing "
+              f"({len(proposals)}) ---")
+        print("    Candidates for observed_names. Nothing here affects a join "
+              "until\n    a human adds it to org_aliases.yaml — that is what "
+              "keeps this pass\n    evidence rather than a feedback loop.")
+        for p in proposals:
+            print(f"    {p['count']:>4}x  {p['name'][:70]}")
 
     if ambiguous:
         print("\n--- ambiguous ---")
@@ -870,7 +1052,7 @@ def main():
 
     rows = build_crosswalk(contracts, plans, aliases)
 
-    print("Collecting observed names from oag.db and tenders.csv...")
+    print("Collecting observed names from OAG audit text and tenders.csv...")
     observed = extract_observed_names()
     unattached, ambiguous = attach_observed(rows, observed, aliases)
     print(f"Observed: {len(observed)} distinct strings, "
@@ -889,7 +1071,8 @@ def main():
     if args.report:
         report(rows)
     if args.observed:
-        report_observed(unattached, ambiguous, rows)
+        report_observed(unattached, ambiguous, rows,
+                        discover_oag_org_names(aliases))
     if args.collisions:
         found = find_prefix_collisions(rows)
         sig = [c for c in found if c["significant"]]
