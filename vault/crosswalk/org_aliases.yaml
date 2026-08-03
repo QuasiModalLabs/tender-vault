@@ -1,0 +1,1226 @@
+# The canonical federal organization registry for scripts/crosswalk.py.
+#
+# One entry per organization, keyed on a SHORT CANONICAL NAME. These keys are
+# the identity the rest of the project should use — they are what a department
+# dossier gets named, so they have to still make sense in a year.
+#
+# WHY NOT THE CKAN SLUG. The contracts dataset's slug is a historical artifact,
+# not a name: `cic` is pre-2015 Citizenship and Immigration, `ic` is Industry
+# Canada, `ec` is Environment Canada, `cpc-cpp` is the Commission for Public
+# Complaints that became the CRCC in 2019. Keying on the slug would have meant
+# reading intel/agencies/cic.md for IRCC. It also made the key space a hostage
+# of one source's coverage: an organization that files departmental plans but
+# publishes no contracts under its own slug could not have an entry at all.
+# The Copyright Board, Northern Pipeline Agency, Registrar of the Supreme Court
+# and Leaders' Debates Commission are exactly that case, and they have keys now.
+#
+# NAMING RULE. Use the acronym only where it is genuinely what the organization
+# is known as — ircc, ssc, dnd, pspc, ised, gac, cra, cbsa. Spell out anything
+# you would have to look up. `ocol` and `ocl` differ by one letter and belong to
+# two unrelated agents of Parliament; as filenames that is a trap, so they are
+# `official-languages` and `commissioner-of-lobbying`.
+#
+# TWO BLOCKS. `curated:` holds the entries carrying human judgment — a pin no
+# string comparison could find, a collision exclusion, an observed spelling.
+# `mechanical:` holds the rest, where the exact tier already joins the two
+# datasets on identical names and the entry exists only to own the key. Keys
+# must be unique ACROSS both blocks; the loader merges them and exits on a
+# duplicate.
+#
+# FIELDS
+#
+# ckan
+#   The contracts-dataset slugs this organization owns, as a list of mappings.
+#   RELATION LIVES ON THE SLUG, never in a parallel map, so a slug cannot be
+#   added later and silently inherit `same`. A slug-specific caveat belongs on
+#   the slug too — Passport Canada's "one program inside a larger department"
+#   warning is about pptc, not about cic.
+#     same         this slug is the organization, under one of its names.
+#     predecessor  an earlier body whose mandate now sits with this one.
+#     successor    carved out of this organization; no plans entry of its own.
+#     absorbed     folded into this organization, which is larger and continues.
+#   Anything other than `same` means the join is correct but the two sides are
+#   not the same institution — read the note before quoting a number across it.
+#   An empty list is valid: the organization files plans but no contracts.
+#
+# infobase
+#   The organization_id in the Departmental Plans data. Stable across rebrands,
+#   which is the whole point. Absent where the organization files no plans.
+#
+# name
+#   The organization as it should be displayed today.
+#
+# observed_names
+#   How this organization is ACTUALLY SPELLED in the other two sources —
+#   oag.db's department column and the two entity columns of tenders.csv.
+#   Every string here was harvested from that data by `crosswalk.py --observed`
+#   and appears verbatim in at least one of those files. NOTHING HERE IS
+#   INVENTED. A plausible-looking variant nobody has ever published would turn
+#   evidence into guesswork, and the whole point of this list is that it is
+#   evidence. An empty list means those two sources have never named this
+#   organization at all — a fact worth recording, not an omission.
+#   Source of each string is noted inline: [oag], [tender], or both.
+#
+# not:
+#   Strings that must NEVER resolve to this entry, even if some future matcher
+#   thinks they should. Written against the real leading-substring collisions
+#   in this data, not hypothetical ones — see `crosswalk.py --collisions`.
+#   Every one of these is a case where two DIFFERENT organizations share the
+#   opening of their names, so a truncated or partial string could plausibly
+#   land on either. The exclusions are symmetric: both sides of a colliding
+#   pair refuse the other's names.
+
+curated:
+
+  # --- Legal name vs applied name -----------------------------------------
+  # The pairs no string comparison can find, because the two datasets are not
+  # using variants of one name — they are using DIFFERENT names for the same
+  # body. The contracts file uses the APPLIED name a department operates under;
+  # the plans file generally uses the LEGAL name from its enabling statute.
+  # "Global Affairs Canada" and "Department of Foreign Affairs, Trade and
+  # Development" share no words at all. The four largest departments in the
+  # contracts file are all in here, which is why an unaided join looks like it
+  # works and returns almost nothing.
+
+  gac:
+    ckan:
+      - slug: dfatd-maecd
+        relation: same
+    infobase: 126
+    name: Global Affairs Canada
+    note: >-
+      Global Affairs Canada is the applied name; the legal entity remains the
+      Department of Foreign Affairs, Trade and Development. The slug still
+      carries the older DFATD/MAECD initials.
+    observed_names:
+      - Global Affairs                                    # [oag]
+      - Department of Foreign Affairs, Trade and Development  # [tender]
+      - Foreign Affairs, Trade And Development             # [tender] inverted form
+    not: []
+
+  pspc:
+    ckan:
+      - slug: pwgsc-tpsgc
+        relation: same
+    infobase: 136
+    name: Public Services and Procurement Canada
+    note: >-
+      Public Services and Procurement Canada, applied name since 2015. Legal
+      name is still the Department of Public Works and Government Services.
+    observed_names:
+      - Public Services and Procurement                    # [oag]
+      - Department of Public Works and Government Services # [tender] most common
+      - Public Works and Government Services Canada        # [tender]
+    not:
+      # PSPC hosts the Receiver General function, which appears in the tender
+      # feed under its own name. It is a role inside PSPC, not PSPC.
+      - Receiver General
+
+  ised:
+    ckan:
+      - slug: ic
+        relation: same
+    infobase: 130
+    name: Innovation, Science and Economic Development Canada
+    note: >-
+      Innovation, Science and Economic Development Canada, applied name since
+      2015. Legal entity is the Department of Industry — hence the bare `ic`
+      slug for Industry Canada.
+    observed_names:
+      - Innovation, Science and Economic Development       # [oag]
+      - Department of Industry                             # [tender]
+    not: []
+
+  ircc:
+    ckan:
+      - slug: cic
+        relation: same
+      - slug: pptc
+        relation: absorbed
+        note: >-
+          Passport Canada was folded into Immigration, Refugees and Citizenship
+          in 2013 and files no plans of its own. Its contracts are IRCC's
+          history, but they are one program inside a much larger department —
+          do not read passport spending as an IRCC-wide figure.
+    infobase: 123
+    name: Immigration, Refugees and Citizenship Canada
+    note: >-
+      Immigration, Refugees and Citizenship Canada, applied name since 2015.
+      Legal name remains the Department of Citizenship and Immigration; the
+      slug is the pre-2015 CIC.
+    observed_names:
+      - Immigration, Refugees and Citizenship              # [oag]
+      - Department of Citizenship & Immigration            # [tender] ampersand
+    not:
+      # The known collision. Both begin with "Immigration" and are entirely
+      # different bodies: IRCC is the department, the IRB is the independent
+      # administrative tribunal that hears refugee and immigration appeals.
+      # Applies to both slugs — pptc inherits IRCC's plan name and would
+      # otherwise answer to it too.
+      - Immigration and Refugee Board
+      - Immigration and Refugee Board of Canada
+      - Immigration Refugee Board
+
+  tbs:
+    ckan:
+      - slug: tbs-sct
+        relation: same
+    infobase: 326
+    name: Treasury Board of Canada Secretariat
+    note: >-
+      Same body. Differs only by the interior "of Canada" — Treasury Board OF
+      CANADA Secretariat vs Treasury Board Secretariat — which the normalizer
+      only strips from the end of a name, not the middle.
+    observed_names:
+      # Both other sources use the bare short form, 40 occurrences between
+      # them. Strictly, Treasury Board is the Cabinet committee and TBS is the
+      # department that supports it; neither the audit titles nor the tender
+      # entity field observes that distinction, and in both files the string
+      # denotes the department. Recorded as observed usage, not as a claim
+      # that the two bodies are the same thing.
+      - Treasury Board                                     # [oag] [tender]
+    not: []
+
+  elections-canada:
+    ckan:
+      - slug: elections
+        relation: same
+    infobase: 239
+    name: Elections Canada
+    note: >-
+      Elections Canada is the applied name of the Office of the Chief Electoral
+      Officer.
+    observed_names:
+      - Elections Canada                                   # [tender]
+      - Office of the Chief Electoral Officer              # [tender]
+    not: []
+
+  public-prosecution-service:
+    ckan:
+      - slug: ppsc-sppc
+        relation: same
+    infobase: 248
+    name: Public Prosecution Service of Canada
+    note: >-
+      The Public Prosecution Service of Canada is the organization; the Office
+      of the Director of Public Prosecutions is the statutory office that heads
+      it and the name the plans are filed under.
+    observed_names: []      # never named in oag.db or tenders.csv
+    not: []
+
+  ced-quebec:
+    ckan:
+      - slug: ced-dec
+        relation: same
+    infobase: 141
+    name: Canada Economic Development for Quebec Regions
+    note: >-
+      Canada Economic Development for Quebec Regions = Economic Development
+      Agency of Canada for the Regions of Quebec. Same agency, differently
+      ordered English rendering of the French original.
+    observed_names: []
+    not: []
+
+  cer:
+    ckan:
+      - slug: cer-rec
+        relation: same
+    infobase: 221
+    name: Canada Energy Regulator
+    note: >-
+      Canada Energy Regulator vs Canadian Energy Regulator. One word apart, and
+      no normalizer should be guessing that Canada/Canadian are interchangeable
+      in a proper name.
+    observed_names:
+      - Canada Energy Regulator                            # [tender]
+    not: []
+
+  tsb:
+    ckan:
+      - slug: tsb-bst
+        relation: same
+    infobase: 98
+    name: Transportation Safety Board of Canada
+    note: >-
+      The Transportation Safety Board of Canada is the applied name of the
+      Canadian Transportation Accident Investigation and Safety Board.
+    observed_names:
+      - Canadian Transportation Accident Investigation and Safety Board  # [tender]
+    not:
+      # Collision: both normalize to a name opening "canadian transportation".
+      # The CTA is the economic regulator; the TSB investigates accidents.
+      - Canadian Transportation Agency
+
+  rcmp-complaints-commission:
+    ckan:
+      - slug: cpc-cpp
+        relation: same
+    infobase: 297
+    name: Civilian Review and Complaints Commission for the RCMP
+    note: >-
+      Same commission; the contracts file abbreviates "RCMP" where the plans
+      file spells out "Royal Canadian Mounted Police". The slug is two names
+      stale — cpc-cpp is the Commission for Public Complaints, renamed in 2019.
+    observed_names: []
+    not:
+      # Shares its whole opening with the force it reviews, and with the RCMP's
+      # other oversight body. Three distinct organizations, one prefix.
+      - Royal Canadian Mounted Police
+      - RCMP External Review Committee
+      - Royal Canadian Mounted Police External Review Committee
+
+  rcmp-erc:
+    ckan:
+      - slug: erc-cee
+        relation: same
+    infobase: 296
+    name: RCMP External Review Committee
+    note: >-
+      RCMP External Review Committee = Royal Canadian Mounted Police External
+      Review Committee. Same acronym-vs-expansion split as
+      rcmp-complaints-commission.
+    observed_names: []
+    not:
+      # STRICT PREFIX collision: "Royal Canadian Mounted Police" is a complete
+      # and correct name for a different organization, and also the first four
+      # tokens of this one. The sharpest form of this hazard in the data.
+      - Royal Canadian Mounted Police
+      - RCMP
+      - Civilian Review and Complaints Commission for the RCMP
+
+  polar:
+    ckan:
+      - slug: polar-polaire
+        relation: same
+    infobase: 552
+    name: Polar Knowledge Canada
+    note: >-
+      Polar Knowledge Canada is the applied name of the body created as, and
+      still filed under, the Canadian High Arctic Research Station.
+    observed_names:
+      - Polar Knowledge Canada                             # [tender]
+    not: []
+
+  # --- Applied name vs legal name, close enough to look automatable ---------
+  # These seven were previously joined by an automatic "one name contains the
+  # other" tier. Every one of them was correct, but correctness by containment
+  # is luck: "environment" matching "environment and climate change" is a single
+  # shared token, and the same rule that accepts it would accept a coincidence
+  # just as readily. The tier is gone; each pair is asserted here instead.
+
+  eccc:
+    ckan:
+      - slug: ec
+        relation: same
+    infobase: 137
+    name: Environment and Climate Change Canada
+    note: >-
+      Environment and Climate Change Canada, applied name since 2015. The legal
+      entity is still the Department of the Environment. Previously joined on
+      the single token "environment" — the largest department in the file
+      resting on a one-word coincidence.
+    observed_names:
+      - Environment and Climate Change                     # [oag]
+      - Department of the Environment                      # [tender]
+    not: []
+
+  parks-canada:
+    ckan:
+      - slug: pc
+        relation: same
+    infobase: 263
+    name: Parks Canada
+    note: >-
+      Parks Canada is the applied name of the Parks Canada Agency. Previously
+      joined on the single token "parks".
+    observed_names:
+      - Parks Canada                                       # [tender]
+      - Parks Canada Agency                                # [tender]
+    not: []
+
+  public-safety:
+    ckan:
+      - slug: ps-sp
+        relation: same
+    infobase: 135
+    name: Public Safety Canada
+    note: >-
+      Public Safety Canada is the applied name of the Department of Public
+      Safety and Emergency Preparedness.
+    observed_names:
+      - Department of Public Safety and Emergency Preparedness  # [tender]
+    not: []
+
+  invest-in-canada:
+    ckan:
+      - slug: iic-iac
+        relation: same
+    infobase: 347
+    name: Invest in Canada
+    note: >-
+      Invest in Canada is the applied name of the Invest in Canada Hub, the
+      body created under the Invest in Canada Act.
+    observed_names: []
+    not: []
+
+  accessibility-standards:
+    ckan:
+      - slug: casdo-ocena
+        relation: same
+    infobase: 558
+    name: Accessibility Standards Canada
+    note: >-
+      Canadian Accessibility Standards Development Organization is the legal
+      name; Accessibility Standards Canada is the applied title it operates and
+      publishes contracts under. This was the only match the old containment
+      tier found in the INTERIOR of a name — nothing anchored it at either end,
+      which is precisely why it needed a human rather than a rule.
+    observed_names: []
+    not: []
+
+  pacifican:
+    ckan:
+      - slug: pacifican
+        relation: same
+    infobase: 560
+    name: Pacific Economic Development Canada
+    note: >-
+      Pacific Economic Development Canada (PacifiCan) is the applied name of the
+      Pacific Economic Development Agency of Canada. Created in the 2021 split
+      of Western Economic Diversification — see the prairiescan pin, which is
+      the other half of that split and has no plans entry of its own.
+    observed_names: []
+    not: []
+
+  nsira:
+    ckan:
+      - slug: nsira-ossnr
+        relation: same
+      - slug: sirc-csars
+        relation: predecessor
+        note: >-
+          The Security Intelligence Review Committee was absorbed by the
+          National Security and Intelligence Review Agency in 2019. NSIRA has
+          the broader mandate, so SIRC-era contract totals are not comparable
+          to NSIRA plans.
+    infobase: 302
+    name: National Security and Intelligence Review Agency
+    note: >-
+      The National Security and Intelligence Review Agency files its plans as
+      the NSIRA Secretariat, the administrative body that supports it. NSIRA
+      ABSORBED the Security Intelligence Review Committee in 2019, taking on a
+      broader mandate; SIRC's own contracts are carried on the sirc-csars slug
+      in this entry, which is why plan org 302 is reached by two slugs.
+      Contract history before 2019 under the sirc-csars slug is not comparable
+      with NSIRA-era plans.
+    observed_names: []
+    not: []
+
+  # --- Machinery-of-government changes -------------------------------------
+  # A predecessor's contracts join to the successor's key, but the two are not
+  # the same institution. The relation on each slug is what keeps that visible.
+
+  wage:
+    ckan:
+      - slug: wage
+        relation: same
+      - slug: swc-cfc
+        relation: predecessor
+        note: >-
+          Status of Women Canada became Women and Gender Equality Canada in
+          2018. Older contracts remain under the swc-cfc slug; the current
+          department matches id 246 on its own name.
+    infobase: 246
+    name: Women and Gender Equality Canada
+    note: >-
+      One department under two slugs, separated by the 2018 rename and
+      elevation from agency to department. Contracts under swc-cfc predate that
+      change — a total spanning it is a total across two institutions.
+    observed_names: []
+    not: []
+
+  prairiescan:
+    ckan:
+      - slug: prairiescan
+        relation: successor
+    infobase: 140
+    name: Prairies Economic Development Canada
+    note: >-
+      Western Economic Diversification was split into PrairiesCan and PacifiCan
+      in 2021. PacifiCan has its own plans entry (560); PrairiesCan does not
+      yet, so its contracts map back to the WD lineage. Revisit when a
+      PrairiesCan organization_id appears in the plans data.
+    observed_names: []
+    not: []
+
+  western-diversification:
+    ckan:
+      - slug: wd-deo
+        relation: same
+    infobase: 140
+    name: Western Economic Diversification Canada
+    note: >-
+      Defunct. WD was split in 2021 into TWO successors — PrairiesCan (see
+      `prairiescan`) and PacifiCan (see `pacifican`) — so its history is
+      divided, not inherited. WD-era contracts CANNOT be attributed to either
+      successor by region: the contracts data records the owning department,
+      not the region a contract served, and nothing in the source recovers it.
+      Any dossier spanning 2021 for any of these three keys is comparing
+      different institutions, and should say so rather than showing a trend
+      line. Note this entry and `prairiescan` share infobase 140; that is the
+      split, not a duplicate.
+    observed_names: []
+    not: []
+
+  # --- No pin needed, but a collision or an observed spelling does ----------
+  # The exact tier already joins these correctly. They appear here only to
+  # carry the other half of a symmetric `not:` pair, or a real-world spelling
+  # the exact tier would otherwise leave unattached.
+
+  rcmp:
+    ckan:
+      - slug: rcmp-grc
+        relation: same
+    infobase: 295
+    name: Royal Canadian Mounted Police
+    note: >-
+      Matched exactly; listed only to refuse the names of its two oversight
+      bodies, both of which open with the force's full name.
+    observed_names:
+      - Royal Canadian Mounted Police                      # [oag] [tender]
+    not:
+      - RCMP External Review Committee
+      - Royal Canadian Mounted Police External Review Committee
+      - Civilian Review and Complaints Commission for the Royal Canadian Mounted Police
+
+  irb:
+    ckan:
+      - slug: irb-cisr
+        relation: same
+    infobase: 174
+    name: Immigration and Refugee Board of Canada
+    note: >-
+      The Immigration and Refugee Board is an independent tribunal, not part of
+      IRCC. The other half of the known Immigration collision.
+    observed_names:
+      - Immigration and Refugee Board                      # [tender]
+      - Immigration Refugee Board                          # [tender] missing "and"
+    not:
+      - Immigration, Refugees and Citizenship
+      - Immigration, Refugees and Citizenship Canada
+      - Department of Citizenship and Immigration
+      - Department of Citizenship & Immigration
+
+  canadian-transportation-agency:
+    ckan:
+      - slug: cta-otc
+        relation: same
+    infobase: 99
+    name: Canadian Transportation Agency
+    note: >-
+      The Canadian Transportation Agency is the economic regulator; the TSB
+      investigates accidents. Both names open "Canadian Transportation".
+    observed_names: []
+    not:
+      - Canadian Transportation Accident Investigation and Safety Board
+      - Transportation Safety Board of Canada
+
+  feddev-ontario:
+    ckan:
+      - slug: feddevontario
+        relation: same
+    infobase: 150
+    name: Federal Economic Development Agency for Southern Ontario
+    note: >-
+      Differs from FedNor only at the fifth token, southern vs northern. The
+      longest shared prefix between two distinct organizations in this data.
+    observed_names: []
+    not:
+      - Federal Economic Development Agency for Northern Ontario
+
+  fednor:
+    ckan:
+      - slug: fednor
+        relation: same
+    infobase: 561
+    name: Federal Economic Development Agency for Northern Ontario
+    note: The northern half of the FedDev/FedNor prefix collision.
+    observed_names: []
+    not:
+      - Federal Economic Development Agency for Southern Ontario
+
+  official-languages:
+    ckan:
+      - slug: ocol-clo
+        relation: same
+    infobase: 242
+    name: Office of the Commissioner of Official Languages
+    note: >-
+      Shares "Commissioner of" with the Commissioner of Lobbying. Two unrelated
+      agents of Parliament.
+    observed_names: []
+    not:
+      - Office of the Commissioner of Lobbying
+      - Office of the Commissioner of Lobbying of Canada
+      - Commissioner of Lobbying
+
+  commissioner-of-lobbying:
+    ckan:
+      - slug: ocl-cal
+        relation: same
+    infobase: 241
+    name: Office of the Commissioner of Lobbying of Canada
+    note: The lobbying half of the "Commissioner of" collision.
+    observed_names: []
+    not:
+      - Office of the Commissioner of Official Languages
+      - Commissioner of Official Languages
+
+  # --- Files plans, publishes no contracts ---------------------------------
+  # These have no CKAN slug at all. Under the old slug-keyed scheme they could
+  # not be represented; they were visible only as unmatched rows in the built
+  # database. They get keys because the key space is the org chart, not one
+  # source's coverage.
+
+  copyright-board:
+    ckan: []
+    infobase: 114
+    name: Copyright Board
+    note: >-
+      Files departmental plans; publishes no contracts under its own slug. Its
+      procurement is handled through another department, so an empty contracts
+      side here is correct, not a gap to close.
+    observed_names: []
+    not: []
+
+  northern-pipeline:
+    ckan: []
+    infobase: 235
+    name: Northern Pipeline Agency
+    note: >-
+      Files departmental plans; publishes no contracts under its own slug. Six
+      program-year rows in the plans data — a very small agency, not a
+      matching failure.
+    observed_names: []
+    not: []
+
+  supreme-court-registrar:
+    ckan: []
+    infobase: 288
+    name: Registrar of the Supreme Court of Canada
+    note: >-
+      Files departmental plans; publishes no contracts under its own slug. The
+      Courts Administration Service is a separate organization with its own key
+      and should not be conflated with this one.
+    observed_names: []
+    not: []
+
+  leaders-debates:
+    ckan: []
+    infobase: 350
+    name: Leaders' Debates Commission
+    note: >-
+      Files departmental plans; publishes no contracts under its own slug. One
+      program-year row, appearing only in 2025-2026.
+    observed_names: []
+    not: []
+
+mechanical:
+
+  # Exact-tier joins: the two datasets already agree on the name, so
+  # these entries exist only to own the canonical key. No pin, no
+  # collision, no observed spelling that needed asserting.
+
+  dnd:
+    ckan:
+      - slug: dnd-mdn
+        relation: same
+    infobase: 133
+    name: National Defence
+    observed_names: []
+    not: []
+
+  dfo:
+    ckan:
+      - slug: dfo-mpo
+        relation: same
+    infobase: 125
+    name: Fisheries and Oceans Canada
+    observed_names: []
+    not: []
+
+  csc:
+    ckan:
+      - slug: csc-scc
+        relation: same
+    infobase: 117
+    name: Correctional Service of Canada
+    observed_names: []
+    not: []
+
+  nrc:
+    ckan:
+      - slug: nrc-cnrc
+        relation: same
+    infobase: 228
+    name: National Research Council Canada
+    observed_names: []
+    not: []
+
+  cra:
+    ckan:
+      - slug: cra-arc
+        relation: same
+    infobase: 46
+    name: Canada Revenue Agency
+    observed_names: []
+    not: []
+
+  esdc:
+    ckan:
+      - slug: esdc-edsc
+        relation: same
+    infobase: 128
+    name: Employment and Social Development Canada
+    observed_names: []
+    not: []
+
+  nrcan:
+    ckan:
+      - slug: nrcan-rncan
+        relation: same
+    infobase: 134
+    name: Natural Resources Canada
+    observed_names: []
+    not: []
+
+  ssc:
+    ckan:
+      - slug: ssc-spc
+        relation: same
+    infobase: 305
+    name: Shared Services Canada
+    observed_names: []
+    not: []
+
+  transport-canada:
+    ckan:
+      - slug: tc
+        relation: same
+    infobase: 138
+    name: Transport Canada
+    observed_names: []
+    not: []
+
+  aafc:
+    ckan:
+      - slug: aafc-aac
+        relation: same
+    infobase: 1
+    name: Agriculture and Agri-Food Canada
+    observed_names: []
+    not: []
+
+  health-canada:
+    ckan:
+      - slug: hc-sc
+        relation: same
+    infobase: 127
+    name: Health Canada
+    observed_names: []
+    not: []
+
+  cbsa:
+    ckan:
+      - slug: cbsa-asfc
+        relation: same
+    infobase: 26
+    name: Canada Border Services Agency
+    observed_names: []
+    not: []
+
+  canadian-heritage:
+    ckan:
+      - slug: pch
+        relation: same
+    infobase: 122
+    name: Canadian Heritage
+    observed_names: []
+    not: []
+
+  phac:
+    ckan:
+      - slug: phac-aspc
+        relation: same
+    infobase: 280
+    name: Public Health Agency of Canada
+    observed_names: []
+    not: []
+
+  crown-indigenous-relations:
+    ckan:
+      - slug: aandc-aadnc
+        relation: same
+    infobase: 129
+    name: Crown-Indigenous Relations and Northern Affairs Canada
+    observed_names: []
+    not: []
+
+  isc:
+    ckan:
+      - slug: isc-sac
+        relation: same
+    infobase: 348
+    name: Indigenous Services Canada
+    observed_names: []
+    not: []
+
+  cfia:
+    ckan:
+      - slug: cfia-acia
+        relation: same
+    infobase: 65
+    name: Canadian Food Inspection Agency
+    observed_names: []
+    not: []
+
+  veterans-affairs:
+    ckan:
+      - slug: vac-acc
+        relation: same
+    infobase: 139
+    name: Veterans Affairs Canada
+    observed_names: []
+    not: []
+
+  justice-canada:
+    ckan:
+      - slug: jus
+        relation: same
+    infobase: 132
+    name: Department of Justice Canada
+    observed_names: []
+    not: []
+
+  finance-canada:
+    ckan:
+      - slug: fin
+        relation: same
+    infobase: 124
+    name: Department of Finance Canada
+    observed_names: []
+    not: []
+
+  canadian-space-agency:
+    ckan:
+      - slug: csa-asc
+        relation: same
+    infobase: 95
+    name: Canadian Space Agency
+    observed_names: []
+    not: []
+
+  statcan:
+    ckan:
+      - slug: statcan
+        relation: same
+    infobase: 313
+    name: Statistics Canada
+    observed_names: []
+    not: []
+
+  osfi:
+    ckan:
+      - slug: osfi-bsif
+        relation: same
+    infobase: 253
+    name: Office of the Superintendent of Financial Institutions Canada
+    observed_names: []
+    not: []
+
+  privy-council:
+    ckan:
+      - slug: pco-bcp
+        relation: same
+    infobase: 278
+    name: Privy Council Office
+    observed_names: []
+    not: []
+
+  acoa:
+    ckan:
+      - slug: acoa-apeca
+        relation: same
+    infobase: 12
+    name: Atlantic Canada Opportunities Agency
+    observed_names: []
+    not: []
+
+  courts-administration:
+    ckan:
+      - slug: cas-satj
+        relation: same
+    infobase: 118
+    name: Courts Administration Service
+    observed_names: []
+    not: []
+
+  public-service-commission:
+    ckan:
+      - slug: psc-cfp
+        relation: same
+    infobase: 282
+    name: Public Service Commission of Canada
+    observed_names: []
+    not: []
+
+  library-and-archives:
+    ckan:
+      - slug: lac-bac
+        relation: same
+    infobase: 199
+    name: Library and Archives Canada
+    observed_names: []
+    not: []
+
+  national-film-board:
+    ckan:
+      - slug: nfb-onf
+        relation: same
+    infobase: 223
+    name: National Film Board
+    observed_names: []
+    not: []
+
+  cnsc:
+    ckan:
+      - slug: cnsc-ccsn
+        relation: same
+    infobase: 87
+    name: Canadian Nuclear Safety Commission
+    observed_names: []
+    not: []
+
+  auditor-general:
+    ckan:
+      - slug: oag-bvg
+        relation: same
+    infobase: 238
+    name: Office of the Auditor General of Canada
+    observed_names: []
+    not: []
+
+  fintrac:
+    ckan:
+      - slug: fintrac-canafe
+        relation: same
+    infobase: 152
+    name: Financial Transactions and Reports Analysis Centre of Canada
+    observed_names: []
+    not: []
+
+  cihr:
+    ckan:
+      - slug: cihr-irsc
+        relation: same
+    infobase: 74
+    name: Canadian Institutes of Health Research
+    observed_names: []
+    not: []
+
+  financial-consumer-agency:
+    ckan:
+      - slug: fcac-acfc
+        relation: same
+    infobase: 151
+    name: Financial Consumer Agency of Canada
+    observed_names: []
+    not: []
+
+  administrative-tribunals-support:
+    ckan:
+      - slug: atssc-scdata
+        relation: same
+    infobase: 539
+    name: Administrative Tribunals Support Service of Canada
+    observed_names: []
+    not: []
+
+  nserc:
+    ckan:
+      - slug: nserc-crsng
+        relation: same
+    infobase: 230
+    name: Natural Sciences and Engineering Research Council of Canada
+    observed_names: []
+    not: []
+
+  canadian-grain-commission:
+    ckan:
+      - slug: cgc-ccg
+        relation: same
+    infobase: 69
+    name: Canadian Grain Commission
+    observed_names: []
+    not: []
+
+  impact-assessment-agency:
+    ckan:
+      - slug: iaac-aeic
+        relation: same
+    infobase: 63
+    name: Impact Assessment Agency of Canada
+    observed_names: []
+    not: []
+
+  housing-infrastructure:
+    ckan:
+      - slug: infc
+        relation: same
+    infobase: 237
+    name: "Department of Housing, Infrastructure and Communities"
+    observed_names: []
+    not: []
+
+  parole-board:
+    ckan:
+      - slug: pbc-clcc
+        relation: same
+    infobase: 227
+    name: Parole Board of Canada
+    observed_names: []
+    not: []
+
+  crtc:
+    ckan:
+      - slug: crtc
+        relation: same
+    infobase: 93
+    name: Canadian Radio-television and Telecommunications Commission
+    observed_names: []
+    not: []
+
+  csps:
+    ckan:
+      - slug: csps-efpc
+        relation: same
+    infobase: 47
+    name: Canada School of Public Service
+    observed_names: []
+    not: []
+
+  sshrc:
+    ckan:
+      - slug: sshrc-crsh
+        relation: same
+    infobase: 306
+    name: Social Sciences and Humanities Research Council of Canada
+    observed_names: []
+    not: []
+
+  federal-judicial-affairs:
+    ckan:
+      - slug: fja-cmf
+        relation: same
+    infobase: 240
+    name: Office of the Commissioner for Federal Judicial Affairs Canada
+    observed_names: []
+    not: []
+
+  human-rights-commission:
+    ckan:
+      - slug: chrc-ccdp
+        relation: same
+    infobase: 71
+    name: Canadian Human Rights Commission
+    observed_names: []
+    not: []
+
+  privacy-commissioner:
+    ckan:
+      - slug: opc-cpvp
+        relation: same
+    infobase: 349
+    name: Office of the Privacy Commissioner of Canada
+    observed_names: []
+    not: []
+
+  governor-general-secretary:
+    ckan:
+      - slug: osgg-bsgg
+        relation: same
+    # Publishes contracts but files no departmental plans.
+    name: Office of the Secretary to the Governor General
+    observed_names: []
+    not: []
+
+  national-gallery:
+    ckan:
+      - slug: ngc-mbac
+        relation: same
+    # Publishes contracts but files no departmental plans.
+    name: National Gallery of Canada
+    observed_names: []
+    not: []
+
+  national-battlefields:
+    ckan:
+      - slug: nbc-ccbn
+        relation: same
+    infobase: 218
+    name: The National Battlefields Commission
+    observed_names: []
+    not: []
+
+  intergovernmental-conference-secretariat:
+    ckan:
+      - slug: cics-scic
+        relation: same
+    infobase: 76
+    name: Canadian Intergovernmental Conference Secretariat
+    observed_names: []
+    not: []
+
+  information-commissioner:
+    ckan:
+      - slug: oic-ci
+        relation: same
+    infobase: 255
+    name: Office of the Information Commissioner of Canada
+    observed_names: []
+    not: []
+
+  international-joint-commission:
+    ckan:
+      - slug: ijc-cmi
+        relation: same
+    # Publishes contracts but files no departmental plans.
+    name: International Joint Commission
+    observed_names: []
+    not: []
+
+  military-grievances-review:
+    ckan:
+      - slug: mgerc-ceegm
+        relation: same
+    infobase: 209
+    name: Military Grievances External Review Committee
+    observed_names: []
+    not: []
+
+  occupational-health-safety-centre:
+    ckan:
+      - slug: ccohs-cchst
+        relation: same
+    infobase: 55
+    name: Canadian Centre for Occupational Health and Safety
+    observed_names: []
+    not: []
+
+  military-police-complaints:
+    ckan:
+      - slug: mpcc-cppm
+        relation: same
+    infobase: 210
+    name: Military Police Complaints Commission of Canada
+    observed_names: []
+    not: []
+
+  patented-medicine-prices:
+    ckan:
+      - slug: pmprb-cepmb
+        relation: same
+    infobase: 266
+    name: Patented Medicine Prices Review Board Canada
+    observed_names: []
+    not: []
+
+  public-sector-integrity:
+    ckan:
+      - slug: psic-ispc
+        relation: same
+    infobase: 250
+    name: Office of the Public Sector Integrity Commissioner of Canada
+    observed_names: []
+    not: []
+
+  veterans-review-board:
+    ckan:
+      - slug: vrab-tacra
+        relation: same
+    infobase: 333
+    name: Veterans Review and Appeal Board
+    observed_names: []
+    not: []
+
+  cannor:
+    ckan:
+      - slug: cannor
+        relation: same
+    infobase: 86
+    name: Canadian Northern Economic Development Agency
+    observed_names: []
+    not: []
+
+  correctional-investigator:
+    ckan:
+      - slug: oci-bec
+        relation: same
+    infobase: 247
+    name: The Correctional Investigator Canada
+    observed_names: []
+    not: []
+
+  canada-water-agency:
+    ckan:
+      - slug: cwa-aec
+        relation: same
+    infobase: 563
+    name: Canada Water Agency
+    observed_names: []
+    not: []
+
+  farm-products-council:
+    ckan:
+      - slug: fpcc-cpac
+        relation: same
+    # Publishes contracts but files no departmental plans.
+    name: Farm Products Council of Canada
+    observed_names: []
+    not: []
+
+  law-commission:
+    ckan:
+      - slug: org231
+        relation: same
+    infobase: 198
+    name: Law Commission of Canada
+    observed_names: []
+    not: []
+
+  taxpayers-ombudsperson:
+    ckan:
+      - slug: oto-boc
+        relation: same
+    # Publishes contracts but files no departmental plans.
+    name: "Office of the Taxpayers' Ombudsperson"
+    observed_names: []
+    not: []
+
+  intelligence-commissioner:
+    ckan:
+      - slug: ocsec-bccst
+        relation: same
+    infobase: 244
+    name: Office of the Intelligence Commissioner
+    observed_names: []
+    not: []
+
+  nsicop-secretariat:
+    ckan:
+      - slug: snsicp-scpssnr
+        relation: same
+    infobase: 345
+    name: Secretariat of the National Security and Intelligence Committee of Parliamentarians
+    observed_names: []
+    not: []
