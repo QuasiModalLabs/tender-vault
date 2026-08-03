@@ -25,3 +25,5 @@ Thumbs.db
 
 # The vault IS committed — that's the whole point of this project.
 # The digests directory accumulates one markdown file per week from Actions.
+
+vault/.obsidian/
