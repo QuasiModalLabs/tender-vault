@@ -207,7 +207,8 @@ def build_db(df, intent_scores, pressure_scores, source_note: str) -> int:
     con = sqlite3.connect(DB_PATH)
     con.execute("""
         CREATE TABLE programs (
-            year INTEGER, organization TEXT, core_responsibility TEXT,
+            year INTEGER, organization_id INTEGER, organization TEXT,
+            core_responsibility TEXT,
             program_id TEXT, program_name TEXT,
             planned_spending REAL, actual_spending REAL,
             planned_spending_next REAL, planned_spending_next2 REAL,
@@ -227,10 +228,21 @@ def build_db(df, intent_scores, pressure_scores, source_note: str) -> int:
     def txt(x):
         return "" if (x is None or (isinstance(x, float) and pd.isna(x))) else str(x)
 
+    def ident(x):
+        """organization_id is a stable numeric key (int64, no nulls in the
+        source). Keep it an int so a later join isn't comparing '1' to '1.0' —
+        which is exactly what txt() would produce if pandas ever widens the
+        column to float because one row went null."""
+        try:
+            return None if pd.isna(x) else int(x)
+        except (TypeError, ValueError):
+            return None
+
     rows = []
     for idx, r in df.iterrows():
         rows.append((
             _fy_to_year(r[COLS["year"]]),
+            ident(r[COLS["org_id"]]),
             txt(r[COLS["org"]]), txt(r[COLS["core"]]),
             txt(r[COLS["program_id"]]), txt(r[COLS["program"]]),
             num(r[COLS["planned_1"]]), num(r[COLS["actual"]]),
@@ -240,9 +252,10 @@ def build_db(df, intent_scores, pressure_scores, source_note: str) -> int:
             intent_scores.loc[idx], pressure_scores.loc[idx],
         ))
     con.executemany(
-        "INSERT INTO programs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows
+        "INSERT INTO programs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows
     )
     con.execute("CREATE INDEX idx_org ON programs(organization)")
+    con.execute("CREATE INDEX idx_org_id ON programs(organization_id)")
     con.execute("CREATE INDEX idx_intent ON programs(intent_score)")
     con.execute("CREATE INDEX idx_score ON programs(pressure_score)")
     con.execute("CREATE INDEX idx_year ON programs(year)")

@@ -55,7 +55,7 @@ import pandas as pd
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
-from ingest import REQUEST_HEADERS, parse_profile  # noqa: E402
+from ingest import REQUEST_HEADERS, parse_profile, resolve_columns  # noqa: E402
 
 CONTRACTS_URL = (
     "https://open.canada.ca/data/dataset/d8f85d91-7dec-4fd1-8055-483b77225d8b/"
@@ -70,9 +70,19 @@ CHUNK_ROWS = 50_000
 
 # Schema column names with fallbacks, resolved at runtime so a rename fails
 # loudly with the real column list rather than silently producing nothing.
+# resolve_columns itself lives in ingest.py — one guard, shared by all four
+# ingest scripts.
 COLUMN_CANDIDATES = {
     "vendor": ["vendor_name"],
+    # Left as a fallback list on purpose: the display title when present, the
+    # slug when it isn't.
     "org": ["owner_org_title", "owner_org"],
+    # The CKAN slug, captured SEPARATELY. As a fallback behind owner_org_title
+    # it was never once stored, because the title is always present. It's the
+    # stable machine key ("casdo-ocena") while the title is a bilingual display
+    # string ("Accessibility Standards Canada | Normes d'accessibilité Canada")
+    # that changes with rebrands and translations.
+    "owner_org": ["owner_org"],
     "contract_date": ["contract_date"],
     "period_start": ["contract_period_start"],
     "period_end": ["delivery_date", "contract_period_end"],
@@ -83,27 +93,10 @@ COLUMN_CANDIDATES = {
 }
 
 
-def resolve_columns(columns: list[str]) -> dict[str, str | None]:
-    lower = {c.lower().strip(): c for c in columns}
-    resolved: dict[str, str | None] = {}
-    for key, candidates in COLUMN_CANDIDATES.items():
-        found = None
-        for cand in candidates:
-            if cand in lower:
-                found = lower[cand]
-                break
-        resolved[key] = found
-    required = ["vendor", "org", "contract_date", "value", "description"]
-    missing = [k for k in required if resolved[k] is None]
-    if missing:
-        sys.stderr.write(
-            f"Schema mismatch. Could not find columns for: {missing}\n"
-            "Columns present in the file:\n"
-            + "\n".join(f"  {c}" for c in columns)
-            + "\nUpdate COLUMN_CANDIDATES in this script.\n"
-        )
-        sys.exit(2)
-    return resolved
+# owner_org is deliberately NOT required: an older CSV snapshot passed via
+# --source predates the column and should still ingest rather than exit, the
+# same way procurement_id and reference are treated.
+REQUIRED_COLUMNS = ["vendor", "org", "contract_date", "value", "description"]
 
 
 def build_matchers(terms: list[str]) -> list[tuple[str, str]]:
@@ -309,6 +302,7 @@ def to_records(sub: pd.DataFrame, cols: dict) -> list[tuple]:
             _s(row.get(cols["vendor"]), 200),
             normalize_vendor(_s(row.get(cols["vendor"]), 200)),
             _s(row.get(cols["org"]), 200),
+            _s(row.get(cols["owner_org"]), 100) if cols["owner_org"] else "",
             _s(row.get(cols["description"]), 1000),
             _s(row.get(cols["contract_date"]), 10),
             _s(row.get(cols["period_start"]), 10) if cols["period_start"] else "",
@@ -327,14 +321,14 @@ def build_db(records_iter, window_years: int, source_note: str) -> int:
     con.execute("""
         CREATE TABLE contracts (
             family_id TEXT, reference TEXT, vendor TEXT, vendor_norm TEXT, org TEXT,
-            description TEXT, contract_date TEXT, period_start TEXT,
+            owner_org TEXT, description TEXT, contract_date TEXT, period_start TEXT,
             period_end TEXT, value REAL, matched_terms TEXT
         )
     """)
     con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
     total = 0
     for records in records_iter:
-        con.executemany("INSERT INTO contracts VALUES (?,?,?,?,?,?,?,?,?,?,?)", records)
+        con.executemany("INSERT INTO contracts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", records)
         total += len(records)
     con.execute("CREATE INDEX idx_vendor ON contracts(vendor_norm)")
     con.execute("CREATE INDEX idx_org ON contracts(org)")
@@ -436,7 +430,10 @@ def main():
     def records_gen():
         for chunk in reader:
             if state["cols"] is None:
-                state["cols"] = resolve_columns(list(chunk.columns))
+                state["cols"] = resolve_columns(
+                    list(chunk.columns), COLUMN_CANDIDATES, REQUIRED_COLUMNS,
+                    "scripts/contracts_ingest.py",
+                )
                 print(f"Resolved columns: {state['cols']}")
             state["seen"] += len(chunk)
             sub = filter_chunk(chunk, state["cols"], matchers, cutoff)

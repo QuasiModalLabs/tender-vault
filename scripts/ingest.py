@@ -46,6 +46,60 @@ DEFAULT_DB = PROJECT_ROOT / "chroma_db"
 
 
 # ---------------------------------------------------------------------------
+# Schema resolution — the guard, shared with the other ingest scripts
+# ---------------------------------------------------------------------------
+# Column names with fallbacks, resolved at runtime against the real header so a
+# rename fails loudly with the actual column list instead of silently producing
+# nothing. This exists because it didn't: the agency field read a column name
+# that had never been in this file, `df.get(col, "")` returned the default, and
+# every tender carried an empty agency for weeks without a single error.
+TENDER_COLUMNS = {
+    "tender_id": ["referenceNumber-numeroReference"],
+    "title": ["title-titre-eng"],
+    "description": ["tenderDescription-descriptionAppelOffres-eng"],
+    "closing_date": ["tenderClosingDate-appelOffresDateCloture"],
+    "contracting_entity": ["contractingEntityName-nomEntitContractante-eng"],
+    "end_user": ["endUserEntitiesName-nomEntitesUtilisateurFinal-eng"],
+}
+# All of them: there is no tender worth indexing without any one of these.
+TENDER_REQUIRED = list(TENDER_COLUMNS)
+
+
+def resolve_columns(
+    columns: list[str],
+    candidates: dict[str, list[str]],
+    required: list[str],
+    source_label: str,
+) -> dict[str, str | None]:
+    """
+    Map logical field names to real header names, or exit(2) with the real list.
+
+    Shared by every ingest script. Matching is case-insensitive so a header
+    recased upstream doesn't count as a rename. Keys not in `required` resolve
+    to None and the caller decides what an absent column means.
+    """
+    lower = {c.lower().strip(): c for c in columns}
+    resolved: dict[str, str | None] = {}
+    for key, cands in candidates.items():
+        found = None
+        for cand in cands:
+            if cand.lower().strip() in lower:
+                found = lower[cand.lower().strip()]
+                break
+        resolved[key] = found
+    missing = [k for k in required if resolved[k] is None]
+    if missing:
+        sys.stderr.write(
+            f"Schema mismatch in {source_label}. Could not find columns for: {missing}\n"
+            "Columns present in the file:\n"
+            + "\n".join(f"  {c}" for c in columns)
+            + f"\nUpdate the column candidates in {source_label}.\n"
+        )
+        sys.exit(2)
+    return resolved
+
+
+# ---------------------------------------------------------------------------
 # Profile parsing — the frontmatter of the profile is the filter config
 # ---------------------------------------------------------------------------
 
@@ -210,7 +264,8 @@ def contains_excluded(text: str, exclusions: list[str]) -> bool:
     return any(excl in text_lower for excl in exclusions)
 
 
-def filter_tenders(df: pd.DataFrame, criteria: dict, value_extractor=None) -> pd.DataFrame:
+def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
+                   value_extractor=None) -> pd.DataFrame:
     """
     Apply profile filters. Prints funnel stats so you can tune the profile.
 
@@ -225,7 +280,7 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, value_extractor=None) -> pd
     # Parse closing dates (timezone-naive for simplicity)
     df = df.copy()
     df["_closing"] = pd.to_datetime(
-        df.get("tenderClosingDate-appelOffresDateCloture"),
+        df[cols["closing_date"]],
         errors="coerce",
         utc=True,
     ).dt.tz_localize(None)
@@ -235,11 +290,9 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, value_extractor=None) -> pd
     print(f"  After date filter (>={criteria['min_days_until_close']} days out): {len(df):,}")
 
     # Combined text for matching (title + description)
-    title_col = "title-titre-eng"
-    desc_col = "tenderDescription-descriptionAppelOffres-eng"
     df["_text"] = (
-        df.get(title_col, "").fillna("").astype(str) + " "
-        + df.get(desc_col, "").fillna("").astype(str)
+        df[cols["title"]].fillna("").astype(str) + " "
+        + df[cols["description"]].fillna("").astype(str)
     )
 
     # Exclusions first (cheap, removes obvious misfits)
@@ -259,12 +312,9 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, value_extractor=None) -> pd
         df["_matched"] = [[] for _ in range(len(df))]
 
     # Value filter — only drop tenders where we can read a value AND it's out of range
-    if desc_col in df.columns:
-        if value_extractor is not estimate_value:
-            print(f"  Extracting values via LLM for {len(df):,} tenders...")
-        df["_value"] = df[desc_col].apply(value_extractor)
-    else:
-        df["_value"] = None
+    if value_extractor is not estimate_value:
+        print(f"  Extracting values via LLM for {len(df):,} tenders...")
+    df["_value"] = df[cols["description"]].apply(value_extractor)
     if criteria["value_min"] > 0 or criteria["value_max"] < 100_000_000:
         in_range = df["_value"].isna() | (
             (df["_value"] >= criteria["value_min"])
@@ -281,7 +331,15 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, value_extractor=None) -> pd
 # ChromaDB persistence — this is what Claude's tools read from
 # ---------------------------------------------------------------------------
 
-def build_chroma(df: pd.DataFrame, db_path: Path) -> None:
+def _meta_str(value, limit: int) -> str:
+    """NaN-safe string for ChromaDB metadata. float('nan') is truthy, so the
+    obvious `str(x) or ''` yields the literal string 'nan'."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    return str(value).strip()[:limit]
+
+
+def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict) -> None:
     """Embed filtered tenders and write to a persistent ChromaDB collection."""
     # Imported here, not at module level: this is the only function that needs
     # ChromaDB, and contracts_ingest.py imports this module purely for its
@@ -306,19 +364,32 @@ def build_chroma(df: pd.DataFrame, db_path: Path) -> None:
 
     documents, metadatas, ids = [], [], []
     for _, row in df.iterrows():
-        tender_id = str(row.get("referenceNumber-numeroReference", ""))
+        tender_id = str(row.get(cols["tender_id"], ""))
         if not tender_id or tender_id == "nan":
             continue
 
-        title = str(row.get("title-titre-eng", ""))[:300]
-        desc = str(row.get("tenderDescription-descriptionAppelOffres-eng", ""))[:2000]
+        title = str(row.get(cols["title"], ""))[:300]
+        desc = str(row.get(cols["description"], ""))[:2000]
         # We embed title + description — weighting title higher by repeating it
         document = f"{title}\n{title}\n\n{desc}"
 
         metadata = {
             "tender_id": tender_id,
             "title": title[:200],
-            "agency": str(row.get("contracting-organization-name-eng-nom-organisation-contractante-ang", ""))[:200],
+            # TWO fields, deliberately not merged and not collapsed to one.
+            # Federal IT is routinely bought by a central authority (SSC, PSPC)
+            # on behalf of the department that actually needs the work, so the
+            # contracting entity is frequently NOT the customer. End user is the
+            # demand signal; contracting entity is the fallback — it's always
+            # populated, while end user is blank on roughly half the rows.
+            "contracting_entity": _meta_str(row.get(cols["contracting_entity"]), 500),
+            # Multi-valued and slash-delimited: one tender can legitimately name
+            # several departments ("Department of National Defence (DND) /
+            # Department of Transport (TC) / ..."). Stored VERBATIM, all values
+            # kept. Do not re-join on commas — entity names contain commas
+            # ("Foreign Affairs, Trade And Development (Department Of)"), which
+            # would make the field unsplittable downstream.
+            "end_user_entity": _meta_str(row.get(cols["end_user"]), 500),
             "closing_date": row["_closing"].strftime("%Y-%m-%d") if pd.notna(row["_closing"]) else "",
             "estimated_value": float(row["_value"]) if pd.notna(row.get("_value")) else 0.0,
             "matched_competencies": ",".join(row.get("_matched", [])),
@@ -375,13 +446,16 @@ def main():
         print("  Value extraction: LLM (Anthropic API)")
 
     df = download_tenders(args.cache, force=args.force)
-    df = filter_tenders(df, criteria, value_extractor=value_extractor)
+    cols = resolve_columns(
+        list(df.columns), TENDER_COLUMNS, TENDER_REQUIRED, "scripts/ingest.py"
+    )
+    df = filter_tenders(df, criteria, cols, value_extractor=value_extractor)
 
     if len(df) == 0:
         print("\nNo tenders passed the filter. Loosen your criteria.", file=sys.stderr)
         sys.exit(1)
 
-    build_chroma(df, args.db)
+    build_chroma(df, args.db, cols)
     print("\nDone. Claude Code can now search this corpus via scripts/tender_tools.py")
 
 

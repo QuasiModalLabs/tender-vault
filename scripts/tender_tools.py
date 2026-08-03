@@ -155,6 +155,17 @@ def _do_load():
     return _collection
 
 
+def _display_agency(meta: dict) -> str:
+    """
+    Which department to SHOW for a tender. End user is the department that
+    needs the work and is what we care about; the contracting entity is the
+    fallback for the ~half of rows where end user is blank. This is a display
+    convenience only — the two fields are stored separately in ChromaDB and
+    anything matching on department should read them separately.
+    """
+    return meta.get("end_user_entity") or meta.get("contracting_entity") or ""
+
+
 # ---------------------------------------------------------------------------
 # Reciprocal Rank Fusion — combine BM25 + semantic without tuning weights
 # ---------------------------------------------------------------------------
@@ -214,7 +225,7 @@ def cmd_search(args) -> dict:
         results.append({
             "tender_id": doc_id,
             "title": doc["metadata"].get("title", ""),
-            "agency": doc["metadata"].get("agency", ""),
+            "agency": _display_agency(doc["metadata"]),
             "closing_date": doc["metadata"].get("closing_date", ""),
             "estimated_value": doc["metadata"].get("estimated_value", 0),
             "matched_competencies": doc["metadata"].get("matched_competencies", ""),
@@ -267,7 +278,7 @@ def cmd_similar(args) -> dict:
             similar.append({
                 "tender_id": doc_id,
                 "title": doc["metadata"].get("title", ""),
-                "agency": doc["metadata"].get("agency", ""),
+                "agency": _display_agency(doc["metadata"]),
                 "similarity": round(1 / (1 + distance), 4),
             })
     return {"target": args.tender_id, "similar": similar[:args.n]}
@@ -322,7 +333,7 @@ def cmd_promote(args) -> dict:
     content = f"""---
 tender_id: {doc['id']}
 title: "{meta.get('title', '').replace('"', "'")}"
-agency: "{meta.get('agency', '').replace('"', "'")}"
+agency: "{_display_agency(meta).replace('"', "'")}"
 closing_date: {meta.get('closing_date', '')}
 estimated_value: {meta.get('estimated_value', 0)}
 matched_competencies: [{', '.join(matched_list)}]
@@ -332,7 +343,7 @@ promoted_at: {datetime.now().strftime('%Y-%m-%d')}
 
 # {meta.get('title', 'Untitled')}
 
-**Agency:** {meta.get('agency', 'Unknown')}
+**Agency:** {_display_agency(meta) or 'Unknown'}
 **Closes:** {meta.get('closing_date', 'Unknown')}
 **Estimated value:** ${meta.get('estimated_value', 0):,.0f}
 **Matched on:** {', '.join(matched_list) if matched_list else 'none'}

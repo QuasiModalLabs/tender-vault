@@ -45,7 +45,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
-from ingest import REQUEST_HEADERS, parse_profile  # noqa: E402
+from ingest import REQUEST_HEADERS, parse_profile, resolve_columns  # noqa: E402
 # Reuse the proven scoring helpers from plans_ingest.
 from plans_ingest import theme_vector, _strip_md, EMBED_MODEL  # noqa: E402
 
@@ -54,6 +54,40 @@ ORG = "oag-bvg"
 PROJECT_ROOT = Path(__file__).parent.parent
 DEFAULT_PROFILE = PROJECT_ROOT / "vault" / "profiles" / "my-company.md"
 DB_PATH = PROJECT_ROOT / "data" / "oag.db"
+
+# CKAN package fields this script depends on, resolved against the real response
+# so an API-side rename exits loudly instead of scoring empty strings. Presence
+# of the KEY is what's checked — a null or empty `notes` is legitimate data,
+# exactly as a null cell in a CSV column is.
+OAG_PACKAGE_FIELDS = {
+    "oag_id": ["id"],
+    "title": ["title"],
+    "notes": ["notes"],
+    "resources": ["resources"],
+}
+# Sub-fields read off each entry in `resources` when picking HTML/PDF links.
+OAG_RESOURCE_FIELDS = {
+    "format": ["format"],
+    "url": ["url"],
+}
+
+
+def resolve_resource_fields(records: list[dict], pkg_cols: dict) -> dict[str, str | None]:
+    """
+    Resolve the resource sub-fields against the first package that actually has
+    resources. A response where no package carries any is legal (nothing to
+    link), so that resolves to empty rather than exiting — there is no schema
+    to check, which is different from a schema that changed.
+    """
+    for pkg in records:
+        resources = pkg.get(pkg_cols["resources"]) or []
+        if resources:
+            return resolve_columns(
+                list(resources[0].keys()), OAG_RESOURCE_FIELDS,
+                list(OAG_RESOURCE_FIELDS), "scripts/oag_ingest.py (resources)",
+            )
+    print("  no package carries resources; skipping resource-field check")
+    return {k: None for k in OAG_RESOURCE_FIELDS}
 
 # Only these look like actual performance/audit reports (not briefing packages,
 # financial-statement audits, or committee hearing materials). We keep audits
@@ -124,7 +158,14 @@ def fetch_oag(max_audits: int) -> list[dict]:
         params = {"q": f"organization:{ORG}", "rows": rows, "start": start}
         r = requests.get(API, params=params, headers=REQUEST_HEADERS, timeout=60)
         r.raise_for_status()
-        result = r.json()["result"]
+        payload = r.json()
+        if not payload.get("success") or "result" not in payload:
+            sys.stderr.write(
+                f"CKAN API returned no result envelope from {API}\n"
+                f"  {payload.get('error', payload)}\n"
+            )
+            sys.exit(2)
+        result = payload["result"]
         batch = result["results"]
         if not batch:
             break
@@ -143,7 +184,8 @@ def year_from_title(title: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def build_db(records: list[dict], scores: list, source_note: str) -> int:
+def build_db(records: list[dict], scores: list, source_note: str,
+             cols: dict, res_cols: dict) -> int:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     if DB_PATH.exists():
         DB_PATH.unlink()
@@ -158,17 +200,17 @@ def build_db(records: list[dict], scores: list, source_note: str) -> int:
     con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
     rows = []
     for pkg, score in zip(records, scores):
-        title = pkg.get("title", "")
-        notes = _strip_md(pkg.get("notes", "") or "")
+        title = pkg.get(cols["title"], "") or ""
+        notes = _strip_md(pkg.get(cols["notes"], "") or "")
         html_url = pdf_url = ""
-        for res in pkg.get("resources", []):
-            fmt = (res.get("format") or "").upper()
+        for res in (pkg.get(cols["resources"]) or []):
+            fmt = (res.get(res_cols["format"]) or "").upper() if res_cols["format"] else ""
             if fmt == "HTML" and not html_url:
-                html_url = res.get("url", "")
+                html_url = res.get(res_cols["url"], "") if res_cols["url"] else ""
             elif fmt == "PDF" and not pdf_url:
-                pdf_url = res.get("url", "")
+                pdf_url = res.get(res_cols["url"], "") if res_cols["url"] else ""
         rows.append((
-            pkg.get("id", ""),
+            pkg.get(cols["oag_id"], ""),
             year_from_title(title),
             classify_doc(title, notes),
             title, notes,
@@ -223,6 +265,14 @@ def main():
     print(f"Fetching OAG datasets from CKAN API (org={ORG})...")
     records = fetch_oag(args.max_audits)
     print(f"Fetched {len(records)} datasets")
+    if not records:
+        sys.stderr.write(f"CKAN returned no datasets for organization:{ORG}.\n")
+        sys.exit(2)
+    cols = resolve_columns(
+        list(records[0].keys()), OAG_PACKAGE_FIELDS,
+        list(OAG_PACKAGE_FIELDS), "scripts/oag_ingest.py",
+    )
+    res_cols = resolve_resource_fields(records, cols)
 
     # Score title + description (two-pole: IT audit minus non-IT audit)
     from sentence_transformers import SentenceTransformer
@@ -231,13 +281,16 @@ def main():
     it_vec = theme_vector(model, it_ex)
     nonit_vec = theme_vector(model, nonit_ex)
 
-    texts = [_strip_md(f"{p.get('title','')}. {p.get('notes','') or ''}") for p in records]
+    texts = [
+        _strip_md(f"{p.get(cols['title'],'') or ''}. {p.get(cols['notes'],'') or ''}")
+        for p in records
+    ]
     print(f"Embedding {len(texts)} audit title+descriptions...")
     embs = model.encode(texts, normalize_embeddings=True, show_progress_bar=False,
                         batch_size=64)
     scores = [round(float(e @ it_vec - e @ nonit_vec), 4) for e in embs]
 
-    n = build_db(records, scores, API)
+    n = build_db(records, scores, API, cols, res_cols)
     print(f"\nWrote {n} audits to {DB_PATH} ({DB_PATH.stat().st_size/1e6:.1f} MB)")
     if args.show_extremes:
         show_extremes()
