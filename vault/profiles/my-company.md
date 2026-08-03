@@ -83,6 +83,46 @@ contracts_categories:
 # Goods / other:
 #   road motor vehicles, office furniture, ships and boats, diesel fuel,
 #   printed matter, printing services, courier services
+
+# Departmental-plan variance theming (two-pole semantic scoring).
+# Each theme is defined by EXAMPLE SENTENCES, not keywords: the embedding model
+# scores each program's variance_explanation by meaning — toward the pressure
+# pole, away from the accounting pole. pressure_score = sim(pressure) - sim(noise).
+# Tune by editing/adding examples that capture how the signal actually reads;
+# the model generalizes to phrasings you didn't list. Run plans_ingest.py with
+# --show-extremes to see whether your examples pull the right rows.
+plan_themes:
+  modernization_intent:
+    - "investing to modernize and replace an aging or legacy IT system"
+    - "planned funding to migrate systems and infrastructure to the cloud"
+    - "modernization initiative to transform digital service delivery"
+    - "developing or implementing a new platform to support program operations"
+    - "improvements and upgrades to the case management or processing system"
+    - "digital transformation and automation of manual processes"
+    - "the increase is attributed to a new application modernization initiative"
+    - "higher spending due to investment in replacing the legacy IT system"
+    - "the variance reflects funding for a system modernization project"
+  routine_noise:
+    - "ongoing delivery of the program at planned funding levels"
+    - "routine statutory transfer payments to recipients"
+    - "no significant change from the prior year plan"
+    - "spending reflects normal operations and scheduled activities"
+    - "variance relates to the timing of contribution or grant payments"
+    - "difference is attributed to reprofiled funding and statutory adjustments"
+  operational_pressure:
+    - "unable to keep pace with a growing backlog of unprocessed cases"
+    - "service delays and wait times worsened due to insufficient capacity"
+    - "aging legacy systems repeatedly failed and could not meet demand"
+    - "emergency funding was required to address a critical operational shortfall"
+    - "the program could not deliver on its mandate without additional intervention"
+    - "rising caseloads outstripped the resources available to process them"
+  accounting_noise:
+    - "variance due to timing of statutory payments and reprofiled funds"
+    - "difference reflects legislative timing and accounting adjustments"
+    - "actual spending differed from planned due to the timing of transfers"
+    - "increase mainly due to general support for program delivery"
+    - "resources reallocated to internal services for departmental initiatives"
+    - "no significant variance between actual and planned spending"
 ---
 
 # Company Profile

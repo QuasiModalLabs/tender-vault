@@ -160,6 +160,80 @@ def contracts_intel(query: str) -> dict:
 
 
 @mcp.tool()
+def expiring_contracts(months_min: int = 6, months_max: int = 24,
+                       min_value: float = None) -> dict:
+    """
+    Contracts expiring in a window — near-certain future re-procurements.
+
+    A contract in our competency space whose delivery period ends in 6-24
+    months is a future RFP we can see coming, with the incumbent, department,
+    and value known today. Use this for proactive business development: which
+    big contracts are coming up for renewal, who holds them, worth building a
+    relationship around before the tender drops.
+
+    A lead list for human judgment, not a prediction. Value floor defaults to
+    the profile's expiry_min_value.
+
+    Args:
+        months_min: Earliest expiry, months from now (default 6).
+        months_max: Latest expiry, months from now (default 24).
+        min_value: Minimum contract value; None reads the profile default.
+
+    Returns:
+        Dict with expiring count, window, min_value, and per-contract incumbent,
+        department, value, expiry, months_until_expiry, description.
+    """
+    args = SimpleNamespace(months_min=months_min, months_max=months_max,
+                           min_value=min_value)
+    return tender_tools.cmd_expiring_contracts(args)
+
+
+@mcp.tool()
+def program_signals(department: str = None, min_score: float = None,
+                    exclude_internal: bool = False, limit: int = 25) -> dict:
+    """
+    Programs signalling FORWARD-LOOKING modernization intent — the pre-RFP
+    signal from Departmental Plans / Results Reports.
+
+    Where contracts_intel says WHAT was bought and expiring_contracts says WHAT
+    is up for renewal, this says WHAT a department PLANS to do: it ranks programs
+    by intent_score, a semantic score over each program's planning_explanation
+    (forward-looking — "investing to modernize the case management system",
+    "migrating infrastructure to the cloud"), scored toward IT/modernization
+    intent and away from routine-operations noise. A stated plan to modernize is
+    a conversation to open before the RFP exists.
+
+    Each program also carries pressure_score/variance_explanation as secondary
+    context (retrospective operational strain); a program that BOTH struggled
+    and plans to modernize is the strongest signal. multi_year/other_scored_years
+    show the intent trail across years where present.
+
+    Internal Services is INCLUDED by default — in this data departmental IT spend
+    is booked there, so it's where the IT-modernization signal lives. When
+    reading Internal Services rows, distinguish vendor-buildable IT modernization
+    (real opportunity) from union-locked operational delivery (skip). Judge
+    IT-relevance and credibility — a small firm isn't a prime on a $90M program.
+    A lead list, not a forecast.
+
+    Args:
+        department: Restrict to departments matching this substring (optional).
+        min_score: Only programs with intent_score at or above this (default:
+                   no floor — real leads can score slightly negative).
+        exclude_internal: Exclude Internal Services programs (default False —
+                          included, since that's where departmental IT is booked).
+        limit: How many to return (default 25).
+
+    Returns:
+        Dict of programs ranked by intent_score, each with planning_explanation,
+        pressure_score/variance_explanation context, pct_over_plan, multi_year
+        flag and other_scored_years trail; plus as_of and how_to_read.
+    """
+    args = SimpleNamespace(department=department, min_score=min_score,
+                           exclude_internal=exclude_internal, limit=limit)
+    return tender_tools.cmd_program_signals(args)
+
+
+@mcp.tool()
 def list_parked() -> dict:
     """
     List tenders in the parked folder, with their revisit triggers.

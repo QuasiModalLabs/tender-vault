@@ -488,6 +488,154 @@ def cmd_contracts_intel(args) -> dict:
     }
 
 
+def cmd_program_signals(args) -> dict:
+    """
+    Surface government programs showing operational pressure — the pre-RFP intent
+    signal from Departmental Plans / Results.
+
+    Ranks by single-year pressure_score (semantic strain in the department's own
+    words, minus accounting noise), because the variance_explanation field is
+    populated sparsely across years — most programs are explained in only some
+    of their years — so requiring a multi-year chronic pattern threw away the
+    real single-year signals (named IT modernizations, backlogs, failed
+    recruitment) and kept boilerplate that happened to repeat.
+
+    BUT chronic strain is the stronger signal in principle (a multi-year pattern
+    is what draws the OAG audits, committee grillings, and media pressure that
+    force a department to procure a fix). So where a program DOES have multiple
+    scored years, we surface its year-by-year trail and a `multi_year` flag, so
+    Claude can SEE chronicity when the data supports it — without requiring it.
+    True chronic-pattern detection wants the OAG / committee data (which
+    explicitly documents "this has failed for N years"); that's a documented
+    future source, and the natural home for the "impending scrutiny" signal.
+
+    Read the variance prose and judge IT-relevance — programs aren't
+    capability-tagged, so an IT modernization can live inside any department.
+    A lead list, not a forecast.
+
+    Filters:
+      --department SUBSTR : restrict to matching departments
+      --min-score FLOAT   : only programs above this pressure_score (default 0)
+      --include-internal  : include Internal Services (excluded by default —
+                            back-office strain isn't program-delivery opportunity)
+      --limit N           : how many to return (default 25)
+    """
+    import sqlite3
+
+    db = PROJECT_ROOT / "data" / "plans.db"
+    if not db.exists():
+        return {"error": "Plans DB not built. Run: python scripts/plans_ingest.py"}
+
+    con = sqlite3.connect(db)
+    meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
+
+    # No score floor by default: real IT leads can score slightly negative
+    # (a great lead phrased as a budget variance sits between the poles), so a
+    # floor at 0 hid genuine signal. Rank by score, let --limit control volume;
+    # --min-score is available to filter when wanted.
+    min_score = getattr(args, "min_score", None)
+    # Internal Services now INCLUDED by default: in this dataset departmental IT
+    # spend is booked under Internal Services, so excluding it hid the exact
+    # IT-modernization programs an IT firm wants. Use --exclude-internal to drop
+    # it. Claude should still distinguish vendor-addressable IT modernization
+    # from union-locked operational delivery when reading Internal Services rows.
+    exclude_internal = getattr(args, "exclude_internal", False)
+
+    where = ["intent_score IS NOT NULL"]
+    params: list = []
+    if min_score is not None:
+        where.append("intent_score >= ?")
+        params.append(min_score)
+    dept = getattr(args, "department", None)
+    if dept:
+        where.append("lower(organization) LIKE ?")
+        params.append(f"%{dept.lower()}%")
+    if exclude_internal:
+        where.append("lower(program_name) NOT LIKE '%internal service%'")
+
+    limit = getattr(args, "limit", None) or 25
+    rows = con.execute(f"""
+        SELECT year, organization, program_name, core_responsibility,
+               intent_score, planning_explanation,
+               pressure_score, variance_explanation,
+               planned_spending, actual_spending
+        FROM programs
+        WHERE {' AND '.join(where)}
+        ORDER BY intent_score DESC
+        LIMIT ?
+    """, params + [limit]).fetchall()
+
+    if not rows:
+        con.close()
+        return {
+            "as_of": meta.get("ingest_date"),
+            "programs": 0,
+            "note": "No programs above the score floor. Lower --min-score.",
+        }
+
+    results = []
+    for (year, org, prog, core, iscore, pe, pscore, ve, planned, actual) in rows:
+        over = None
+        if planned and actual and planned > 0:
+            over = round((actual - planned) / planned * 100, 1)
+
+        # Pull the program's intent-scored trail across years (context).
+        trail = con.execute("""
+            SELECT year, intent_score, planning_explanation
+            FROM programs
+            WHERE organization = ? AND program_name = ?
+                  AND intent_score IS NOT NULL
+            ORDER BY year
+        """, (org, prog)).fetchall()
+
+        other_years = []
+        for (yr, sc, tpe) in trail:
+            if yr == year:
+                continue
+            other_years.append({
+                "year": yr, "intent_score": sc,
+                "planning_explanation": (tpe or "")[:300],
+            })
+
+        results.append({
+            "year": year,
+            "department": org,
+            "program": prog,
+            "core_responsibility": core,
+            "intent_score": iscore,
+            "planning_explanation": pe,        # forward-looking: what they PLAN
+            "pressure_score": pscore,          # retrospective strain (context)
+            "variance_explanation": ve,
+            "pct_over_plan": over,
+            "multi_year": len(trail) > 1,
+            "other_scored_years": other_years,
+        })
+
+    con.close()
+    return {
+        "as_of": meta.get("ingest_date"),
+        "intent_scored_total": meta.get("intent_scored"),
+        "returned": len(results),
+        "filters": {"department": dept, "min_score": min_score,
+                    "internal_services": "excluded" if exclude_internal else "included"},
+        "programs": results,
+        "how_to_read": "Ranked by intent_score — FORWARD-LOOKING modernization "
+                       "intent from each program's planning_explanation (what the "
+                       "department PLANS to spend on: modernize, replace, migrate, "
+                       "build), scored toward IT/modernization language and away "
+                       "from routine-operations noise. This is the pre-RFP signal: "
+                       "a stated plan to modernize a system is a conversation to "
+                       "open before the RFP. pressure_score/variance_explanation "
+                       "are secondary context (retrospective strain); a program "
+                       "that BOTH struggled and plans to modernize is strongest. "
+                       "Internal Services is included by default (that's where "
+                       "departmental IT is booked) — but distinguish vendor-buildable "
+                       "IT modernization from union-locked operational delivery. "
+                       "Judge IT-relevance and credibility (a 25-person firm isn't "
+                       "a prime on a $90M program). A lead list, not a forecast.",
+    }
+
+
 def cmd_expiring_contracts(args) -> dict:
     """
     Surface contracts whose delivery period ends inside a window — the highest
@@ -699,6 +847,19 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Minimum contract value (overrides profile's "
                          "expiry_min_value; default reads from profile)")
     ec.set_defaults(func=cmd_expiring_contracts)
+
+    ps = sub.add_parser(
+        "program-signals",
+        help="Programs showing operational pressure (pre-RFP intent signal)",
+    )
+    ps.add_argument("--department", help="Restrict to departments matching this substring")
+    ps.add_argument("--min-score", type=float, default=None,
+                    help="Only programs with intent_score at or above this "
+                         "(default: no floor, since real leads can score slightly negative)")
+    ps.add_argument("--exclude-internal", action="store_true",
+                    help="Exclude Internal Services programs (included by default)")
+    ps.add_argument("--limit", type=int, default=25, help="How many to return (default 25)")
+    ps.set_defaults(func=cmd_program_signals)
 
     pr = sub.add_parser("promote", help="Copy a tender into vault/tenders/watching/")
     pr.add_argument("tender_id")
