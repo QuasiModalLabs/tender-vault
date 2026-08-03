@@ -45,7 +45,9 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
-from ingest import REQUEST_HEADERS, parse_profile, resolve_columns  # noqa: E402
+from ingest import (  # noqa: E402
+    REQUEST_HEADERS, output_path, parse_profile, resolve_columns, swap_into_place,
+)
 # Reuse the proven scoring helpers from plans_ingest.
 from plans_ingest import theme_vector, _strip_md, EMBED_MODEL  # noqa: E402
 
@@ -54,6 +56,8 @@ ORG = "oag-bvg"
 PROJECT_ROOT = Path(__file__).parent.parent
 DEFAULT_PROFILE = PROJECT_ROOT / "vault" / "profiles" / "my-company.md"
 DB_PATH = PROJECT_ROOT / "data" / "oag.db"
+# What a full, publishable run pulls. --max-audits below this is a spot-check.
+FULL_MAX_AUDITS = 400
 
 # CKAN package fields this script depends on, resolved against the real response
 # so an API-side rename exits loudly instead of scoring empty strings. Presence
@@ -185,11 +189,14 @@ def year_from_title(title: str) -> int | None:
 
 
 def build_db(records: list[dict], scores: list, source_note: str,
-             cols: dict, res_cols: dict) -> int:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if DB_PATH.exists():
-        DB_PATH.unlink()
-    con = sqlite3.connect(DB_PATH)
+             cols: dict, res_cols: dict, db_path: Path = DB_PATH) -> int:
+    # Build to a .part file and swap only once complete, so a failure part-way
+    # through leaves the previous database untouched instead of leaving none.
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = db_path.with_name(db_path.name + ".part")
+    if tmp_path.exists():
+        tmp_path.unlink()
+    con = sqlite3.connect(tmp_path)
     con.execute("""
         CREATE TABLE audits (
             oag_id TEXT, year INTEGER, doc_type TEXT,
@@ -217,24 +224,27 @@ def build_db(records: list[dict], scores: list, source_note: str,
             extract_dept(title, notes),
             score, html_url, pdf_url,
         ))
-    con.executemany("INSERT INTO audits VALUES (?,?,?,?,?,?,?,?,?)", rows)
-    con.execute("CREATE INDEX idx_dept ON audits(department)")
-    con.execute("CREATE INDEX idx_itscore ON audits(it_score)")
-    con.execute("CREATE INDEX idx_type ON audits(doc_type)")
-    for k, v in [
-        ("ingest_date", datetime.now().strftime("%Y-%m-%d")),
-        ("source", source_note),
-        ("audit_count", str(len(rows))),
-        ("licence", "Open Government Licence - Canada"),
-    ]:
-        con.execute("INSERT INTO meta VALUES (?, ?)", (k, v))
-    con.commit()
-    con.close()
+    try:
+        con.executemany("INSERT INTO audits VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        con.execute("CREATE INDEX idx_dept ON audits(department)")
+        con.execute("CREATE INDEX idx_itscore ON audits(it_score)")
+        con.execute("CREATE INDEX idx_type ON audits(doc_type)")
+        for k, v in [
+            ("ingest_date", datetime.now().strftime("%Y-%m-%d")),
+            ("source", source_note),
+            ("audit_count", str(len(rows))),
+            ("licence", "Open Government Licence - Canada"),
+        ]:
+            con.execute("INSERT INTO meta VALUES (?, ?)", (k, v))
+        con.commit()
+    finally:
+        con.close()
+    swap_into_place(tmp_path, db_path)
     return len(rows)
 
 
-def show_extremes(n: int = 10) -> None:
-    con = sqlite3.connect(DB_PATH)
+def show_extremes(n: int = 10, db_path: Path = DB_PATH) -> None:
+    con = sqlite3.connect(db_path)
     print("\n=== HIGHEST it_score (should read as IT/systems/digital audits) ===")
     for title, sc, dept, dt in con.execute("""
         SELECT title, it_score, department, doc_type FROM audits
@@ -252,9 +262,26 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", type=Path, default=DEFAULT_PROFILE)
-    ap.add_argument("--max-audits", type=int, default=400)
+    # default=None, not 400, so we can tell "user asked for a subset" apart from
+    # "full run". Passing it at all is a sampling run and redirects the output.
+    ap.add_argument(
+        "--max-audits", type=int, default=None,
+        help=f"Cap the API pull (full run: {FULL_MAX_AUDITS}). Passing this "
+             "redirects output to a .sample DB unless --db is also given.",
+    )
     ap.add_argument("--show-extremes", action="store_true")
+    ap.add_argument(
+        "--db", type=Path, default=None,
+        help=f"Output DB path (default {DB_PATH}).",
+    )
     args = ap.parse_args()
+
+    max_audits = args.max_audits if args.max_audits is not None else FULL_MAX_AUDITS
+    db_path = output_path(
+        DB_PATH, args.db,
+        f"--max-audits {args.max_audits} pulls a subset, not the full corpus"
+        if args.max_audits is not None else None,
+    )
 
     criteria = parse_profile(args.profile)
     themes = criteria.get("oag_themes") or {}
@@ -263,7 +290,7 @@ def main():
     print(f"IT-audit theme: {len(it_ex)} examples | non-IT: {len(nonit_ex)} examples")
 
     print(f"Fetching OAG datasets from CKAN API (org={ORG})...")
-    records = fetch_oag(args.max_audits)
+    records = fetch_oag(max_audits)
     print(f"Fetched {len(records)} datasets")
     if not records:
         sys.stderr.write(f"CKAN returned no datasets for organization:{ORG}.\n")
@@ -290,10 +317,10 @@ def main():
                         batch_size=64)
     scores = [round(float(e @ it_vec - e @ nonit_vec), 4) for e in embs]
 
-    n = build_db(records, scores, API, cols, res_cols)
-    print(f"\nWrote {n} audits to {DB_PATH} ({DB_PATH.stat().st_size/1e6:.1f} MB)")
+    n = build_db(records, scores, API, cols, res_cols, db_path)
+    print(f"\nWrote {n} audits to {db_path} ({db_path.stat().st_size/1e6:.1f} MB)")
     if args.show_extremes:
-        show_extremes()
+        show_extremes(db_path=db_path)
     print("\nAttribution: contains information licensed under the "
           "Open Government Licence - Canada.")
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -97,6 +98,50 @@ def resolve_columns(
         )
         sys.exit(2)
     return resolved
+
+
+# ---------------------------------------------------------------------------
+# Output safety — shared by every ingest script
+# ---------------------------------------------------------------------------
+
+def output_path(default_path: Path, explicit: Path | None,
+                sampling_reason: str | None) -> Path:
+    """
+    Decide where an ingest writes, keeping sampling runs off the real database.
+
+    A flag whose purpose is to spot-check the pipeline on a subset must not be
+    able to replace the corpus the rest of the repo reads. `--max-audits 20`
+    truncated a 364-row oag.db to 20; `--source <trimmed csv>` emptied a
+    33,196-row contracts.db. Both "worked" — they just destroyed the real data
+    on the way. Sampling now redirects to a sibling .sample path, and
+    overwriting the committed database takes an explicit --db.
+    """
+    if explicit is not None:
+        return Path(explicit)
+    if not sampling_reason:
+        return default_path
+    sample = default_path.with_name(default_path.stem + ".sample" + default_path.suffix)
+    print(
+        f"SAMPLING RUN ({sampling_reason}).\n"
+        f"  Writing to     {sample}\n"
+        f"  Leaving intact {default_path}\n"
+        f"  Pass --db {default_path} to overwrite the real one deliberately."
+    )
+    return sample
+
+
+def swap_into_place(tmp_path: Path, final_path: Path) -> None:
+    """
+    Publish a finished database over the previous one, atomically.
+
+    Every ingest used to unlink its output and then build in place, so anything
+    that failed in between — a schema mismatch, a dropped connection, a bad row
+    — left no database at all. Building to a .part file and swapping at the end
+    means a failed run leaves the previous good data exactly where it was.
+    os.replace is atomic on Windows and POSIX alike for files.
+    """
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path.replace(final_path)
 
 
 # ---------------------------------------------------------------------------
@@ -347,10 +392,54 @@ def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict) -> None:
     import chromadb
     from chromadb.utils import embedding_functions
 
-    # Wipe the old DB — we want a clean snapshot, not accumulated cruft
+    # We want a clean snapshot, not accumulated cruft — but the old corpus is
+    # moved ASIDE rather than deleted, so a failure part-way through the build
+    # doesn't leave us with nothing.
+    #
+    # Why aside rather than the usual build-to-temp-and-rename: ChromaDB holds
+    # OS-level handles on its directory for the life of the client, so renaming
+    # a freshly built temp directory into place fails on Windows with
+    # PermissionError (verified). Renaming the OLD directory works, because
+    # nothing has it open yet.
+    retired = None
     if db_path.exists():
-        import shutil
-        shutil.rmtree(db_path)
+        retired = db_path.with_name(db_path.name + ".old")
+        if retired.exists():
+            shutil.rmtree(retired)
+        db_path.rename(retired)
+
+    try:
+        _write_chroma(df, db_path, cols)
+    except BaseException:
+        if retired is not None:
+            # Best effort: clear whatever partial exists and put the old corpus
+            # back. ChromaDB may still hold handles on a partial build, in which
+            # case the cleanup fails and we hand the user the two paths instead
+            # of pretending we recovered.
+            shutil.rmtree(db_path, ignore_errors=True)
+            if not db_path.exists():
+                retired.rename(db_path)
+                sys.stderr.write(
+                    f"\nIngest failed. Your previous corpus has been restored:\n"
+                    f"  {db_path}\n"
+                )
+            else:
+                sys.stderr.write(
+                    f"\nIngest failed. Your previous corpus was NOT deleted:\n"
+                    f"  {retired}\n"
+                    f"An incomplete build is at {db_path} and is still held open by\n"
+                    f"ChromaDB, so this process cannot swap the old one back itself.\n"
+                    f"To restore:  rm -rf {db_path} && mv {retired} {db_path}\n"
+                )
+        raise
+    if retired is not None:
+        shutil.rmtree(retired, ignore_errors=True)
+
+
+def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict) -> None:
+    """Embed and write. Split out so build_chroma owns the rollback logic."""
+    import chromadb
+    from chromadb.utils import embedding_functions
 
     client = chromadb.PersistentClient(path=str(db_path))
     embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -420,7 +509,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE)
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument(
+        "--db", type=Path, default=None,
+        help=f"Output corpus path (default {DEFAULT_DB}). Pointing --cache at a "
+             "non-default CSV redirects output to a .sample path unless this is "
+             "given, so a spot-check can't replace the real corpus.",
+    )
     parser.add_argument("--force", action="store_true", help="Re-download CSV even if cached")
     parser.add_argument(
         "--extract-values",
@@ -434,6 +528,12 @@ def main():
     if not args.profile.exists():
         print(f"Profile not found: {args.profile}", file=sys.stderr)
         sys.exit(1)
+
+    db_path = output_path(
+        DEFAULT_DB, args.db,
+        f"--cache points at {args.cache}, not the default"
+        if args.cache != DEFAULT_CACHE else None,
+    )
 
     criteria = parse_profile(args.profile)
     print(f"Profile: {args.profile}")
@@ -455,7 +555,7 @@ def main():
         print("\nNo tenders passed the filter. Loosen your criteria.", file=sys.stderr)
         sys.exit(1)
 
-    build_chroma(df, args.db, cols)
+    build_chroma(df, db_path, cols)
     print("\nDone. Claude Code can now search this corpus via scripts/tender_tools.py")
 
 
