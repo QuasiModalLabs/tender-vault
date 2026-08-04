@@ -326,6 +326,85 @@ def resolve_department(name: str) -> dict:
 
 
 @mcp.tool()
+def department_dossier(department: str, months_min: int = 6, months_max: int = 24,
+                       min_value: float = None, limit: int = 10) -> dict:
+    """
+    Everything all four sources know about one department, in one call.
+
+    The convergence view, and the reason the other four tools share a department
+    identifier. Each signal is useful alone; the payoff is when they line up —
+    the Auditor General flagged a department, its own plan says it intends to
+    modernize that system, and the incumbent's contract expires in five months.
+    That is about as strong a pre-RFP case as public data produces.
+
+    THIS TOOL DOES NOT SCORE. There is no convergence number, no weighting of
+    the four signals into one figure, and no ranking of departments by it — by
+    design. The four signals are incommensurable, any weighting would be
+    invented, and a single number hides the reasoning that makes the dossier
+    worth reading. Read the four sections and judge. Do not compute a score of
+    your own from them either; say what converges and why, in words.
+
+    TENDERS ARE NOT REQUIRED, and their absence is the most valuable output.
+    A department with an audit finding, a stated plan, an expiring incumbent and
+    NO open tender is the pre-RFP position to act on: the work is coming and
+    nobody has been asked yet. An empty tenders section never weakens the case.
+
+    READING THE SECTIONS.
+
+    audits — direct_findings name the department in the finding itself.
+    bundle_attached are committee briefing packages that cite a report naming
+    it: real scrutiny, weaker evidence, with parent_reports_in_bundle saying how
+    many reports the package covered. Never merge the two lists. Links: use
+    source_url. Anything in report_url_dead is an oag-bvg.gc.ca deep link that
+    no longer resolves — cite it, never present it as a working link.
+
+    plans — `state` says which kind of answer this is. intent_scored is stated
+    forward intent. no_intent_prose means the department files plans but no
+    planning_explanation in any year, so nothing is intent-scored; 16 of 94
+    organizations are in this state including DND, GAC, RCMP, CBSA and SSC, and
+    a `strain` block appears instead, scored from retrospective variance prose.
+    Strain is NOT intent and the two are never ranked against each other.
+    no_prose_at_all means neither field is populated. files_no_plans means the
+    organization files none — a fact about it, not missing data. A
+    boilerplate_note marks one sentence filed against many programs: that is one
+    signal, not many.
+
+    contracts — top vendors by value and, critically, expiry_timeline. An
+    incumbent contract ending in 6-24 months is the most actionable field here.
+
+    tenders — entity_source says how each notice reached this department.
+    'end_user' means it named them as the customer; anything else means they are
+    the contracting entity, attributed via contracting entity with the end user
+    unstated, which for SSC and PSPC often means buying for somebody else.
+    opportunity_kind 'qualification' is a supply arrangement or standing offer —
+    getting onto a vehicle, not work. A null closing_date with a date_note is a
+    sentinel, not a deadline.
+
+    Always check identity.records_folded_in before quoting a total. Where a
+    predecessor or absorbed organization is folded in, the registry's note says
+    what the figure actually covers.
+
+    Args:
+        department: Canonical key from org_aliases.yaml (ssc, ircc, dnd) or an
+                    organization's registered name. Exact after normalization —
+                    substrings are refused. Call resolve_department if unsure.
+        months_min: Expiry window opens this many months out (default 6).
+        months_max: Expiry window closes this many months out (default 24).
+        min_value: Value floor for the expiry timeline. Defaults to
+                   expiry_min_value from the company profile.
+        limit: Rows per section (default 10).
+
+    Returns:
+        identity, audits, plans, contracts and tenders, each with a `state`
+        saying which kind of empty it is when it is empty.
+    """
+    args = SimpleNamespace(department=department, months_min=months_min,
+                           months_max=months_max, min_value=min_value,
+                           limit=limit)
+    return tender_tools.cmd_department_dossier(args)
+
+
+@mcp.tool()
 def list_parked() -> dict:
     """
     List tenders in the parked folder, with their revisit triggers.

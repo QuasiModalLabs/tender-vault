@@ -37,11 +37,62 @@ All tools are Python scripts in `scripts/tender_tools.py`. Run them via `python 
 - `list-parked` — List parked tenders with their revisit triggers.
 - `contracts-intel <keyword> [--department KEY]` — Outcome intelligence from Canada's Proactive Publication of Contracts dataset: who won similar contracts, from which departments, at what values. Pure SQLite, instant. Use it when evaluating a promoted tender (check incumbents and typical values before writing a fit assessment) or when I ask about the competitive landscape. Always mention the as_of date; the data is unaudited and vendor names aren't normalized, so treat it as directional. If it errors that the DB isn't built, tell me to run `python scripts/contracts_ingest.py`.
 - `resolve-department <name>` — What a department string actually means. Use it BEFORE the signal tools when a name is uncertain, so you can tell "no signal for this department" apart from "that isn't a department."
+- `dossier <department>` — Everything all four sources know about one department, in one call: audits, plans, contracts, open tenders. The convergence view. It assembles and presents; it does **not** score, and neither should you — see below.
 - `promote <tender_id>` — Copy a tender from ChromaDB into `watching/`.
 - `park <filename> <reason> <revisit_when>` — Move a watching tender to `parked/`. Requires both a reason and a concrete trigger event.
 - `archive <filename> <reason>` — Move a tender (from watching/ or parked/) to `archived/`. Final.
 
 Run `python scripts/tender_tools.py --help` for exact syntax.
+
+### Reading a department dossier
+
+`dossier <department>` is what the four signal tools were built toward. One
+query, four sources, one canonical key.
+
+**There is no score in it, and you should not compute one.** The four signals are
+incommensurable; any weighting would be invented, and a single number hides the
+reasoning that makes the dossier worth reading. Say what converges and why, in
+words — "the AG flagged their IT modernization in 2023, their own plan names the
+same systems, and the incumbent's contract runs out in February" — never
+"convergence: 8/10". This is the whole architecture of the tool.
+
+**Tenders are not required, and their absence is the most valuable case.** A
+department with an audit finding, a stated plan, an expiring incumbent and NO
+open tender is the pre-RFP position worth acting on: the work is coming and
+nobody has been asked yet. An empty tenders section never weakens the case, and
+you should say so out loud rather than treating it as a miss.
+
+Each section carries a `state` saying which kind of empty it is. Read it:
+
+- **audits** — `direct_findings` name the department in the finding itself.
+  `bundle_attached` are briefing packages that cite a report naming it: real
+  scrutiny, weaker evidence, with `parent_reports_in_bundle` saying how many
+  reports the package covered. Never merge the two. For links use `source_url`;
+  anything in `report_url_dead` is an oag-bvg.gc.ca deep link that no longer
+  resolves — cite it, never hand it over as a working link.
+- **plans** — `intent_scored` is stated forward intent. `no_intent_prose` means
+  the department files plans but no `planning_explanation` in any year, so
+  nothing is intent-scored; that's 16 of 94 organizations including DND, GAC,
+  RCMP, CBSA and SSC, and a `strain` block appears instead, scored from
+  retrospective variance prose. **Strain is not intent** — never rank them
+  against each other. `no_prose_at_all` means neither field is populated;
+  `files_no_plans` means the organization files none, which is a fact about it
+  rather than missing data. A `boilerplate_note` marks one sentence filed
+  against many programs: that is one signal, not many.
+- **contracts** — top vendors by value, and `expiry_timeline`. An incumbent
+  contract ending in 6-24 months is the most actionable field in the dossier.
+- **tenders** — `entity_source` says how each notice reached this department.
+  `end_user` means it named them as the customer; anything else means they are
+  the contracting entity with the end user unstated, which for SSC and PSPC
+  frequently means they are buying for somebody else. `opportunity_kind`
+  `qualification` is a supply arrangement or standing offer — getting onto a
+  vehicle, not work. A null `closing_date` with a `date_note` is a sentinel, not
+  a deadline.
+
+**Always check `identity.records_folded_in` before quoting a total.** Where a
+predecessor or absorbed organization is folded in, the registry's note says what
+the figure actually covers — an IRCC contract total includes Passport Canada,
+which is one program inside a much larger department.
 
 ### One department identifier, across all four signal tools
 

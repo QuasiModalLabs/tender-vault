@@ -105,19 +105,21 @@ I'm recording that because it's a durable boundary, not a bug to fix later: **th
 
 The provocation idea isn't dead, though — it just needed sources that carry intent and detail. Which is exactly what the plans and audit layers turned out to be.
 
-## What's missing: convergence
+## Convergence
 
-Here's the honest state of the project.
+There are four signals about any given federal department. Each is useful alone. The real payoff is when they **converge** — when the Auditor General has flagged a department, *and* its own plan says it intends to modernize that same system, *and* the incumbent's contract expires in five months. That's about as strong a pre-RFP case as public data can produce, and any live tender from that department should be read in that light.
 
-There are now four signals about any given federal department. Each is useful alone. The real payoff is when they **converge** — when the Auditor General has flagged a department, *and* its own plan says it intends to modernize that same system, *and* the incumbent's contract expires in five months. That's about as strong a pre-RFP case as public data can produce, and any live tender from that department should be read in that light.
+The shape is a department dossier: `dossier ircc` returns everything all four sources know, so a tender stops being an isolated notice and becomes *a tender from the department the AG flagged for processing backlogs, that plans to modernize case management, whose incumbent contract runs out in the spring.*
 
-The intended shape is a department dossier: ask about IRCC and get back everything all four sources know, so a tender stops being an isolated notice and becomes *a tender from the department the AG flagged for processing backlogs, that plans to modernize case management, whose incumbent contract runs out in the spring.*
+Before building it I found out why a naive version wouldn't work, which saved me a bad afternoon: **the four sources name departments differently.** The audits say "Immigration, Refugees and Citizenship Canada." The contracts say "National Defence | Défense nationale." The plans say "Department of Citizenship and Immigration." A naive join returns nothing at all, silently.
 
-It isn't built yet, and I found out why before starting, which saved me a bad afternoon: **the four sources name departments differently.** The audits say "Immigration, Refugees and Citizenship Canada." The contracts say "National Defence | Défense nationale." The plans say "Department of Citizenship and Immigration." A naive join returns nothing at all, silently.
+So convergence needed a name-resolution layer underneath it first, and then the dossier on top — assembling the signals, not scoring them cleverly. The clever weighting is the over-build. I deleted a scoring formula at the start of this project and the dossier still has no score in it: it presents four sections and Claude judges. A number would have hidden the reasoning that makes the thing worth reading.
 
-So convergence needs a name-resolution layer underneath it first, and then the dossier on top — assembling the signals, not scoring them cleverly. The clever weighting is the over-build. Get the assembly working first.
+That layer is `vault/crosswalk/org_aliases.yaml`: one canonical key per organization, and all four signal tools take it, so the same `pspc` works in every one. The audits resolve against it too — a department on an audit is a registry key, not a string an extractor guessed.
 
-That layer is `vault/crosswalk/org_aliases.yaml`: one canonical key per organization, and all four signal tools now take it, so the same `pspc` works in every one. The audits resolve against it too — a department on an audit is a registry key, not a string an extractor guessed.
+**The most valuable dossier has no tender in it.** A department with an audit finding, a stated plan, an expiring incumbent and no open notice is the pre-RFP position the whole project exists to find — the work is coming and nobody has been asked yet. So the tenders section is optional by construction and the dossier renders fully without it.
+
+Three things surfaced while building it that the sections now have to say out loud. **`planning_explanation` is not a statement of intent** — it's an optional note explaining why planned spending moves between years, and 16 of 94 organizations file none at all, including DND, GAC, RCMP, CBSA and SSC. Ranking on it silently returned nothing for the biggest IT buyers in government, so the dossier distinguishes *files no plans* from *files plans with no intent prose* from *no prose of either kind*, and falls back to retrospective strain where it exists, labelled and never ranked against intent. **One sentence filed against six programs is one signal, not six** — departments paste a single FTE explanation across an entire inventory, 384 such groups government-wide, so replicated prose is shown once and counted. And **`oag-bvg.gc.ca` deep links are dead**; 214 of 364 audit records carry one, so the dossier links to the CKAN dataset instead and keeps the old URL as citation text.
 
 Two things that cost me time and are worth writing down. **An audit rarely has one department.** Half the audits that name any name several — ArriveCAN audited CBSA, PHAC and PSPC together — so attribution is a join table, and keeping the first match threw away half the signal. And **most of the OAG corpus audits nobody.** Of 364 records only ~110 examine a federal department; the rest are committee briefing packages, the OAG's own quarterly financials, Crown corporation examinations and territorial audits. Counting those as unattributed invented a 62% coverage gap that was never real. The honest number is 91% of the federal audits, and the corpus total is not a number worth quoting.
 
@@ -185,7 +187,7 @@ Fresh data arrives on its own — a GitHub Action re-runs the tender ingest ever
 
 ## What comes next
 
-- **The department dossier**, on top of a name-resolution layer. The most important remaining piece — it's what reconnects all this intelligence back to actually spotting a bid.
+- **A department-level tender index.** The dossier reads the open-notice feed directly and resolves entity names per query, which is fine at 896 notices and won't be at ten thousand. The attribution belongs at ingest, next to where the audits already write theirs.
 - **A pre-mortem command.** For any tender under serious consideration: *assume we bid and lost, or won and regretted it — walk backwards and tell me why.* One adversarial pass against my own enthusiasm before committing. This is the surviving core of a multi-persona "steering committee" feature I cut mid-build; the personas changed tone without changing reasoning, but the skepticism they were reaching for is real.
 - **A profile refinement loop.** Quarterly, read across everything watched, parked, and archived, and propose profile edits based on revealed preference. One structural catch to design around: the vault only knows about tenders that survived the filter, so it can improve precision but is blind to recall. It has to be paired with an audit that samples what the filter *rejected*.
 - **Similarity drift.** Flag a new tender that closely resembles one archived as a loss.
