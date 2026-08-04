@@ -113,9 +113,13 @@ There are now four signals about any given federal department. Each is useful al
 
 The intended shape is a department dossier: ask about IRCC and get back everything all four sources know, so a tender stops being an isolated notice and becomes *a tender from the department the AG flagged for processing backlogs, that plans to modernize case management, whose incumbent contract runs out in the spring.*
 
-It isn't built yet, and I found out why before starting, which saved me a bad afternoon: **the four sources name departments differently.** The audits say "Immigration, Refugees and Citizenship." The contracts say "National Defence | Défense nationale." The plans say "Department of Citizenship and Immigration." A naive join returns nothing at all, silently.
+It isn't built yet, and I found out why before starting, which saved me a bad afternoon: **the four sources name departments differently.** The audits say "Immigration, Refugees and Citizenship Canada." The contracts say "National Defence | Défense nationale." The plans say "Department of Citizenship and Immigration." A naive join returns nothing at all, silently.
 
 So convergence needs a name-resolution layer underneath it first, and then the dossier on top — assembling the signals, not scoring them cleverly. The clever weighting is the over-build. Get the assembly working first.
+
+That layer is `vault/crosswalk/org_aliases.yaml`: one canonical key per organization, and all four signal tools now take it, so the same `pspc` works in every one. The audits resolve against it too — a department on an audit is a registry key, not a string an extractor guessed.
+
+Two things that cost me time and are worth writing down. **An audit rarely has one department.** Half the audits that name any name several — ArriveCAN audited CBSA, PHAC and PSPC together — so attribution is a join table, and keeping the first match threw away half the signal. And **most of the OAG corpus audits nobody.** Of 364 records only ~110 examine a federal department; the rest are committee briefing packages, the OAG's own quarterly financials, Crown corporation examinations and territorial audits. Counting those as unattributed invented a 62% coverage gap that was never real. The honest number is 91% of the federal audits, and the corpus total is not a number worth quoting.
 
 ## What I know is wrong with it
 
@@ -175,8 +179,9 @@ Fresh data arrives on its own — a GitHub Action re-runs the tender ingest ever
 3. [`scripts/tender_tools.py`](scripts/tender_tools.py) — the retrieval layer, and the clean line between retrieval and reasoning.
 4. [`scripts/plans_ingest.py`](scripts/plans_ingest.py) — the two-pole scoring technique, with the docstring explaining why the forward-looking field beats the retrospective one.
 5. [`scripts/contracts_ingest.py`](scripts/contracts_ingest.py) — streaming filter over millions of rows into SQLite; the design notes are in the module docstring.
-6. [`scripts/oag_ingest.py`](scripts/oag_ingest.py) — the audit pull, relevance scoring, and department tagging.
-7. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how data stays fresh without me remembering.
+6. [`scripts/oag_ingest.py`](scripts/oag_ingest.py) — the audit pull, relevance scoring, and department attribution.
+7. [`scripts/org_resolve.py`](scripts/org_resolve.py) — resolving organizations named in free text against the registry, and the one department identifier every signal tool takes.
+8. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how data stays fresh without me remembering.
 
 ## What comes next
 
