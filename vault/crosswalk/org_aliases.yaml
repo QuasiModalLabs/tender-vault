@@ -651,7 +651,13 @@ mechanical:
         relation: same
     infobase: 133
     name: National Defence
-    observed_names: []
+    observed_names:
+      # The audits name the FORCES, not the department, when the subject is
+      # recruitment or housing — "whether the Canadian Armed Forces recruited
+      # and trained the members it needed". Strictly the CAF is the military
+      # and DND the department that supports it; the audit text does not
+      # observe that distinction and neither does the contracts file.
+      - Canadian Armed Forces                              # [oag]
     not: []
 
   dfo:
@@ -660,7 +666,12 @@ mechanical:
         relation: same
     infobase: 125
     name: Fisheries and Oceans Canada
-    observed_names: []
+    observed_names:
+      # The Coast Guard is a special operating agency INSIDE Fisheries and
+      # Oceans, and both sources name it directly — 23 tender rows contract
+      # under it. Contracts and audits reaching this key through the Coast
+      # Guard are about one part of the department, not all of it.
+      - Canadian Coast Guard                               # [oag] [tender]
     not: []
 
   csc:
@@ -669,7 +680,13 @@ mechanical:
         relation: same
     infobase: 117
     name: Correctional Service of Canada
-    observed_names: []
+    observed_names:
+      # The registry name carries an interior "of" that the audit text never
+      # uses, and OAG is not consistent with itself about the plural either.
+      # Both forms appear; normalization does not reorder or drop interior
+      # tokens, so neither reaches this key without being written down.
+      - Correctional Service Canada                        # [oag] 3 records
+      - Correctional Services Canada                       # [oag] 1 record
     not: []
 
   nrc:
@@ -993,7 +1010,10 @@ mechanical:
         relation: same
     infobase: 237
     name: "Department of Housing, Infrastructure and Communities"
-    observed_names: []
+    observed_names:
+      # The department was Infrastructure Canada until the 2023 housing
+      # rename, and the audits — which predate it — use the old applied name.
+      - Infrastructure Canada                              # [oag]
     not: []
 
   parole-board:
