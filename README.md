@@ -48,7 +48,7 @@ So I went looking for what happens earlier. Three more public datasets, each ans
 |---|---|---|
 | What's being asked for? | CanadaBuys tender notices | The live opportunity feed |
 | Who actually won? | Proactive contract disclosure | Incumbents, market size, expiry dates |
-| What do they intend to change? | Departmental Plans | Modernization plans, in the department's own words |
+| What do they intend to change? | Departmental Plans | Stated spending intent, where a department files the prose |
 | What have they been caught failing at? | Auditor General audits | Independent public criticism — the thing that forces a procurement |
 
 Read in order, those move steadily earlier in time: from *an RFP is open now*, back through *an RFP is predictably coming*, to *here are the conditions that will produce one*.
@@ -56,23 +56,23 @@ Read in order, those move steadily earlier in time: from *an RFP is open now*, b
 The last one is the most useful and the least obvious. When the Auditor General publicly reports that a department's systems are failing, that department is going to spend money. It's the most citable pre-RFP signal there is, because it's an independent authority saying the quiet part in public.
 
 ```
-  OPPORTUNITY         OUTCOME            INTENT            SCRUTINY
- what's asked        who won          what's planned    what's flagged
-      │                  │                  │                  │
- CanadaBuys       Proactive contract   Departmental      Auditor General
- tender feed        disclosure            Plans              audits
-      │                  │                  │                  │
-      ▼                  ▼                  ▼                  ▼
- filter to your    filter, dedupe,    score for         score for
- profile, embed    aggregate by       modernization     IT relevance,
- for search        procurement        intent            tag department
-      │                  │                  │                  │
-      └────────┬─────────┴─────────┬────────┴─────────┬────────┘
-               ▼                   ▼                  ▼
-      ┌──────────────────────────────────────────────────┐
-      │  Claude — reads the vault, calls the tools,      │
-      │  and does the actual thinking                    │
-      └──────────────────────────────────────────────────┘
+ OPPORTUNITY         OUTCOME            INTENT            SCRUTINY
+what's asked        who won          what's planned    what's flagged
+     │                  │                  │                  │
+CanadaBuys       Proactive contract   Departmental      Auditor General
+tender feed        disclosure            Plans              audits
+     │                  │                  │                  │
+     ▼                  ▼                  ▼                  ▼
+filter to your    filter, dedupe,    score for         score for
+profile, embed    aggregate by       modernization     IT relevance,
+for search        procurement        intent            tag department
+     │                  │                  │                  │
+     └────────┬─────────┴─────────┬────────┴─────────┬────────┘
+              ▼                   ▼                  ▼
+     ┌──────────────────────────────────────────────────┐
+     │  Claude — reads the vault, calls the tools,      │
+     │  and does the actual thinking                    │
+     └──────────────────────────────────────────────────┘
 ```
 
 Two storage choices worth explaining, because they're the same decision made twice in opposite directions.
@@ -85,13 +85,15 @@ Plans and audits sit in between: prose with structure. Their text gets scored on
 
 ## Does the pre-RFP idea actually work?
 
-The hypothesis was: a department that *says* it plans to modernize something will, later, buy that thing.
+The hypothesis was that a department which says it plans to modernize something will, later, buy that thing.
 
-Testing it was the point at which this stopped feeling like architecture and started feeling like a tool. Claude found a stated modernization intent in a 2019 departmental plan, cross-referenced it against the contracts database, and surfaced the matching award two years later. The chain held.
+Testing it was the point where this stopped feeling like architecture and started feeling like a tool. Claude found a stated modernization intent in a 2019 departmental plan, checked it against the contracts database, and surfaced the matching award two years later. The chain held.
 
-That test also broke the first version of the feature. My initial pass had scored the *retrospective* explanation field — how last year's spending differed from plan. Claude's own critique of the output pointed out that the field had effectively died after 2019, so the tool was ranking six-year-old archaeology and, worse, scoring genuine IT modernizations *negatively*. Pivoting to the forward-looking planning field fixed it. Finding the live data resource — which runs through 2025-26, where the CSV I'd started from appeared frozen at 2021 — made it current rather than historical.
+The same test broke the first version of the feature. My initial pass scored the retrospective explanation field, which describes how last year's spending differed from plan. Claude's critique of the output pointed out that the field had effectively died after 2019, so the tool was ranking six-year-old archaeology and scoring genuine IT modernizations negatively. Pivoting to the forward-looking planning field fixed that. Finding the live data resource, which runs through 2025-26 where the CSV I started from appeared frozen at 2021, made it current rather than historical.
 
-The audit layer validates the same way. Its top-ranked results are real and recognizable: *Modernizing Information Technology Systems*, *Combatting Cybercrime*, *Cybersecurity in the Cloud*. Shared Services Canada — the federal government's IT department — recurs again and again. That's not a bug in the ranking. That's the finding.
+The answer to the heading is more qualified than I expected. `planning_explanation` is not a statement of intent. It is an optional note explaining why planned spending moved between years, and sixteen of ninety-four organizations file none at all. Those sixteen include National Defence, Global Affairs, the RCMP, CBSA and Shared Services Canada. Ranking on that field returned nothing for the largest IT buyers in government, and reported it in language that sounded like an absence of intent rather than an absence of prose. Where departments do file it, one sentence is often pasted across an entire program inventory. There are 384 such groups government-wide, so six scored programs can be one signal counted six times.
+
+The audit layer holds up better. Its top-ranked results are recognizable: *Modernizing Information Technology Systems*, *Combatting Cybercrime*, *Cybersecurity in the Cloud*. Shared Services Canada, the federal government's IT department, recurs throughout.
 
 ## The failure worth recording
 
@@ -99,7 +101,7 @@ I also tried to mine the contracts data for two things that would have been genu
 
 The first was **re-compete churn**: departments that keep cycling through vendors on the same capability, which would mark them as winnable. The second was **process provocations**: reading how a department currently does something and proposing a better way, unprompted.
 
-Neither is possible with this data, because federal contracts describe work as coarse procurement categories — "Information technology and telecommunications consultants" — and nothing else. A $585 million contract is described in fifty-seven characters. There is no process to interrogate and no capability to track churn on. The category is a spending bucket, not a requirement.
+Neither is possible with this data, because federal contracts describe work as coarse procurement categories — "Information technology and telecommunications consultants" — and nothing else. A $585 million contract is described in fifty-seven characters. There is no process to interrogate and no capability to track churn on.
 
 I'm recording that because it's a durable boundary, not a bug to fix later: **this dataset is good for *who won what, roughly* and useless for *what is actually happening*.** Every future idea gets tested against that line.
 
@@ -113,15 +115,15 @@ The shape is a department dossier: `dossier ircc` returns everything all four so
 
 Before building it I found out why a naive version wouldn't work, which saved me a bad afternoon: **the four sources name departments differently.** The audits say "Immigration, Refugees and Citizenship Canada." The contracts say "National Defence | Défense nationale." The plans say "Department of Citizenship and Immigration." A naive join returns nothing at all, silently.
 
-So convergence needed a name-resolution layer underneath it first, and then the dossier on top — assembling the signals, not scoring them cleverly. The clever weighting is the over-build. I deleted a scoring formula at the start of this project and the dossier still has no score in it: it presents four sections and Claude judges. A number would have hidden the reasoning that makes the thing worth reading.
+So convergence needed a name-resolution layer underneath it first, and then the dossier on top — assembling the signals, not scoring them cleverly. I deleted a scoring formula at the start of this project and the dossier still has no score in it: it presents four sections and Claude judges. A number would have hidden the reasoning that makes the thing worth reading.
 
 That layer is `vault/crosswalk/org_aliases.yaml`: one canonical key per organization, and all four signal tools take it, so the same `pspc` works in every one. The audits resolve against it too — a department on an audit is a registry key, not a string an extractor guessed.
 
 **The most valuable dossier has no tender in it.** A department with an audit finding, a stated plan, an expiring incumbent and no open notice is the pre-RFP position the whole project exists to find — the work is coming and nobody has been asked yet. So the tenders section is optional by construction and the dossier renders fully without it.
 
-Three things surfaced while building it that the sections now have to say out loud. **`planning_explanation` is not a statement of intent** — it's an optional note explaining why planned spending moves between years, and 16 of 94 organizations file none at all, including DND, GAC, RCMP, CBSA and SSC. Ranking on it silently returned nothing for the biggest IT buyers in government, so the dossier distinguishes *files no plans* from *files plans with no intent prose* from *no prose of either kind*, and falls back to retrospective strain where it exists, labelled and never ranked against intent. **One sentence filed against six programs is one signal, not six** — departments paste a single FTE explanation across an entire inventory, 384 such groups government-wide, so replicated prose is shown once and counted. And **`oag-bvg.gc.ca` deep links are dead**; 214 of 364 audit records carry one, so the dossier links to the CKAN dataset instead and keeps the old URL as citation text.
+Two findings about the audits cost me a day. An audit rarely has one department: half of those that name any name several, and ArriveCAN audited CBSA, PHAC and PSPC together, so attribution had to become a join table. Keeping the first match threw away half the signal.
 
-Two things that cost me time and are worth writing down. **An audit rarely has one department.** Half the audits that name any name several — ArriveCAN audited CBSA, PHAC and PSPC together — so attribution is a join table, and keeping the first match threw away half the signal. And **most of the OAG corpus audits nobody.** Of 364 records only ~110 examine a federal department; the rest are committee briefing packages, the OAG's own quarterly financials, Crown corporation examinations and territorial audits. Counting those as unattributed invented a 62% coverage gap that was never real. The honest number is 91% of the federal audits, and the corpus total is not a number worth quoting.
+The second is that most of the OAG corpus audits nobody. Of 364 records, about 110 examine a federal department. The rest are committee briefing packages, the Auditor General's own quarterly financials, Crown corporation examinations and territorial audits. Counting those as unattributed invented a 62% coverage gap that was never real. The figure worth quoting is 91% of the federal audits.
 
 ## What I know is wrong with it
 
@@ -134,6 +136,8 @@ Two things that cost me time and are worth writing down. **An audit rarely has o
 **Contract value extraction is crude by default.** The ingest grabs the first dollar figure in a description, which sometimes catches a bond amount or an insurance minimum instead. An optional flag replaces it with a model-based extraction pass, but that needs an API key, so the dumb version stays the default and the repo stays runnable with no credentials.
 
 **The contracts data is directional, not exact.** It's unaudited, vendor names are only lightly normalized (near-variants may still count separately), reporting lags about a quarter, and contract amendments are aggregated per procurement family using the highest recorded value — which avoids double-counting but under-represents families that straddle the date window.
+
+**The Auditor General's own deep links are dead.** 214 of the 364 audit records carry an `oag-bvg.gc.ca` URL that now serves an error page under an HTTP 200, so nothing about it fails loudly. The dossier links to the CKAN dataset instead and keeps the original URL as citation text.
 
 **Promoted tenders can drift.** Promoting copies the description into a markdown file. If CanadaBuys amends the notice afterwards, the copy doesn't know. Amendments are rare in practice.
 
@@ -179,11 +183,12 @@ Fresh data arrives on its own — a GitHub Action re-runs the tender ingest ever
 1. [`vault/CLAUDE.md`](vault/CLAUDE.md) — the agent's instructions. The most important design document in the repo; everything else is plumbing.
 2. [`vault/profiles/my-company.md`](vault/profiles/my-company.md) — how user context is stored.
 3. [`scripts/tender_tools.py`](scripts/tender_tools.py) — the retrieval layer, and the clean line between retrieval and reasoning.
-4. [`scripts/plans_ingest.py`](scripts/plans_ingest.py) — the two-pole scoring technique, with the docstring explaining why the forward-looking field beats the retrospective one.
-5. [`scripts/contracts_ingest.py`](scripts/contracts_ingest.py) — streaming filter over millions of rows into SQLite; the design notes are in the module docstring.
-6. [`scripts/oag_ingest.py`](scripts/oag_ingest.py) — the audit pull, relevance scoring, and department attribution.
-7. [`scripts/org_resolve.py`](scripts/org_resolve.py) — resolving organizations named in free text against the registry, and the one department identifier every signal tool takes.
-8. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how data stays fresh without me remembering.
+4. [`vault/crosswalk/org_aliases.yaml`](vault/crosswalk/org_aliases.yaml) — the department registry. Ninety-odd hand-checked assertions about what the Government of Canada calls itself.
+5. [`scripts/org_resolve.py`](scripts/org_resolve.py) — resolving organizations named in free text against that registry, and the one department identifier every signal tool takes.
+6. [`scripts/plans_ingest.py`](scripts/plans_ingest.py) — the two-pole scoring technique, with the docstring explaining why the forward-looking field beats the retrospective one.
+7. [`scripts/contracts_ingest.py`](scripts/contracts_ingest.py) — streaming filter over millions of rows into SQLite; the design notes are in the module docstring.
+8. [`scripts/oag_ingest.py`](scripts/oag_ingest.py) — the audit pull, relevance scoring, and department attribution.
+9. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how data stays fresh without me remembering.
 
 ## What comes next
 
