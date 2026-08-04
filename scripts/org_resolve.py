@@ -230,6 +230,45 @@ class AmbiguousOrganization(Exception):
         self.value, self.keys = value, keys
 
 
+CROSSWALK_DB = Path(__file__).parent.parent / "data" / "crosswalk.db"
+
+
+def department_scope(key: str) -> dict[str, list]:
+    """
+    What one canonical key means in each source database.
+
+    The other two datasets do not store canonical keys — plans.db has the
+    Infobase organization_id and contracts.db has the CKAN slug — so a
+    department filter has to be translated per source. crosswalk.db already
+    holds that mapping, and using it keeps every tool joining on an ID rather
+    than comparing display names, which is the whole reason the crosswalk was
+    built.
+
+    Returns empty lists when the crosswalk has not been built or the key has no
+    presence in a source. An organization that files plans but publishes no
+    contracts is a real case, not an error.
+    """
+    scope = {"plan_ids": [], "contract_slugs": []}
+    if not CROSSWALK_DB.exists():
+        return scope
+    import sqlite3
+    con = sqlite3.connect(CROSSWALK_DB)
+    try:
+        for plan_id, slug in con.execute(
+            "SELECT plan_organization_id, contract_owner_org FROM org_crosswalk "
+            "WHERE canonical_key = ?", (key,)
+        ):
+            if plan_id is not None and plan_id not in scope["plan_ids"]:
+                scope["plan_ids"].append(plan_id)
+            if slug and slug not in scope["contract_slugs"]:
+                scope["contract_slugs"].append(slug)
+    except sqlite3.OperationalError:
+        return scope
+    finally:
+        con.close()
+    return scope
+
+
 _DEFAULT: OrgResolver | None = None
 
 

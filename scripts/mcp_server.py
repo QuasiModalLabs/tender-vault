@@ -132,7 +132,7 @@ def promote(tender_id: str) -> dict:
 
 
 @mcp.tool()
-def contracts_intel(query: str) -> dict:
+def contracts_intel(query: str, department: str = None) -> dict:
     """
     Competitive intelligence from Canada's Proactive Publication of Contracts
     dataset: who actually WON contracts like this, from which departments, at
@@ -150,18 +150,22 @@ def contracts_intel(query: str) -> dict:
     Args:
         query: A keyword to match against contract descriptions
                (e.g. "cloud", "migration", "cybersecurity").
+        department: Canonical key from org_aliases.yaml (pspc, ircc, dnd) or an
+                    organization's registered name — the SAME identifier
+                    oag_signals and program_signals take, which is what makes
+                    convergence across the three a real join (optional).
 
     Returns:
         Dict with families count, total/median values, top_vendors,
         top_departments, recent_examples, as_of, and caveats.
     """
-    args = SimpleNamespace(query=query)
+    args = SimpleNamespace(query=query, department=department)
     return tender_tools.cmd_contracts_intel(args)
 
 
 @mcp.tool()
 def expiring_contracts(months_min: int = 6, months_max: int = 24,
-                       min_value: float = None) -> dict:
+                       min_value: float = None, department: str = None) -> dict:
     """
     Contracts expiring in a window — near-certain future re-procurements.
 
@@ -178,13 +182,16 @@ def expiring_contracts(months_min: int = 6, months_max: int = 24,
         months_min: Earliest expiry, months from now (default 6).
         months_max: Latest expiry, months from now (default 24).
         min_value: Minimum contract value; None reads the profile default.
+        department: Canonical key from org_aliases.yaml or an organization's
+                    registered name — the same identifier the other signal
+                    tools take (optional).
 
     Returns:
         Dict with expiring count, window, min_value, and per-contract incumbent,
         department, value, expiry, months_until_expiry, description.
     """
     args = SimpleNamespace(months_min=months_min, months_max=months_max,
-                           min_value=min_value)
+                           min_value=min_value, department=department)
     return tender_tools.cmd_expiring_contracts(args)
 
 
@@ -216,7 +223,9 @@ def program_signals(department: str = None, min_score: float = None,
     A lead list, not a forecast.
 
     Args:
-        department: Restrict to departments matching this substring (optional).
+        department: Canonical key from org_aliases.yaml (pspc, ircc, dnd) or an
+                    organization's registered name. Exact — substrings are
+                    refused. Call resolve_department first if unsure (optional).
         min_score: Only programs with intent_score at or above this (default:
                    no floor — real leads can score slightly negative).
         exclude_internal: Exclude Internal Services programs (default False —
@@ -235,7 +244,8 @@ def program_signals(department: str = None, min_score: float = None,
 
 @mcp.tool()
 def oag_signals(department: str = None, min_score: float = None,
-                doc_type: str = None, since: int = None, limit: int = 20) -> dict:
+                doc_type: str = None, since: int = None, limit: int = 20,
+                vendor: str = None, direct_only: bool = False) -> dict:
     """
     OAG performance audits touching IT/systems — the independent-scrutiny pre-RFP
     signal, and the third leg of the convergence.
@@ -247,27 +257,72 @@ def oag_signals(department: str = None, min_score: float = None,
     scrutiny that forces a department to procure a fix.
 
     CONVERGENCE is the intended use: get an audit's department, then call
-    program_signals and expiring_contracts for that same department. When OAG +
-    plans + an expiring contract align on one department, that's the strongest
-    lead — and a live tender from them should rank higher. doc_type separates a
-    performance_audit (the finding) from a committee_hearing (scrutiny before
-    PACP/OGGO). Read report_url for citable specifics. A lead list, not a forecast.
+    program_signals and expiring_contracts with THE SAME canonical key. All four
+    signal tools take one identifier, so a key that works in one works in all.
+
+    READING THE DEPARTMENTS. `departments` are named in the audit itself — half
+    of all audits name more than one, and an audit of six departments is a
+    finding against all six. `inherited_departments` appear on committee
+    briefing packages, which name no department of their own and take them from
+    the report the hearing was about; each carries reports_in_hearing, and a
+    department reached through a five-report agenda is much weaker evidence than
+    one named in the audit. Use direct_only to drop them entirely.
+
+    An audit with neither carries no_department_because, which distinguishes
+    "audited nobody federal" from "we could not tell" — most of this corpus
+    correctly has no department, so an empty list is usually not a gap.
 
     Args:
-        department: Restrict to audits of matching departments (optional).
+        department: Canonical key from org_aliases.yaml (pspc, ircc, dnd) or an
+                    organization's registered name. Exact — substrings are
+                    refused, so "Immigration and Refugee Board" gets the
+                    tribunal and never IRCC. Call resolve_department if unsure.
         min_score: Only audits with it_score at or above this (optional).
         doc_type: performance_audit | committee_hearing | special_examination |
                   financial_audit (optional).
         since: Only audits from this year onward (optional).
         limit: How many to return (default 20).
+        vendor: Audits INTO a named supplier (GCStrategies, McKinsey).
+                Independent of department — these span too many departments to
+                attach to one, but an audit of a firm you bid against is
+                competitive intelligence regardless.
+        direct_only: Only departments named in the audit itself (default False).
 
     Returns:
-        Dict of audits ranked by it_score, each with year, doc_type, department,
-        title, description, report_url; plus as_of and how_to_read.
+        Dict of audits ranked by it_score, each with year, doc_type,
+        departments, inherited_departments, title, description, report_url;
+        plus as_of, per-population coverage, and how_to_read.
     """
     args = SimpleNamespace(department=department, min_score=min_score,
-                           doc_type=doc_type, since=since, limit=limit)
+                           doc_type=doc_type, since=since, limit=limit,
+                           vendor=vendor, direct_only=direct_only)
     return tender_tools.cmd_oag_signals(args)
+
+
+@mcp.tool()
+def resolve_department(name: str) -> dict:
+    """
+    What a department string resolves to, without running a query.
+
+    Use this BEFORE the signal tools when a name is uncertain, so an empty
+    result can be read correctly. "No audits for this department" and "that
+    string is not a department" are very different answers, and every other tool
+    would otherwise return the same empty list for both.
+
+    Resolution is registry-only and exact after normalization, honouring each
+    entry's `not:` exclusions — the same rule all four signal tools apply.
+    Fragments are refused on purpose: substring matching is how one
+    organization's name lands on another's dossier.
+
+    Args:
+        name: A canonical key or an organization name.
+
+    Returns:
+        The canonical key, display name, known aliases, the names it refuses,
+        and which source datasets can answer for it — or `closest` suggestions
+        when nothing resolves.
+    """
+    return tender_tools.cmd_resolve_department(SimpleNamespace(name=name))
 
 
 @mcp.tool()

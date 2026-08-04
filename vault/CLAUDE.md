@@ -35,12 +35,52 @@ All tools are Python scripts in `scripts/tender_tools.py`. Run them via `python 
 - `similar <tender_id> [--n 5]` — Find tenders similar to a given one.
 - `list-watching` — List tenders currently in `watching/`.
 - `list-parked` — List parked tenders with their revisit triggers.
-- `contracts-intel <keyword>` — Outcome intelligence from Canada's Proactive Publication of Contracts dataset: who won similar contracts, from which departments, at what values. Pure SQLite, instant. Use it when evaluating a promoted tender (check incumbents and typical values before writing a fit assessment) or when I ask about the competitive landscape. Always mention the as_of date; the data is unaudited and vendor names aren't normalized, so treat it as directional. If it errors that the DB isn't built, tell me to run `python scripts/contracts_ingest.py`.
+- `contracts-intel <keyword> [--department KEY]` — Outcome intelligence from Canada's Proactive Publication of Contracts dataset: who won similar contracts, from which departments, at what values. Pure SQLite, instant. Use it when evaluating a promoted tender (check incumbents and typical values before writing a fit assessment) or when I ask about the competitive landscape. Always mention the as_of date; the data is unaudited and vendor names aren't normalized, so treat it as directional. If it errors that the DB isn't built, tell me to run `python scripts/contracts_ingest.py`.
+- `resolve-department <name>` — What a department string actually means. Use it BEFORE the signal tools when a name is uncertain, so you can tell "no signal for this department" apart from "that isn't a department."
 - `promote <tender_id>` — Copy a tender from ChromaDB into `watching/`.
 - `park <filename> <reason> <revisit_when>` — Move a watching tender to `parked/`. Requires both a reason and a concrete trigger event.
 - `archive <filename> <reason>` — Move a tender (from watching/ or parked/) to `archived/`. Final.
 
 Run `python scripts/tender_tools.py --help` for exact syntax.
+
+### One department identifier, across all four signal tools
+
+`contracts-intel`, `expiring-contracts`, `program-signals` and `oag-signals` all
+take `--department`, and all take the SAME thing: a canonical key from
+`vault/crosswalk/org_aliases.yaml` (`pspc`, `ircc`, `dnd`) or an organization's
+registered name. That is what makes convergence a real join — the same key works
+in all four, so "OAG flagged them, they plan to modernize it, and the incumbent
+contract expires next year" is one department, not three lookups that might not
+be the same body.
+
+Matching is exact after normalization. Fragments are refused rather than
+guessed, because substring matching is how one department's name lands on
+another's dossier — "Immigration and Refugee Board" is an independent tribunal
+and must never answer to IRCC. If a name doesn't resolve you get an error with
+the closest candidates, not an empty result. Use `resolve-department` to check.
+
+### Reading OAG department attribution
+
+`oag-signals` returns two different things and they are not equally strong:
+
+- **`departments`** — named in the audit itself. Half of all audits name more
+  than one; an audit of six departments is a finding against all six.
+- **`inherited_departments`** — on committee briefing packages, which name no
+  department of their own and take them from the report the hearing was about.
+  Each carries `reports_in_hearing`; one reached through a five-report agenda is
+  much weaker than one named in the audit. Pass `--direct-only` to drop them.
+
+**An empty `departments` is usually not a gap.** Only ~110 of 364 records audit a
+federal department at all — the rest are briefing packages, the OAG's own
+quarterly financials and annual returns, Crown corporation special examinations,
+and territorial audits. Those carry `no_department_because` saying which. Don't
+report them as missing data, and don't quote a single blended coverage number:
+the honest figure is ~91% of federal audits attributed directly.
+
+Two audits carry `vendor_focus` (GCStrategies, McKinsey) instead of a
+department. They're reachable via `--vendor` with no `--department` — an audit
+into a firm we bid against is competitive intelligence regardless of who it
+touches.
 
 ## The core loop — how you should actually work
 

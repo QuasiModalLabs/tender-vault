@@ -31,6 +31,9 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+import org_resolve  # noqa: E402
+
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -445,18 +448,36 @@ def cmd_contracts_intel(args) -> dict:
     meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
     like = f"%{args.query.lower()}%"
 
-    families = con.execute("""
+    # Same department identifier as every other signal tool. The contracts file
+    # stores the CKAN slug, not a canonical key, so the key is translated
+    # through the crosswalk and matched on the slug — an ID join, never a
+    # comparison of display names.
+    dept = org_resolve.resolve_department_arg(getattr(args, "department", None))
+    where = ["(lower(description) LIKE ? OR lower(matched_terms) LIKE ?)"]
+    params: list = [like, like]
+    slugs = org_resolve.department_scope(dept)["contract_slugs"] if dept else []
+    if dept:
+        if not slugs:
+            return {"query": args.query, "department": dept, "families": 0,
+                    "note": f"{dept!r} publishes no contracts under its own slug, "
+                            "so this dataset cannot answer for it. That is a real "
+                            "fact about the organization, not a build failure."}
+        where.append(f"owner_org IN ({','.join('?' * len(slugs))})")
+        params += slugs
+
+    families = con.execute(f"""
         SELECT family_id, vendor, vendor_norm, org, MAX(value) AS v,
                MAX(contract_date) AS d, MAX(period_end) AS pe, description
         FROM contracts
-        WHERE lower(description) LIKE ? OR lower(matched_terms) LIKE ?
+        WHERE {' AND '.join(where)}
         GROUP BY family_id
-    """, (like, like)).fetchall()
+    """, params).fetchall()
     con.close()
 
     if not families:
         return {
             "query": args.query,
+            "department": dept,
             "as_of": meta.get("ingest_date"),
             "families": 0,
             "note": "No matches. Try a broader term; matching is substring over descriptions.",
@@ -474,6 +495,7 @@ def cmd_contracts_intel(args) -> dict:
     recent = sorted(families, key=lambda f: f[5] or "", reverse=True)[:5]
     return {
         "query": args.query,
+        "department": dept,
         "as_of": meta.get("ingest_date"),
         "window_years": meta.get("window_years"),
         "families": len(families),
@@ -557,10 +579,22 @@ def cmd_program_signals(args) -> dict:
     if min_score is not None:
         where.append("intent_score >= ?")
         params.append(min_score)
-    dept = getattr(args, "department", None)
+    # The plans file keys on the Infobase organization_id, which is stable
+    # across rebrands — the reason the crosswalk carries it. Filtering on that
+    # id rather than the organization name means a department that was renamed
+    # mid-series still returns its whole history.
+    dept = org_resolve.resolve_department_arg(getattr(args, "department", None))
     if dept:
-        where.append("lower(organization) LIKE ?")
-        params.append(f"%{dept.lower()}%")
+        plan_ids = org_resolve.department_scope(dept)["plan_ids"]
+        if not plan_ids:
+            con.close()
+            return {"department": dept, "programs": 0,
+                    "note": f"{dept!r} files no departmental plans, so this "
+                            "dataset cannot answer for it. Some organizations "
+                            "publish contracts but no plans; that is a fact "
+                            "about them, not a build failure."}
+        where.append(f"organization_id IN ({','.join('?' * len(plan_ids))})")
+        params += plan_ids
     if exclude_internal:
         where.append("lower(program_name) NOT LIKE '%internal service%'")
 
@@ -684,57 +718,115 @@ def cmd_oag_signals(args) -> dict:
     con = sqlite3.connect(db)
     meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
 
-    where, params = ["it_score IS NOT NULL"], []
-    dept = getattr(args, "department", None)
+    where, params = ["a.it_score IS NOT NULL"], []
+    # A canonical key from org_aliases.yaml, joined on — never a substring of a
+    # display name. "Immigration and Refugee Board" is an independent tribunal
+    # and must not answer to IRCC; that refusal is written into the registry and
+    # only an exact identifier honours it.
+    dept = org_resolve.resolve_department_arg(getattr(args, "department", None))
     if dept:
-        where.append("lower(department) LIKE ?")
-        params.append(f"%{dept.lower()}%")
+        where.append("EXISTS (SELECT 1 FROM audit_departments d "
+                     "WHERE d.oag_id = a.oag_id AND d.dept_key = ?)")
+        params.append(dept)
+    # Direct findings only — drop departments a briefing package inherited from
+    # a multi-report hearing, which are real but much weaker evidence.
+    if getattr(args, "direct_only", False):
+        where.append("EXISTS (SELECT 1 FROM audit_departments d "
+                     "WHERE d.oag_id = a.oag_id AND d.method = 'direct')")
+    vendor = getattr(args, "vendor", None)
+    if vendor:
+        # Deliberately independent of --department: an audit into a supplier is
+        # competitive intelligence whichever departments it touches, and the two
+        # that exist are unattributable to any single one.
+        where.append("lower(a.vendor_focus) LIKE ?")
+        params.append(f"%{vendor.lower()}%")
     min_score = getattr(args, "min_score", None)
     if min_score is not None:
-        where.append("it_score >= ?")
+        where.append("a.it_score >= ?")
         params.append(min_score)
     doc_type = getattr(args, "doc_type", None)
     if doc_type:
-        where.append("doc_type = ?")
+        where.append("a.doc_type = ?")
         params.append(doc_type)
     since = getattr(args, "since", None)
     if since:
-        where.append("year >= ?")
+        where.append("a.year >= ?")
         params.append(since)
 
     limit = getattr(args, "limit", None) or 20
     rows = con.execute(f"""
-        SELECT year, doc_type, department, title, description,
-               it_score, html_url, pdf_url
-        FROM audits
+        SELECT a.oag_id, a.year, a.doc_type, a.title, a.description,
+               a.it_score, a.html_url, a.pdf_url,
+               a.attribution_status, a.vendor_focus
+        FROM audits a
         WHERE {' AND '.join(where)}
-        ORDER BY it_score DESC, year DESC
+        ORDER BY a.it_score DESC, a.year DESC
         LIMIT ?
     """, params + [limit]).fetchall()
+
+    # Departments per audit, split by how they were reached. A dossier shows the
+    # direct findings; inherited ones are the same audit seen through a hearing
+    # agenda, and a department reached through a 5-report bundle is weaker
+    # evidence than one named in the audit itself.
+    edges: dict[str, dict] = {}
+    if rows:
+        marks = ",".join("?" * len(rows))
+        for oag_id, key, method, evidence, n_parents in con.execute(
+            f"SELECT oag_id, dept_key, method, evidence, n_parent_reports "
+            f"FROM audit_departments WHERE oag_id IN ({marks}) "
+            f"ORDER BY method, dept_key", [r[0] for r in rows]
+        ):
+            slot = edges.setdefault(oag_id, {"direct": [], "inherited": []})
+            if method == "direct":
+                slot["direct"].append(key)
+            else:
+                slot["inherited"].append(
+                    {"department": key, "via": method,
+                     "reports_in_hearing": n_parents, "evidence": evidence})
     con.close()
 
     if not rows:
         return {"as_of": meta.get("ingest_date"), "audits": 0,
-                "note": "No audits matched. Loosen --min-score/--department/--since."}
+                "note": "No audits matched. Loosen --min-score/--department/"
+                        "--since, or drop --direct-only."}
 
     results = []
-    for (year, dt, dept_, title, desc, score, html, pdf) in rows:
-        results.append({
+    for (oag_id, year, dt, title, desc, score, html, pdf, status, vendor_focus) in rows:
+        got = edges.get(oag_id, {"direct": [], "inherited": []})
+        entry = {
             "year": year,
             "doc_type": dt,
-            "department": dept_,
+            "departments": got["direct"],
             "title": title,
             "description": (desc or "")[:500],
             "it_score": score,
             "report_url": html or pdf,
-        })
+        }
+        if got["inherited"]:
+            entry["inherited_departments"] = got["inherited"]
+        if not got["direct"] and not got["inherited"]:
+            entry["no_department_because"] = status
+        if vendor_focus:
+            entry["vendor_focus"] = vendor_focus
+        results.append(entry)
 
     return {
         "as_of": meta.get("ingest_date"),
         "audit_count_total": meta.get("audit_count"),
+        "coverage": {
+            "federal_audits": f"{meta.get('federal_audits_resolved')}"
+                              f"/{meta.get('federal_audits')} attributed directly",
+            "committee_briefings": f"{meta.get('briefings_resolved')}"
+                                   f"/{meta.get('briefings')} inherited from a report",
+            "note": "Reported separately on purpose. A federal audit that names "
+                    "its own departments and a briefing package that inherits "
+                    "them are different evidence at different strength, and most "
+                    "of this corpus correctly has no federal department at all.",
+        },
         "returned": len(results),
         "filters": {"department": dept, "min_score": min_score,
-                    "doc_type": doc_type, "since": since},
+                    "doc_type": doc_type, "since": since,
+                    "vendor": vendor, "direct_only": getattr(args, "direct_only", False)},
         "audits": results,
         "how_to_read": "Ranked by it_score — how strongly the audit reads as "
                        "IT/systems/digital (vs financial/environmental/benefits), "
@@ -748,6 +840,54 @@ def cmd_oag_signals(args) -> dict:
                        "your strongest lead — and any live tender from them should "
                        "rank higher. Read the report_url for citable specifics. "
                        "A lead list, not a forecast.",
+    }
+
+
+def cmd_resolve_department(args) -> dict:
+    """
+    What does this string mean, as a department identifier?
+
+    Exists so a caller can check an identifier WITHOUT running a query and
+    guessing from an empty result whether the department has no signal or the
+    name was simply wrong. Those are very different answers and every other tool
+    would otherwise conflate them.
+
+    Resolution is registry-only and exact after normalization — the same rule
+    all four signal tools use, including the `not:` exclusions, so
+    "Immigration and Refugee Board" resolves to the tribunal and never to IRCC.
+    """
+    resolver = org_resolve.default_resolver()
+    try:
+        key = resolver.resolve(args.name)
+    except org_resolve.AmbiguousOrganization as exc:
+        return {"query": args.name, "resolved": None, "error": str(exc)}
+
+    if not key:
+        return {
+            "query": args.name,
+            "resolved": None,
+            "closest": resolver.suggest(args.name),
+            "note": "Not a known organization. Pass a canonical key from "
+                    "vault/crosswalk/org_aliases.yaml or an organization's "
+                    "registered name; fragments and substrings are refused on "
+                    "purpose, because that is how one department's name lands "
+                    "on another.",
+        }
+
+    entry = resolver.aliases[key]
+    scope = org_resolve.department_scope(key)
+    return {
+        "query": args.name,
+        "resolved": key,
+        "name": resolver.display_name(key),
+        "also_known_as": entry.get("observed_names") or [],
+        "never_matches": entry.get("not") or [],
+        "sources": {
+            "oag": "audit_departments.dept_key",
+            "plans": scope["plan_ids"] or "files no departmental plans",
+            "contracts": scope["contract_slugs"] or "publishes no contracts",
+        },
+        "note": entry.get("note"),
     }
 
 
@@ -808,10 +948,25 @@ def cmd_expiring_contracts(args) -> dict:
     con = sqlite3.connect(db)
     meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
 
+    # Same department identifier as the other three signal tools, translated to
+    # the CKAN slug the contracts file actually stores.
+    dept = org_resolve.resolve_department_arg(getattr(args, "department", None))
+    where = ["period_end != ''"]
+    params: list = []
+    if dept:
+        slugs = org_resolve.department_scope(dept)["contract_slugs"]
+        if not slugs:
+            con.close()
+            return {"department": dept, "expiring": 0,
+                    "note": f"{dept!r} publishes no contracts under its own slug, "
+                            "so this dataset cannot answer for it."}
+        where.append(f"owner_org IN ({','.join('?' * len(slugs))})")
+        params += slugs
+
     # Per family: latest expiry, incumbent, department, value, description.
     # Filter families whose MAX(period_end) lands in the window AND whose
     # value clears the floor.
-    rows = con.execute("""
+    rows = con.execute(f"""
         SELECT family_id,
                MAX(period_end)   AS expiry,
                vendor,
@@ -821,17 +976,18 @@ def cmd_expiring_contracts(args) -> dict:
                MAX(contract_date) AS awarded,
                description
         FROM contracts
-        WHERE period_end != ''
+        WHERE {' AND '.join(where)}
         GROUP BY family_id
         HAVING expiry >= ? AND expiry <= ? AND v >= ?
         ORDER BY expiry ASC, v DESC
-    """, (lo, hi, min_value)).fetchall()
+    """, params + [lo, hi, min_value]).fetchall()
     con.close()
 
     if not rows:
         return {
             "window": f"{months_min}-{months_max} months out ({lo} to {hi})",
             "min_value": min_value,
+            "department": dept,
             "as_of": meta.get("ingest_date"),
             "expiring": 0,
             "note": "No contracts expiring in this window above the value floor. "
@@ -863,6 +1019,7 @@ def cmd_expiring_contracts(args) -> dict:
     return {
         "window": f"{months_min}-{months_max} months out ({lo} to {hi})",
         "min_value": min_value,
+        "department": dept,
         "as_of": meta.get("ingest_date"),
         "expiring": len(results),
         "contracts": results[:40],  # cap so the agent isn't flooded
@@ -919,6 +1076,17 @@ def _slugify(text: str, max_len: int = 80) -> str:
 # CLI wiring
 # ---------------------------------------------------------------------------
 
+# ONE department identifier across all four signal tools. Inconsistency here
+# would be its own bug: the entire point of these tools is cross-referencing a
+# department between them, and that fails if each takes a different spelling.
+_DEPT_HELP = (
+    "Canonical key from vault/crosswalk/org_aliases.yaml (e.g. pspc, ircc, dnd) "
+    "or an organization's registered name. Exact after normalization — "
+    "substrings are refused, so one department's name cannot land on another. "
+    "Use `resolve-department` to check a string first."
+)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=True)
@@ -948,6 +1116,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Who won similar contracts: vendors, departments, values (SQLite, instant)",
     )
     ci.add_argument("query")
+    ci.add_argument("--department", help=_DEPT_HELP)
     ci.set_defaults(func=cmd_contracts_intel)
 
     ec = sub.add_parser(
@@ -961,13 +1130,14 @@ def build_parser() -> argparse.ArgumentParser:
     ec.add_argument("--min-value", type=float, default=None,
                     help="Minimum contract value (overrides profile's "
                          "expiry_min_value; default reads from profile)")
+    ec.add_argument("--department", help=_DEPT_HELP)
     ec.set_defaults(func=cmd_expiring_contracts)
 
     ps = sub.add_parser(
         "program-signals",
         help="Programs showing operational pressure (pre-RFP intent signal)",
     )
-    ps.add_argument("--department", help="Restrict to departments matching this substring")
+    ps.add_argument("--department", help=_DEPT_HELP)
     ps.add_argument("--min-score", type=float, default=None,
                     help="Only programs with intent_score at or above this "
                          "(default: no floor, since real leads can score slightly negative)")
@@ -980,7 +1150,15 @@ def build_parser() -> argparse.ArgumentParser:
         "oag-signals",
         help="OAG audits touching IT/systems — independent-scrutiny pre-RFP signal",
     )
-    og.add_argument("--department", help="Restrict to audits of matching departments")
+    og.add_argument("--department", help=_DEPT_HELP)
+    og.add_argument("--vendor",
+                    help="Audits INTO a named supplier (e.g. GCStrategies, "
+                         "McKinsey). Independent of --department: these audits "
+                         "span too many departments to attach to one, but an "
+                         "audit of a firm you bid against is intelligence anyway")
+    og.add_argument("--direct-only", action="store_true",
+                    help="Only departments named in the audit itself, dropping "
+                         "those a briefing package inherited from a hearing")
     og.add_argument("--min-score", type=float, default=None,
                     help="Only audits with it_score at or above this")
     og.add_argument("--doc-type", choices=["performance_audit", "committee_hearing",
@@ -989,6 +1167,13 @@ def build_parser() -> argparse.ArgumentParser:
     og.add_argument("--since", type=int, default=None, help="Only audits from this year onward")
     og.add_argument("--limit", type=int, default=20, help="How many to return (default 20)")
     og.set_defaults(func=cmd_oag_signals)
+
+    rd = sub.add_parser(
+        "resolve-department",
+        help="What a department string resolves to — check before querying",
+    )
+    rd.add_argument("name")
+    rd.set_defaults(func=cmd_resolve_department)
 
     pr = sub.add_parser("promote", help="Copy a tender into vault/tenders/watching/")
     pr.add_argument("tender_id")
