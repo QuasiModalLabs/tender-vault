@@ -185,11 +185,41 @@ def generate_digest() -> str:
         title = d["metadata"].get("title", "Untitled")[:80]
         lines.append(f"- `{d['id']}` — {title} ({days}d)")
 
-    lines += ["", "## Highest estimated value", ""]
-    for d in valued[:5]:
-        value = d["metadata"]["estimated_value"]
-        title = d["metadata"].get("title", "Untitled")[:80]
-        lines.append(f"- `{d['id']}` — {title} (${value:,.0f})")
+    # Instrument shape. More useful than value here, and unlike value it is
+    # actually populated — it comes from the publisher's own notice type.
+    kind_counter = Counter(
+        d["metadata"].get("opportunity_kind", "unknown") for d in docs
+    )
+    lines += ["", "## By instrument shape", ""]
+    for kind, count in kind_counter.most_common():
+        lines.append(f"- **{kind}**: {count}")
+    if kind_counter.get("qualification"):
+        lines.append("")
+        lines.append(
+            f"> {kind_counter['qualification']} of these qualify a supplier onto a "
+            f"vehicle rather than buying work. They are kept deliberately — "
+            f"getting onto an arrangement is how the call-ups become reachable — "
+            f"but they are not tenders to price.")
+
+    # Only render a value section when a value actually exists. The ingest omits
+    # estimated_value unless --extract-values ran, because the regex behind it
+    # read ceilings and thresholds rather than prices. An always-empty section
+    # under a confident heading reads as "no big tenders this week", which is a
+    # different and false claim.
+    if valued:
+        lines += ["", "## Highest estimated value", ""]
+        for d in valued[:5]:
+            value = d["metadata"]["estimated_value"]
+            title = d["metadata"].get("title", "Untitled")[:80]
+            lines.append(f"- `{d['id']}` — {title} (${value:,.0f})")
+    else:
+        lines += [
+            "", "## Estimated value", "",
+            "Not available. The feed publishes no value field, and the "
+            "description regex was retired for reading ceilings and trade-"
+            "agreement thresholds as prices. Run `python scripts/ingest.py "
+            "--extract-values` to populate it from the descriptions.",
+        ]
 
     # Parked tenders — surface ones still active so the user is reminded
     # that their trigger conditions might still resolve in time

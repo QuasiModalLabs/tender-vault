@@ -4,19 +4,81 @@ team_size: 25
 founded: 2015
 location: Toronto, ON
 
-# Financial targets — used by ingest.py to filter tenders
-value_min: 250000
-value_max: 5000000
+# Financial targets — DISABLED, and deliberately left commented rather than
+# deleted so nobody tunes a filter that isn't running.
+#
+# The tender feed has no value field. The only source was a regex over the
+# description, and measurement retired it: on the 2026-08-04 feed just 94 of 896
+# descriptions contain any dollar figure, and the first one is usually not the
+# price. The most common extraction was $10,000,000, off construction source
+# lists reading "estimated value of $10 million and below" — a ceiling on a
+# qualification vehicle. Median $10M, max $5B, min $0.
+#
+# Uncommenting these does nothing on its own. The range is only consulted when
+# ingest runs with --extract-values, which reads the description with a model
+# instead of a regex. See estimate_value in scripts/ingest.py.
+# value_min: 250000
+# value_max: 5000000
 
-# Competencies — tenders matching these terms survive the ingest filter
+# UNSPSC commodity families — the publisher's own classification, and the
+# primary relevance filter. Prefix match, so '8111' catches every 8111xxxx code.
+#
+# Hand-checked, committed deliberately. Rediscover candidates offline with
+#   python scripts/unspsc_discover.py --level L3 --segment 43 81 80
+# which reads PSPC's reference file for the hierarchy and CommodityType. That
+# file's GSIN side is never joined at runtime and shouldn't be: PSPC's caveat
+# says linkages were assessed at higher levels and carried through
+# indiscriminately, and it shows — telecom cable laying and highway paving both
+# map to GSIN 5153 "Foundation work, including pile driving".
+#
+# Excluded on purpose after checking the L3 breakdown:
+#   8010 management advisory  — 801015 is 19 notices of UN environment
+#                               programmes and ATIP advisors
+#   8114 manufacturing tech   — 811418 is facilities management
+#   8110 prof. engineering    — civil, mechanical, aeronautical
+#   4321/4322 computer + network hardware — we don't do hardware supply
+unspsc_families:
+  - '8111'   # Computer services — software/hardware engineering, sysadmin, MIS
+  - '8116'   # IT Service Delivery — incl. 811620 cloud SaaS, 811623 BPaaS
+  - '4323'   # Software — industry-specific, content mgmt, data management
+  # One deliberate L4. 80101507 is "Information technology consultation
+  # services", an island of real IT work inside 801015 "Business and corporate
+  # management consultation", which is otherwise UN environment programmes and
+  # ATIP advisors. Departments file genuine IT engagements here: the CIPO ITM3
+  # modernization RFI and two DND cloud/informatics notices all carry it. Taking
+  # the L3 would drag in 19 notices of noise; taking the L4 takes the work.
+  - '80101507'
+
+# Competencies — the keyword fallback, NOT the primary filter. These carry the
+# 139 notices from source systems that file no UNSPSC at all (MX, PW, SSC), and
+# they catch what the families miss: the DND cloud analytics notice is filed
+# 80101507 under management advisory, and only "cloud" finds it.
+#
+# Terms are matched on whole words. Counts below are hits on the 2026-08-04 feed
+# after the date and construction filters (435 notices) — recorded so dead
+# vocabulary is visible rather than assumed. The zero-hit terms are kept
+# because they cost nothing and would be real signals if they ever appeared;
+# they are simply not how the Government of Canada writes tenders.
 competencies:
-  - cloud
-  - AWS
-  - Azure
-  - IT modernization
-  - cybersecurity
-  - DevOps
-  - data engineering
+  - informatics             # 9  — the actual federal word for IT services
+  - information technology  # 10
+  - TBIPS                   # 10 — task-based informatics professional services
+  - SBIPS                   # 1  — solution-based
+  - software                # 17
+  - cloud                   # 9
+  - SaaS                    # 4
+  - modernization           # 16
+  - IT modernization        # 1
+  - digital transformation  # 4
+  - application maintenance # 1
+  - AWS                     # 0
+  - Azure                   # 0
+  - DevOps                  # 0
+  - cybersecurity           # 0
+  - data engineering        # 0
+# NOT added: bare "application" (80 hits, mostly unrelated) and "application
+# services", which matches "Pesticide application services for Joyceville and
+# Collins Bay Institution". The 4323/8111 families cover real application work.
 
 # Hard exclusions — tenders with these terms are dropped
 exclude:

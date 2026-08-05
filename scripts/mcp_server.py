@@ -55,7 +55,15 @@ def search(query: str, n: int = 10) -> dict:
     Returns:
         Dict with query, n, and a list of results. Each result has:
         tender_id, title, agency, closing_date, estimated_value,
-        matched_competencies, score, in_watching, snippet.
+        matched_competencies, opportunity_kind, kind_basis, unspsc_families,
+        score, in_watching, snippet.
+
+        estimated_value is usually null — the feed publishes no value field, and
+        null means unknown, not zero. opportunity_kind says what KIND of thing
+        the notice is before any judgement of fit: 'qualification' is a vehicle
+        rather than work, 'call_up' is work only bidders already on a vehicle
+        can win, 'information' is an RFI with nothing to bid, and 'solicitation'
+        is a residual meaning the shape is unresolved — read the description.
     """
     args = SimpleNamespace(query=query, n=min(max(n, 1), 30))
     return tender_tools.cmd_search(args)
@@ -376,9 +384,16 @@ def department_dossier(department: str, months_min: int = 6, months_max: int = 2
     'end_user' means it named them as the customer; anything else means they are
     the contracting entity, attributed via contracting entity with the end user
     unstated, which for SSC and PSPC often means buying for somebody else.
-    opportunity_kind 'qualification' is a supply arrangement or standing offer —
-    getting onto a vehicle, not work. A null closing_date with a date_note is a
-    sentinel, not a deadline.
+    A null closing_date with a date_note is a sentinel, not a deadline.
+
+    opportunity_kind is the instrument, and reading it before assessing fit is
+    the point: 'qualification' (RFSA, standing offer, invitation to qualify)
+    puts a supplier on a vehicle and buys nothing; 'call_up' is an RFP against
+    a supply arrangement, which IS work but only for suppliers already holding
+    it; 'information' is an RFI; 'pre_awarded' is an ACAN already intended for
+    a named supplier; 'product' is a goods-only purchase; 'solicitation' is the
+    residual and NOT a positive finding — a SaaS purchase and an untyped
+    call-up both land there. kind_basis says which field decided it.
 
     Always check identity.records_folded_in before quoting a total. Where a
     predecessor or absorbed organization is folded in, the registry's note says

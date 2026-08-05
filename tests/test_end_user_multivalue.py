@@ -55,6 +55,23 @@ def build_multivalued_corpus(tmp_db: Path):
     ).dt.tz_localize(None)
     multi["_value"] = None
     multi["_matched"] = [[] for _ in range(len(multi))]
+    multi["_unspsc_families"] = [[] for _ in range(len(multi))]
+    multi["_date_conflict"] = None
+    multi["_jurisdiction"] = [
+        ingest.classify_jurisdiction(
+            row[cols["contracting_entity"]], row[cols["end_user"]]
+        )
+        for _, row in multi.iterrows()
+    ]
+    # Classified for real rather than stubbed: build_chroma reads _kind, and a
+    # stub here would let a change to the metadata shape pass this test.
+    multi["_kind"] = [
+        ingest.classify_notice(
+            row[cols["notice_type"]] if cols.get("notice_type") else None,
+            row[cols["procurement_category"]] if cols.get("procurement_category") else None,
+        )
+        for _, row in multi.iterrows()
+    ]
 
     ingest.build_chroma(multi, tmp_db, cols)
     return multi, cols

@@ -63,9 +63,425 @@ TENDER_COLUMNS = {
     "closing_date": ["tenderClosingDate-appelOffresDateCloture"],
     "contracting_entity": ["contractingEntityName-nomEntitContractante-eng"],
     "end_user": ["endUserEntitiesName-nomEntitesUtilisateurFinal-eng"],
+    # The publisher's own classification. Preferred over guessing their
+    # vocabulary from prose — see classify_notice and unspsc_relevance below.
+    "notice_type": ["noticeType-avisType-eng"],
+    "procurement_category": ["procurementCategory-categorieApprovisionnement"],
+    "unspsc": ["unspsc"],
 }
-# All of them: there is no tender worth indexing without any one of these.
-TENDER_REQUIRED = list(TENDER_COLUMNS)
+# The six the corpus cannot be built without. The three classification columns
+# are deliberately NOT required: they are absent for whole source systems today
+# (see UNCODED_SOURCE_SYSTEMS) and a feed that stopped publishing them should
+# degrade to text matching with a loud funnel line, not hard-exit the ingest.
+TENDER_REQUIRED = [
+    "tender_id", "title", "description", "closing_date",
+    "contracting_entity", "end_user",
+]
+
+# Source systems that file NO unspsc and NO noticeType, as of the 2026-08-04
+# feed: MX 100 notices, PW 21, SSC 18 — 139 of 896. Recorded here because the
+# gap is not random. SSC is the largest federal IT buyer and PW is PSPC; if
+# either starts publishing codes that is a material improvement in this
+# pipeline's precision, and the ingest funnel prints the live split every run so
+# a change shows up on the next ingest rather than months later.
+UNCODED_SOURCE_SYSTEMS = ("MX", "PW", "SSC")
+
+
+# ---------------------------------------------------------------------------
+# Instrument shape — what KIND of thing a notice is
+# ---------------------------------------------------------------------------
+# Read from the publisher's structured noticeType field rather than matched out
+# of the title. "RFSA" in a title is a convention; noticeType is a controlled
+# vocabulary, and the two disagree — of 14 TBIPS-titled notices in the feed, 7
+# are typed "RFP against Supply Arrangement", 5 plain "Request for Proposal"
+# and 2 "Request for Supply Arrangement".
+#
+# Matching is EXACT after casefolding, never substring. Substring matching is
+# what made this wrong before: "RFP against Supply Arrangement" contains the
+# words "supply arrangement", so a substring test labelled all 54 of them
+# `qualification` — the exact inverse of the truth, because a call-up against a
+# vehicle is the real work that the vehicle exists to award.
+_NOTICE_KINDS = {
+    # Qualify a supplier onto a vehicle. Not work; an invitation to compete
+    # later, often via call-ups that never get a public notice.
+    "request for supply arrangement": "qualification",
+    "request for standing offer": "qualification",
+    "invitation to qualify": "qualification",
+    # Work competed among suppliers already on a vehicle.
+    "rfp against supply arrangement": "call_up",
+    # Not biddable. Market research, or an award already intended for a named
+    # supplier with a challenge window.
+    "request for information": "information",
+    "advance contract award notice": "pre_awarded",
+}
+
+# procurementCategory is the only classification field populated on 100% of
+# notices across every source system, so it carries the goods/services/
+# construction split when noticeType cannot.
+_CATEGORY_CONSTRUCTION = "*CNST"
+_CATEGORY_GOODS = "*GD"
+_CATEGORY_SERVICES = ("*SRV", "*SRVTGD")
+
+
+def parse_categories(raw) -> set[str]:
+    """
+    Split the multi-valued procurementCategory field into its codes.
+
+    Newline-delimited, one code per line, each with a leading '*'. A single
+    notice legitimately carries several ('*SRV\\n*GD' — services and goods).
+    """
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return set()
+    return {p.strip() for p in str(raw).split("\n") if p.strip()}
+
+
+def parse_unspsc_codes(raw) -> set[str]:
+    """
+    Split the multi-valued unspsc field into bare 8-digit commodity codes.
+
+    Same shape as procurementCategory: newline-delimited, '*'-prefixed. One
+    notice can carry a great many — the widest row in the feed lists 286 codes.
+    """
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return set()
+    codes = set()
+    for part in str(raw).split("\n"):
+        code = part.strip().lstrip("*").strip()
+        if len(code) == 8 and code.isdigit():
+            codes.add(code)
+    return codes
+
+
+# ---------------------------------------------------------------------------
+# Signals that are not in a structured field
+# ---------------------------------------------------------------------------
+# Everything below reads title+description prose, and each is deliberately
+# precision-first: a rule that fires on nothing is recoverable, a rule that
+# relabels real work is not. Counts on the 2026-08-04 feed are recorded next to
+# each so a future drift in volume is visible rather than silent.
+
+# A posting whose entire content is "here are the suppliers who already
+# qualified". Not a solicitation, not a qualification, not work — there is
+# nothing to bid and never will be. The EHRP one names Accenture, Deloitte, EY
+# and Telus Health as the qualified integrators; the shortlist is closed.
+#
+# Phrases only, and only ones that say "this notice buys nothing" outright.
+# "list of qualified suppliers" is NOT here despite looking ideal: it appears on
+# 8 notices, most of them ordinary RFSAs describing the list they will produce.
+_RESULTS_NOTICE_PHRASES = (
+    "no solicitation document",        # 1 — EHRP
+    "this is a notice only",           # 1 — EHRP
+    "results notification",            # 1 — EHRP
+    "itq result",                      # 1 — DRS
+    "following the itq",               # 1 — DRS
+    "have been selected as qualified",  # 1 — EHRP
+)
+
+# KNOWN supply-arrangement numbers, matched as exact whole tokens.
+#
+# Not a pattern. The obvious rule — \b[A-Z]{2}\d{3}-\d{5,6}\b — was tried and
+# is wrong: PSPC solicitation numbers share the format exactly, so it matched
+# EE517-261427 (a fishermen's wharf reconstruction), EQ754-270127 (building
+# demolition) and EQ754-251469 (a lift-bridge security gate) and relabelled
+# three construction projects as IT call-ups. The format identifies PSPC, not
+# a vehicle.
+#
+# Each entry below was observed in the feed within an explicit "supply
+# arrangement" context, with the count from the 2026-08-04 run. Add to this by
+# checking the same way, not by loosening it back to a pattern.
+_KNOWN_SUPPLY_ARRANGEMENTS = {
+    "EN578-170432": "TBIPS — Task-Based Informatics Professional Services (11)",
+    "EN537-05IT01": "SBIPS — Solution-Based Informatics Professional Services",
+    "EN578-172870": "EN578 series professional services (2)",
+    "EN578-201407": "EN578 series professional services (2)",
+    "EN578-232335": "EN578 series professional services (1)",
+    "EN578-150229": "EN578 series professional services (1)",
+}
+_SA_NUMBER = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in _KNOWN_SUPPLY_ARRANGEMENTS) + r")\b",
+    re.IGNORECASE,
+)
+
+# The vehicle by NAME rather than by number. Needed because the number is not
+# always there: of the three call-ups the notice-type field missed, only ONE
+# (an NRC help-desk requirement) cites EN578-170432 in its body. The two DND
+# ones carry no arrangement number and never say "supply arrangement" — the
+# only signal they are call-ups is the word TBIPS in the title. A name is
+# weaker evidence than a number, and kind_basis says which one fired.
+_VEHICLE_TOKENS = re.compile(r"\b(tbips|sbips)\b", re.IGNORECASE)
+
+# Provinces and territories, for the NON-federal side only. The federal side is
+# answered by the organization registry (entity_org_keys), never by a list —
+# but the registry is a registry of federal bodies, so a miss means "not
+# recognised", not "not federal": CDIC, BDC, Canada Post and Service Canada all
+# miss it and are federal. Distinguishing a territorial government from an
+# unregistered federal Crown corporation therefore needs a positive signal, and
+# this is it.
+_PROVINCIAL_JURISDICTIONS = (
+    "alberta", "british columbia", "manitoba", "new brunswick",
+    "newfoundland and labrador", "northwest territories", "nova scotia",
+    "nunavut", "ontario", "prince edward island", "quebec", "québec",
+    "saskatchewan", "yukon",
+)
+_JURISDICTION_PREFIXES = ("government of the ", "government of ", "province of ",
+                          "territory of ")
+
+
+def entity_org_keys(value) -> dict[str, str]:
+    """
+    Canonical registry keys named by one tender entity field, with the phrase
+    that produced each.
+
+    THE SINGLE DEFINITION, shared with tender_tools._entity_keys. Both steps are
+    load-bearing: observed_variants splits the slash-delimited multi-department
+    values and strips the parenthetical acronym tail, without which "Department
+    of National Defence (DND)" resolves to nothing — raw-string resolution
+    covers 47 of 896 rows, this covers 767.
+
+    Imported lazily because crosswalk imports THIS module; a module-level import
+    here would be circular.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return {}
+    if not str(value).strip():
+        return {}
+    import crosswalk
+    import org_resolve
+
+    resolver = org_resolve.default_resolver()
+    found: dict[str, str] = {}
+    for variant in crosswalk.observed_variants(str(value)):
+        try:
+            key = resolver.resolve(variant)
+        except org_resolve.AmbiguousOrganization:
+            continue
+        if key and key not in found:
+            found[key] = variant
+    return found
+
+
+def classify_jurisdiction(contracting_entity, end_user_entity) -> dict:
+    """
+    Federal, non-federal, or unrecognised — and the difference matters.
+
+    `federal` means the organization registry resolved one of the two entity
+    fields. That is the authority, so no federal name list is maintained here.
+
+    `non_federal` requires a POSITIVE provincial or territorial signal and no
+    registry hit. The Government of the Northwest Territories publishes to this
+    feed and its notices are not available to a federal bidder in the way the
+    rest of the corpus is.
+
+    `unrecognised` is the honest third answer, not a synonym for non-federal.
+    CDIC, BDC, Canada Post and Service Canada all land here: federal, but absent
+    from a registry of departments and agencies. Dropping on this value would
+    drop the best tender in the corpus, so nothing does.
+    """
+    keys = {}
+    for value in (end_user_entity, contracting_entity):
+        keys.update(entity_org_keys(value))
+    if keys:
+        return {"jurisdiction": "federal", "jurisdiction_basis": "org_registry",
+                "org_keys": ",".join(sorted(keys))}
+
+    blob = " ".join(
+        str(v).lower() for v in (contracting_entity, end_user_entity)
+        if v is not None and not (isinstance(v, float) and pd.isna(v))
+    )
+    for prefix in _JURISDICTION_PREFIXES:
+        for province in _PROVINCIAL_JURISDICTIONS:
+            if prefix + province in blob:
+                return {
+                    "jurisdiction": "non_federal",
+                    "jurisdiction_basis": "provincial_or_territorial_name",
+                    "jurisdiction_note": (
+                        f"Names a provincial/territorial government "
+                        f"({prefix + province}) and resolves to no federal "
+                        f"organization."),
+                }
+    return {
+        "jurisdiction": "unrecognised",
+        "jurisdiction_basis": "no_registry_match",
+        "jurisdiction_note": (
+            "Not in the federal organization registry and carries no "
+            "provincial or territorial name. Federal Crown corporations sit "
+            "here — this is not evidence the notice is non-federal."),
+    }
+
+
+def body_date_conflict(description, closing_date) -> Optional[str]:
+    """
+    A submission date stated in the prose that is EARLIER than the field.
+
+    Notices amended on a third-party portal routinely carry "disregard the
+    Ariba posting deadline, bids are due <date>" while the structured closing
+    date still shows the original. Believing the field costs the bid, and
+    nothing about it fails loudly. Only an earlier body date is reported: a
+    later one is usually an extension already reflected elsewhere, and flagging
+    those would bury the case that matters.
+    """
+    if not isinstance(description, str) or not closing_date:
+        return None
+    matches = _BODY_DATE.findall(description)
+    if not matches:
+        return None
+    try:
+        closing = datetime.strptime(str(closing_date)[:10], "%Y-%m-%d")
+    except ValueError:
+        return None
+    for raw in matches:
+        for fmt in ("%d %B %Y", "%B %d, %Y", "%B %d %Y"):
+            try:
+                stated = datetime.strptime(raw.strip().replace(",", " ").replace("  ", " "),
+                                           fmt.replace(",", ""))
+            except ValueError:
+                continue
+            # One day of slack absorbs timezone wording, not a real conflict.
+            if (closing - stated).days > 1:
+                return stated.strftime("%Y-%m-%d")
+            break
+    return None
+
+
+# Only dates introduced as a submission deadline. A bare date anywhere in the
+# prose is usually an amendment log or a period of performance.
+_BODY_DATE = re.compile(
+    r"(?:submitted|received|due|submission)\s+(?:on|by|no later than)\s+"
+    r"(\d{1,2}\s+[A-Z][a-z]+\s+\d{4}|[A-Z][a-z]+\s+\d{1,2},?\s+\d{4})",
+    re.IGNORECASE,
+)
+
+
+def classify_notice(notice_type, procurement_category, text=None) -> dict:
+    """
+    Classify a notice by instrument shape, from the publisher's own fields.
+
+    `text` is optional title+description prose. Without it this reads only the
+    structured fields and returns the same answers it always did; with it, two
+    further shapes become reachable that no structured field expresses —
+    results notices and call-ups that were typed as plain RFPs.
+
+    THE SINGLE DEFINITION. Imported by tender_tools so the dossier and the
+    ingest filter cannot drift into disagreeing about what `qualification`
+    means. Returns `kind`, plus `kind_basis` naming the field that decided it,
+    plus a `kind_note` for the kinds whose consequence isn't self-evident.
+
+    Determinability is not uniform, and the basis field says so rather than
+    implying a confidence the data doesn't support:
+
+      qualification  fully determinable from noticeType.
+      call_up        authoritative when typed "RFP against Supply
+                     Arrangement". Otherwise recovered from `text` by the
+                     arrangement number, or failing that by the vehicle name —
+                     see kind_basis, which distinguishes the three.
+      results_notice detectable only from prose, and only by phrases that say
+                     outright that the notice buys nothing.
+      product        `*GD` alone is a reliable goods buy, but a SaaS or COTS
+                     purchase is routinely filed `*SRV` (both the Justice
+                     OFOVC case-management SaaS and the ESDC applicant
+                     tracking system are), so this UNDER-reports. A
+                     `solicitation` may still turn out to be a product buy.
+      solicitation   the residual: an open competition of unresolved shape.
+                     Not a positive finding.
+    """
+    blob = str(text or "").lower()
+
+    # Checked BEFORE the notice type, and only this one is. A results notice
+    # inherits the type of the competition it reports on — the EHRP one is
+    # typed "Request for Proposal" — so deferring to that field would present a
+    # closed shortlist as an open solicitation. The phrases are narrow enough
+    # to carry that precedence.
+    if blob and any(p in blob for p in _RESULTS_NOTICE_PHRASES):
+        return {
+            "opportunity_kind": "results_notice",
+            "kind_basis": "prose_results_phrase",
+            "kind_note": (
+                "Announces who already qualified. No solicitation document, "
+                "nothing to bid, and the shortlist named in it is closed."),
+        }
+
+    nt = str(notice_type or "").strip().lower()
+    kind = _NOTICE_KINDS.get(nt)
+    if kind:
+        result = {"opportunity_kind": kind, "kind_basis": "notice_type"}
+        if kind == "qualification":
+            result["kind_note"] = (
+                "A supply arrangement, standing offer or invitation to qualify "
+                "puts a supplier on a vehicle; it is not itself work. Work is "
+                "competed later as call-ups against it, often with no public "
+                "notice.")
+        elif kind == "call_up":
+            result["kind_note"] = (
+                "A call-up competed among suppliers already on a vehicle. This "
+                "IS work — but only bidders already holding the arrangement can "
+                "win it.")
+        elif kind == "information":
+            result["kind_note"] = (
+                "Market research, not a solicitation. Nothing to bid; the value "
+                "is knowing the requirement is coming.")
+        elif kind == "pre_awarded":
+            result["kind_note"] = (
+                "An award already intended for a named supplier. Biddable only "
+                "by challenging the sole-source within the posting window.")
+        return result
+
+    cats = parse_categories(procurement_category)
+
+    # Construction is settled by the publisher's category and nothing in the
+    # prose may override it. Checked BEFORE the vehicle rules below because a
+    # construction notice that happens to cite a procurement number must stay
+    # construction — that ordering is load-bearing, not incidental.
+    if cats and cats <= {_CATEGORY_CONSTRUCTION}:
+        return {"opportunity_kind": "construction", "kind_basis": "procurement_category"}
+
+    # The notice type said nothing decisive. Before falling back to the
+    # goods/services split, see whether the prose names a vehicle — a call-up
+    # typed as a plain "Request for Proposal" is otherwise indistinguishable
+    # from open work, and the difference is whether we can bid at all.
+    if blob:
+        sa_numbers = {m.upper() for m in _SA_NUMBER.findall(str(text or ""))}
+        if sa_numbers:
+            sa = sorted(sa_numbers)[0]
+            return {
+                "opportunity_kind": "call_up",
+                "kind_basis": "prose_arrangement_number",
+                "kind_note": (
+                    f"Cites supply arrangement {sa} "
+                    f"({_KNOWN_SUPPLY_ARRANGEMENTS.get(sa, 'known vehicle')}). "
+                    f"Work, but restricted to suppliers already holding that "
+                    f"arrangement."),
+            }
+        vehicle = _VEHICLE_TOKENS.search(blob)
+        if vehicle:
+            return {
+                "opportunity_kind": "call_up",
+                "kind_basis": "prose_vehicle_name",
+                "kind_note": (
+                    f"Names the {vehicle.group(1).upper()} vehicle but files no "
+                    f"arrangement number. Weaker evidence than a number — "
+                    f"confirm against the notice before treating it as open."),
+            }
+
+    if _CATEGORY_GOODS in cats and not (cats & set(_CATEGORY_SERVICES)):
+        return {
+            "opportunity_kind": "product",
+            "kind_basis": "procurement_category",
+            "kind_note": ("Categorised goods-only: a purchase, not an engagement."),
+        }
+    if cats & set(_CATEGORY_SERVICES):
+        return {
+            "opportunity_kind": "solicitation",
+            "kind_basis": "procurement_category_residual",
+            "kind_note": ("Shape unresolved. Categorised as services, but a SaaS "
+                          "or COTS purchase is routinely filed this way, and an "
+                          "untyped call-up looks identical. Read the description."),
+        }
+    return {
+        "opportunity_kind": "unknown",
+        "kind_basis": "unclassified",
+        "kind_note": ("Neither a notice type nor a usable procurement category "
+                      "was filed. Shape unknown — read the description."),
+    }
 
 
 def resolve_columns(
@@ -180,8 +596,14 @@ def parse_profile(profile_path: Path) -> dict:
 
     fm = yaml.safe_load(match.group(1)) or {}
     return {
+        # Absent by default: the profile ships these commented out because the
+        # extractor behind them is unreliable. Left at 0 / 100M the value filter
+        # deactivates itself in filter_tenders. See estimate_value.
         "value_min": int(fm.get("value_min", 0)),
         "value_max": int(fm.get("value_max", 100_000_000)),
+        # UNSPSC family prefixes, hand-checked and committed. Discovered offline
+        # with scripts/unspsc_discover.py; never joined at runtime.
+        "unspsc_families": [str(f).strip() for f in fm.get("unspsc_families", [])],
         "competencies": [c.lower() for c in fm.get("competencies", [])],
         "exclude": [e.lower() for e in fm.get("exclude", [])],
         "min_days_until_close": int(fm.get("min_days_until_close", 5)),
@@ -231,8 +653,22 @@ _VALUE_MULTIPLIERS = {
 
 def estimate_value(description: str) -> Optional[float]:
     """
-    Extract a dollar value from tender description. Imperfect — many tenders
-    don't state a value at all, some bury it deep. We just grab the first match.
+    Grab the first dollar figure in a description. NOT USED BY DEFAULT.
+
+    Retired from the default ingest path because measurement showed it is wrong
+    far more often than it is right. On the 2026-08-04 feed only 94 of 896
+    descriptions contain a dollar figure at all, and the first figure is
+    routinely not the contract value: the most common extraction is $10,000,000
+    from construction source lists reading "with an estimated value of $10
+    million and below" — a ceiling on a qualification vehicle, not a price. The
+    resulting distribution (median $10M, max $5B, min $0) does not describe the
+    tenders it was attached to.
+
+    It survives only as the per-tender fallback for --extract-values, where a
+    model read the description first and the regex catches an API failure.
+    Nothing else should call it. When no extractor runs, estimated_value is
+    OMITTED from the metadata rather than stored as 0.0 — a real zero and an
+    unknown must not render identically.
     """
     if not isinstance(description, str):
         return None
@@ -327,17 +763,43 @@ def contains_excluded(text: str, exclusions: list[str]) -> bool:
     return any(excl in text_lower for excl in exclusions)
 
 
+def matches_unspsc_families(codes: set[str], families: list[str]) -> list[str]:
+    """
+    Return the profile families a notice's UNSPSC codes fall under.
+
+    Prefix match against the hand-checked family list: '8111' catches every
+    8111xxxx code. Families are committed config, discovered offline with
+    scripts/unspsc_discover.py — this never touches the PSPC reference file at
+    runtime, and never the GSIN linkage at all.
+    """
+    if not families:
+        return []
+    hits = {fam for code in codes for fam in families if code.startswith(fam)}
+    return sorted(hits)
+
+
+def _source_system(tender_id) -> str:
+    """The publishing system's prefix on a reference number: MX, PW, SSC, WS, cb."""
+    m = re.match(r"^([A-Za-z]+)", str(tender_id or ""))
+    return m.group(1) if m else "?"
+
+
 def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
                    value_extractor=None) -> pd.DataFrame:
     """
-    Apply profile filters. Prints funnel stats so you can tune the profile.
+    Apply profile filters. Prints a funnel so you can tune the profile.
 
-    value_extractor: callable(description) -> Optional[float]. Defaults to the
-    regex extractor. Runs after the competency filter on purpose — with
-    --extract-values that means a few hundred API calls, not 2,800.
+    Relevance is decided by the publisher's UNSPSC classification where there is
+    one, and falls back to keyword matching where there isn't. The fallback is
+    not a nicety: three source systems file no UNSPSC at all (MX, PW, SSC — 139
+    of 896 notices on the 2026-08-04 feed), and one of them is Shared Services
+    Canada, the largest federal IT buyer. Gating on UNSPSC would silently drop
+    every SSC notice. Every run prints the live split so a fourth uncoded
+    system, or SSC starting to publish codes, shows up here rather than months on.
+
+    value_extractor: callable(description) -> Optional[float], or None. None
+    means no value is extracted and none is stored — see estimate_value.
     """
-    if value_extractor is None:
-        value_extractor = estimate_value
     print(f"\nStarting with {len(df):,} tenders")
 
     # Parse closing dates (timezone-naive for simplicity)
@@ -364,29 +826,165 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
         df = df[mask]
         print(f"  After exclusion filter: {len(df):,}")
 
-    # Competency match — the big reducer
-    if criteria["competencies"]:
-        df["_matched"] = df["_text"].apply(
-            lambda t: matched_competencies(t, criteria["competencies"])
+    # --- Instrument shape, from the publisher's structured fields -----------
+    # Classify BEFORE filtering on relevance, so the funnel can report the mix
+    # and so construction can be dropped on the publisher's own category rather
+    # than on words in a title.
+    nt_col = cols.get("notice_type")
+    cat_col = cols.get("procurement_category")
+    df["_kind"] = [
+        classify_notice(
+            row[nt_col] if nt_col else None,
+            row[cat_col] if cat_col else None,
+            row["_text"],
         )
-        df = df[df["_matched"].apply(len) > 0]
-        print(f"  After competency filter: {len(df):,}")
+        for _, row in df.iterrows()
+    ]
+    df["_opportunity_kind"] = df["_kind"].apply(lambda k: k["opportunity_kind"])
+
+    # Jurisdiction, from the organization registry. Not a keyword list — the
+    # registry is the authority on what is a federal organization, and a miss
+    # is reported as unrecognised rather than assumed non-federal.
+    df["_jurisdiction"] = [
+        classify_jurisdiction(
+            row[cols["contracting_entity"]], row[cols["end_user"]]
+        )
+        for _, row in df.iterrows()
+    ]
+
+    # A submission deadline in the prose that is earlier than the closing date
+    # field. Rare and costly: believing the field loses the bid.
+    df["_date_conflict"] = [
+        body_date_conflict(
+            row[cols["description"]],
+            row["_closing"].strftime("%Y-%m-%d") if pd.notna(row["_closing"]) else None,
+        )
+        for _, row in df.iterrows()
+    ]
+
+    # Construction is dropped outright. procurementCategory is populated on 100%
+    # of notices across every source system, which makes this the one filter
+    # here that never falls back to guessing.
+    before = len(df)
+    df = df[df["_opportunity_kind"] != "construction"]
+    if before != len(df):
+        print(f"  After construction drop (*CNST): {len(df):,}  "
+              f"({before - len(df):,} dropped)")
+
+    # Provincial and territorial notices are dropped; `unrecognised` is NOT,
+    # because federal Crown corporations land there and one of them is the best
+    # tender in the corpus.
+    before = len(df)
+    juris = df["_jurisdiction"].apply(lambda j: j["jurisdiction"])
+    dropped_names = sorted({
+        str(v) for v in df.loc[juris == "non_federal", cols["contracting_entity"]]
+    })
+    df = df[juris != "non_federal"]
+    if before != len(df):
+        print(f"  After non-federal drop: {len(df):,}  "
+              f"({before - len(df):,} dropped — {'; '.join(dropped_names)[:70]})")
+
+    # --- Relevance: publisher classification, else keywords -----------------
+    unspsc_col = cols.get("unspsc")
+    families = criteria["unspsc_families"]
+    df["_unspsc"] = (df[unspsc_col].apply(parse_unspsc_codes) if unspsc_col
+                     else [set() for _ in range(len(df))])
+    df["_unspsc_families"] = df["_unspsc"].apply(
+        lambda codes: matches_unspsc_families(codes, families)
+    )
+    df["_matched"] = df["_text"].apply(
+        lambda t: matched_competencies(t, criteria["competencies"])
+    )
+
+    has_codes = df["_unspsc"].apply(bool)
+    coded_n, uncoded_n = int(has_codes.sum()), int((~has_codes).sum())
+    print(f"  UNSPSC present for {coded_n:,}/{len(df):,}; "
+          f"{uncoded_n:,} classified via procurementCategory + keywords")
+    if uncoded_n:
+        uncoded_systems = (
+            df.loc[~has_codes, cols["tender_id"]].apply(_source_system)
+            .value_counts().to_dict()
+        )
+        known = ", ".join(f"{k} {v}" for k, v in sorted(uncoded_systems.items()))
+        print(f"    uncoded source systems: {known}")
+        surprises = set(uncoded_systems) - set(UNCODED_SOURCE_SYSTEMS)
+        if surprises:
+            print(f"    NOTE: {sorted(surprises)} newly uncoded — not in "
+                  f"UNCODED_SOURCE_SYSTEMS. Worth a look.")
+        for expected in UNCODED_SOURCE_SYSTEMS:
+            if expected not in uncoded_systems:
+                print(f"    NOTE: {expected} now files UNSPSC codes. Its notices "
+                      f"are classified by the publisher rather than by keyword.")
+
+    # Publisher first, keywords only where the publisher classified nothing.
+    #
+    # NOT an OR across everything. When a notice carries UNSPSC codes, the
+    # publisher has already said what commodity it is, and a word match that
+    # overrides them is exactly the guessing this filter exists to stop: on the
+    # 2026-08-04 feed the OR form readmitted a boiling-liquid-expanding-vapour-
+    # explosion study (coded 77101501, environmental) because the phrase
+    # "vapour cloud" contains "cloud", plus an elevator modernization and an
+    # advertising RFSA. Codes present and not ours means not ours.
+    #
+    # Where no codes were filed there is nothing to defer to, so keywords carry
+    # those notices — 37 of 431, entirely from MX, PW and SSC.
+    if families or criteria["competencies"]:
+        by_family = df["_unspsc_families"].apply(bool)
+        by_keyword = df["_matched"].apply(bool)
+        relevant = (has_codes & by_family) | (~has_codes & by_keyword)
+        df = df[relevant]
+        kept_coded = int((has_codes & relevant).sum())
+        kept_uncoded = int((~has_codes & relevant).sum())
+        print(f"  After relevance filter: {len(df):,}  "
+              f"({kept_coded:,} by UNSPSC family, {kept_uncoded:,} by keyword "
+              f"where no codes were filed)")
+
+    # --- Value: retired from the default path -------------------------------
+    # No step is printed when nothing is filtered. A funnel line that always
+    # passes everything reads as a step that decided something, and this one
+    # decided nothing for months while every stored value was 0.0.
+    if value_extractor is None:
+        df["_value"] = None
+        present = int(df[cols["description"]].apply(estimate_value).notna().sum())
+        print(f"  Value present in {present:,}/{len(df):,}; filter inactive "
+              f"(unreliable — see estimate_value; --extract-values to enable)")
     else:
-        df["_matched"] = [[] for _ in range(len(df))]
+        print(f"  Extracting values for {len(df):,} tenders...")
+        df["_value"] = df[cols["description"]].apply(value_extractor)
+        if criteria["value_min"] > 0 or criteria["value_max"] < 100_000_000:
+            in_range = df["_value"].isna() | (
+                (df["_value"] >= criteria["value_min"])
+                & (df["_value"] <= criteria["value_max"])
+            )
+            df = df[in_range]
+            print(f"  After value filter (${criteria['value_min']:,}-"
+                  f"${criteria['value_max']:,}): {len(df):,}")
 
-    # Value filter — only drop tenders where we can read a value AND it's out of range
-    if value_extractor is not estimate_value:
-        print(f"  Extracting values via LLM for {len(df):,} tenders...")
-    df["_value"] = df[cols["description"]].apply(value_extractor)
-    if criteria["value_min"] > 0 or criteria["value_max"] < 100_000_000:
-        in_range = df["_value"].isna() | (
-            (df["_value"] >= criteria["value_min"])
-            & (df["_value"] <= criteria["value_max"])
-        )
-        df = df[in_range]
-        print(f"  After value filter (${criteria['value_min']:,}-${criteria['value_max']:,}): {len(df):,}")
-
+    kinds = df["_opportunity_kind"].value_counts().to_dict()
     print(f"\nFinal: {len(df):,} tenders")
+    print("  by instrument shape: "
+          + ", ".join(f"{k} {v}" for k, v in sorted(kinds.items(), key=lambda x: -x[1])))
+
+    # How each call-up was recovered. Reported separately because the three
+    # bases are not equally strong and the weakest one carries the most rows.
+    bases = df.loc[df["_opportunity_kind"] == "call_up", "_kind"].apply(
+        lambda k: k["kind_basis"]).value_counts().to_dict()
+    if bases:
+        print("  call-ups by evidence: "
+              + ", ".join(f"{k} {v}" for k, v in sorted(bases.items())))
+
+    juris = df["_jurisdiction"].apply(lambda j: j["jurisdiction"]).value_counts().to_dict()
+    print("  by jurisdiction: "
+          + ", ".join(f"{k} {v}" for k, v in sorted(juris.items(), key=lambda x: -x[1])))
+
+    conflicts = df["_date_conflict"].notna().sum()
+    if conflicts:
+        print(f"  DATE CONFLICTS: {conflicts} notice(s) state a submission "
+              f"deadline in the description EARLIER than the closing_date field")
+        for _, row in df[df["_date_conflict"].notna()].iterrows():
+            print(f"    body says {row['_date_conflict']}, field says "
+                  f"{row['_closing'].strftime('%Y-%m-%d')} — "
+                  f"{str(row[cols['title']])[:52]}")
     return df
 
 
@@ -498,9 +1096,38 @@ def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict) -> None:
             # would make the field unsplittable downstream.
             "end_user_entity": _meta_str(row.get(cols["end_user"]), 500),
             "closing_date": row["_closing"].strftime("%Y-%m-%d") if pd.notna(row["_closing"]) else "",
-            "estimated_value": float(row["_value"]) if pd.notna(row.get("_value")) else 0.0,
             "matched_competencies": ",".join(row.get("_matched", [])),
+            # Instrument shape, from classify_notice — the same function the
+            # dossier uses. `kind_basis` says which publisher field decided it,
+            # because determinability is not uniform across the four shapes.
+            "opportunity_kind": row["_kind"]["opportunity_kind"],
+            "kind_basis": row["_kind"]["kind_basis"],
+            # Which hand-checked UNSPSC families this notice fell under, empty
+            # when it qualified on keywords alone (or carries no codes at all).
+            "unspsc_families": ",".join(row.get("_unspsc_families") or []),
+            # federal / unrecognised. `unrecognised` means the registry has no
+            # entry, NOT that the notice is provincial — federal Crown
+            # corporations land there. Non-federal never reaches this point.
+            "jurisdiction": row["_jurisdiction"]["jurisdiction"],
         }
+        if row["_jurisdiction"].get("org_keys"):
+            metadata["org_keys"] = row["_jurisdiction"]["org_keys"]
+
+        # Present ONLY when the prose contradicts the closing date. An absent
+        # key means no conflict was found, not that the date was verified.
+        if row.get("_date_conflict"):
+            metadata["closing_date_conflict"] = row["_date_conflict"]
+            metadata["closing_date_note"] = (
+                f"The description states a submission deadline of "
+                f"{row['_date_conflict']}, EARLIER than the closing_date field. "
+                f"Confirm against the notice before planning to the later date.")
+
+        # OMITTED, not zeroed, when no value was extracted. Chroma metadata
+        # cannot hold None, and storing 0.0 made "nobody stated a value" render
+        # as "this contract is worth nothing" on every one of 11 tenders.
+        # Absent key -> consumers show "not stated".
+        if pd.notna(row.get("_value")):
+            metadata["estimated_value"] = float(row["_value"])
 
         documents.append(document)
         metadatas.append(metadata)
@@ -555,9 +1182,13 @@ def main():
 
     criteria = parse_profile(args.profile)
     print(f"Profile: {args.profile}")
+    print(f"  UNSPSC families: {criteria['unspsc_families'] or '(none — keywords only)'}")
     print(f"  Competencies: {criteria['competencies']}")
-    print(f"  Value range: ${criteria['value_min']:,} – ${criteria['value_max']:,}")
     print(f"  Exclusions: {criteria['exclude']}")
+    # Only announce a value range when one is actually going to be applied.
+    if args.extract_values and (criteria["value_min"] > 0
+                                or criteria["value_max"] < 100_000_000):
+        print(f"  Value range: ${criteria['value_min']:,} – ${criteria['value_max']:,}")
 
     value_extractor = make_llm_value_extractor() if args.extract_values else None
     if args.extract_values:

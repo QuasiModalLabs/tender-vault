@@ -34,6 +34,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import org_resolve  # noqa: E402
 
+# The single definition of what kind of thing a notice is, shared with the
+# ingest filter. Imported rather than reimplemented: when the dossier and the
+# corpus disagree about whether an "RFP against Supply Arrangement" is work,
+# one of them is lying to the reader, and it is not obvious which.
+from ingest import classify_notice as _classify_notice  # noqa: E402
+from ingest import entity_org_keys as _entity_org_keys  # noqa: E402
+
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -230,8 +237,16 @@ def cmd_search(args) -> dict:
             "title": doc["metadata"].get("title", ""),
             "agency": _display_agency(doc["metadata"]),
             "closing_date": doc["metadata"].get("closing_date", ""),
-            "estimated_value": doc["metadata"].get("estimated_value", 0),
+            # None, never 0. The ingest omits this key when no value was
+            # extracted, and defaulting it to 0 is what made every tender in
+            # the corpus read as a $0 contract.
+            "estimated_value": doc["metadata"].get("estimated_value"),
             "matched_competencies": doc["metadata"].get("matched_competencies", ""),
+            # What KIND of thing this is, before any judgement of fit. A
+            # qualification is a vehicle, not work; see classify_notice.
+            "opportunity_kind": doc["metadata"].get("opportunity_kind", "unknown"),
+            "kind_basis": doc["metadata"].get("kind_basis", "unclassified"),
+            "unspsc_families": doc["metadata"].get("unspsc_families", ""),
             "score": round(fused_score, 4),
             "in_watching": (WATCHING / f"{_slugify(doc_id)}.md").exists(),
             "snippet": snippet,
@@ -332,14 +347,27 @@ def cmd_promote(args) -> dict:
     # Build the markdown file with YAML frontmatter
     matched = meta.get("matched_competencies", "")
     matched_list = [m.strip() for m in matched.split(",") if m.strip()]
+    families = meta.get("unspsc_families", "")
+    family_list = [f.strip() for f in families.split(",") if f.strip()]
+
+    # The ingest omits estimated_value entirely when nothing was extracted, so
+    # "not stated" survives into the vault instead of being written down as $0
+    # and later read back as a fact about the contract.
+    value = meta.get("estimated_value")
+    value_yaml = "null" if value is None else f"{value}"
+    value_prose = "Not stated" if value is None else f"${value:,.0f}"
+    kind = meta.get("opportunity_kind", "unknown")
 
     content = f"""---
 tender_id: {doc['id']}
 title: "{meta.get('title', '').replace('"', "'")}"
 agency: "{_display_agency(meta).replace('"', "'")}"
 closing_date: {meta.get('closing_date', '')}
-estimated_value: {meta.get('estimated_value', 0)}
+estimated_value: {value_yaml}
 matched_competencies: [{', '.join(matched_list)}]
+unspsc_families: [{', '.join(family_list)}]
+opportunity_kind: {kind}
+kind_basis: {meta.get('kind_basis', 'unclassified')}
 status: watching
 promoted_at: {datetime.now().strftime('%Y-%m-%d')}
 ---
@@ -348,8 +376,10 @@ promoted_at: {datetime.now().strftime('%Y-%m-%d')}
 
 **Agency:** {_display_agency(meta) or 'Unknown'}
 **Closes:** {meta.get('closing_date', 'Unknown')}
-**Estimated value:** ${meta.get('estimated_value', 0):,.0f}
+**Estimated value:** {value_prose}
+**Instrument:** {kind} (per {meta.get('kind_basis', 'unclassified')})
 **Matched on:** {', '.join(matched_list) if matched_list else 'none'}
+**UNSPSC families:** {', '.join(family_list) if family_list else 'none'}
 
 ## Description
 
@@ -1065,9 +1095,9 @@ def cmd_expiring_contracts(args) -> dict:
 
 _TENDERS_CSV = PROJECT_ROOT / ".cache" / "tenders.csv"
 
-# The CanadaBuys open-notice feed. ingest.py reads six of these columns into
-# ChromaDB; the dossier needs two it never stored — notice type (an RFSA is not
-# a piece of work) and the notice URL.
+# The CanadaBuys open-notice feed. The dossier reads the raw feed rather than
+# the profile-filtered corpus, so it keeps its own column map; ingest.py reads
+# most of these into ChromaDB but not the notice URL.
 _TENDER_COLS = {
     "tender_id": "referenceNumber-numeroReference",
     "title": "title-titre-eng",
@@ -1075,6 +1105,11 @@ _TENDER_COLS = {
     "contracting": "contractingEntityName-nomEntitContractante-eng",
     "end_user": "endUserEntitiesName-nomEntitesUtilisateurFinal-eng",
     "notice_type": "noticeType-avisType-eng",
+    "procurement_category": "procurementCategory-categorieApprovisionnement",
+    # Read for classification only, never rendered — the dossier lists notices,
+    # it doesn't reproduce them. Without it classify_notice cannot see the
+    # prose signals, and the dossier would call a TBIPS call-up open work.
+    "description": "tenderDescription-descriptionAppelOffres-eng",
     "url": "noticeURL-URLavis-eng",
 }
 
@@ -1083,11 +1118,6 @@ _TENDER_COLS = {
 # appear in the live feed on standing arrangements. Rendering them as closing
 # dates makes a permanent vehicle look like an imminent deadline.
 _SENTINEL_HORIZON_YEARS = 10
-
-# Notice types that qualify a supplier rather than buy anything. Getting onto a
-# supply arrangement or standing offer is an invitation to compete later, via
-# call-ups against the vehicle — it must not read like open work.
-_QUALIFICATION_NOTICES = ("supply arrangement", "standing offer")
 
 
 def _profile_expiry_min_value() -> float:
@@ -1113,27 +1143,14 @@ def _entity_keys(value: str) -> dict[str, str]:
     Canonical keys named by one tender entity field, each with the verbatim
     phrase that produced it.
 
-    Both steps are load-bearing. `observed_variants` splits the slash-delimited
-    multi-department values and strips the parenthetical acronym tail, and
-    without it "Department of National Defence (DND)" resolves to nothing —
-    raw-string resolution covers 47 of 896 rows, this covers 767. The matched
-    phrase rides along because an attribution that cannot say which string
-    produced it is not reviewable, which is the rule OrgResolver.scan already
-    follows for audits.
+    Delegates to ingest.entity_org_keys, which is the single definition — the
+    ingest filter uses the same resolution to decide whether a notice is
+    federal, and two copies of that would eventually disagree about which
+    organizations exist. The matched phrase rides along because an attribution
+    that cannot say which string produced it is not reviewable, which is the
+    rule OrgResolver.scan already follows for audits.
     """
-    import crosswalk
-    found: dict[str, str] = {}
-    if not value or not str(value).strip():
-        return found
-    resolver = org_resolve.default_resolver()
-    for variant in crosswalk.observed_variants(str(value)):
-        try:
-            key = resolver.resolve(variant)
-        except org_resolve.AmbiguousOrganization:
-            continue
-        if key and key not in found:
-            found[key] = variant
-    return found
+    return _entity_org_keys(value)
 
 
 def _profile_corpus_ids() -> set[str]:
@@ -1682,15 +1699,18 @@ def _dossier_tenders(dept: str, limit: int) -> dict:
             if end_user and source != "end_user":
                 item["end_user_named"] = sorted(end_user)
 
-            notice_type = (item["notice_type"] or "").lower()
-            if any(q in notice_type for q in _QUALIFICATION_NOTICES):
-                item["opportunity_kind"] = "qualification"
-                item["kind_note"] = (
-                    "A supply arrangement / standing offer qualifies suppliers "
-                    "onto a vehicle; it is not itself work. Work is competed "
-                    "later as call-ups against it, often without a public notice.")
-            else:
-                item["opportunity_kind"] = "work"
+            # ONE definition, imported — not a second copy that agrees today.
+            # The copy that used to live here substring-matched "supply
+            # arrangement", which labelled all 54 "RFP against Supply
+            # Arrangement" notices `qualification` when a call-up is the exact
+            # opposite: real work, competed among vehicle holders. It also
+            # labelled "Invitation to Qualify" as work. See classify_notice.
+            item.update(_classify_notice(
+                item["notice_type"],
+                row.get(_TENDER_COLS["procurement_category"]),
+                f"{row.get(_TENDER_COLS['title']) or ''} "
+                f"{row.get(_TENDER_COLS['description']) or ''}",
+            ))
 
             if not closing:
                 item["closing_date"] = None

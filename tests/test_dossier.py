@@ -32,6 +32,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import crosswalk as cw  # noqa: E402
+import ingest  # noqa: E402
 import tender_tools as tt  # noqa: E402
 
 PASSED = FAILED = SKIPPED = 0
@@ -390,24 +391,34 @@ def test_sentinel_dates_are_not_rendered_as_deadlines():
 
 def test_qualification_notices_are_not_shown_as_work():
     """
-    A supply arrangement or standing offer qualifies a supplier onto a vehicle.
-    Work is competed later as call-ups against it, often with no public notice,
-    so it must not render identically to an open piece of work.
+    A supply arrangement, standing offer or invitation to qualify puts a
+    supplier onto a vehicle. Work is competed later as call-ups against it,
+    often with no public notice, so it must not render identically to an open
+    piece of work.
+
+    Note what this does NOT do: decide qualification by looking for "supply
+    arrangement" in the notice type. That substring test is the bug that made
+    "RFP against Supply Arrangement" — a call-up, i.e. real work — come back
+    labelled `qualification`. The exact notice types live in ingest, and
+    tests/test_notice_classification.py owns the direction assertions.
     """
+    qual_types = {t for t, k in ingest._NOTICE_KINDS.items() if k == "qualification"}
+    valid_kinds = set(ingest._NOTICE_KINDS.values()) | {
+        "solicitation", "product", "construction", "unknown"}
+
     kinds, quals, mislabelled, silent = set(), 0, [], []
     for key in ("ssc", "pspc", "dnd"):
         for n in dossier(key, limit=40)["tenders"].get("notices", []):
             kinds.add(n["opportunity_kind"])
-            if any(q in (n.get("notice_type") or "").lower()
-                   for q in tt._QUALIFICATION_NOTICES):
+            if (n.get("notice_type") or "").strip().lower() in qual_types:
                 quals += 1
                 ref = f"{key}/{n['tender_id']}"
                 if n["opportunity_kind"] != "qualification":
                     mislabelled.append(ref)
                 if not n.get("kind_note"):
                     silent.append(ref)
-    check(kinds <= {"work", "qualification"},
-          f"opportunity_kind is only ever work or qualification (saw {kinds})")
+    check(kinds <= valid_kinds,
+          f"opportunity_kind is always one of {sorted(valid_kinds)} (saw {kinds})")
     if not quals:
         skip("no supply arrangements or standing offers in this feed")
         return
