@@ -131,9 +131,13 @@ The second is that most of the OAG corpus audits nobody. Of 364 records, about 1
 
 **It's not reproducible.** Two runs of the same question won't follow identical reasoning. Acceptable for research, disqualifying for a product that needs to be auditable.
 
-**It only works because the corpus is small.** With a deliberately narrow profile, a recent run went from 875 open tenders down to 10. At ten thousand, the markdown-file pattern strains badly. This is right-sized for one firm, not for a platform.
+**It only works because the corpus is small.** A recent run went from 901 open tenders down to 50. At ten thousand, the markdown-file pattern strains badly. This is right-sized for one firm, not for a platform.
 
-**Contract value extraction is crude by default.** The ingest grabs the first dollar figure in a description, which sometimes catches a bond amount or an insurance minimum instead. An optional flag replaces it with a model-based extraction pass, but that needs an API key, so the dumb version stays the default and the repo stays runnable with no credentials.
+**There is no contract value.** The feed publishes no value field, and the regex that used to invent one has been retired. Measured on the 2026-08-04 feed: only 94 of 896 descriptions contain a dollar figure at all, and the first one is usually not the price — the single most common extraction was $10,000,000, off construction source lists reading "estimated value of $10 million and below", which is a ceiling on a qualification vehicle. The resulting field (median $10M, max $5B) described nothing. `estimated_value` is now omitted rather than stored as `0.0`, so unknown stops rendering as free. `--extract-values` reads the descriptions with a model instead, and needs an API key.
+
+**Four things are read out of prose, and prose rules are the fragile ones.** Results notices (postings that only announce who already qualified), call-ups whose notice type was filed as a plain RFP, provincial/territorial notices, and descriptions stating a submission deadline earlier than the closing-date field. Each is precision-first and each reports its evidence in `kind_basis`, because they are not equally strong: of the three call-ups the structured field missed, only one cites an arrangement number — the other two are recoverable only from the word "TBIPS" in the title. The arrangement numbers are a curated list, not a pattern; matching the PSPC number *format* relabelled a wharf reconstruction and a building demolition as IT call-ups, because solicitation numbers and supply-arrangement numbers are shaped identically.
+
+**Relevance leans on the publisher, and the publisher has gaps.** Tenders are filtered on their UNSPSC commodity codes where CanadaBuys files them, because guessing a procurement officer's vocabulary is how a boiling-liquid-expanding-vapour-explosion study ends up in a cloud search — "vapour cloud". But three source systems file no codes at all (MX, PW and SSC — 37 of 431 notices post-filter), and one of them is Shared Services Canada, the largest federal IT buyer. Those fall back to keyword matching, and the ingest funnel prints the split every run so the gap stays visible.
 
 **The contracts data is directional, not exact.** It's unaudited, vendor names are only lightly normalized (near-variants may still count separately), reporting lags about a quarter, and contract amendments are aggregated per procurement family using the highest recorded value — which avoids double-counting but under-represents families that straddle the date window.
 
@@ -148,16 +152,20 @@ The second is that most of the OAG corpus audits nobody. Of 364 records, about 1
 Everything filters through one file: `vault/profiles/my-company.md`. Its frontmatter drives the ingest:
 
 ```yaml
-value_min: 250000
-value_max: 5000000
-competencies: [cloud, AWS, Azure, IT modernization, cybersecurity, DevOps]
+# value_min / value_max are commented out — the feed has no value field
+unspsc_families: ['8111', '8116', '4323', '80101507']
+competencies: [informatics, information technology, TBIPS, software, cloud, SaaS, ...]
 exclude: [janitorial, landscaping, catering, food service]
 min_days_until_close: 10
 ```
 
 The profile shipped here is a representative IT-consulting firm rather than a real client, which keeps the repo self-contained — swap in your own and everything downstream retargets.
 
-Competency matching is on whole words, not substrings, so "aws" matches Amazon Web Services but not "flaws" or "withdrawals". The full funnel — date, exclusions, competency, value range — prints on every ingest, so you can tune against the live distribution rather than guessing.
+`unspsc_families` is the primary filter and matches UNSPSC codes by prefix, so `8111` catches every `8111xxxx`. The list is hand-checked and committed on purpose. `scripts/unspsc_discover.py` regenerates candidates offline against PSPC's reference file, which carries the L1–L4 hierarchy and a Construction/Goods/Services type per code — but only the UNSPSC side of that file is ever read. Its GSIN linkage is unusable for this: PSPC's own caveat says the mappings were assessed at higher levels and carried through indiscriminately, and it shows, with telecom cable laying and highway paving both landing on "Foundation work, including pile driving".
+
+Construction is dropped on `procurementCategory`, the one classification field populated on 100% of notices across every source system. That alone removes 78 notices, including the Defence Construction source lists and a fishermen's-wharf reconstruction that a keyword filter kept surfacing.
+
+`competencies` is the fallback for notices with no commodity code, matched on whole words so "aws" matches Amazon Web Services but not "flaws". Worth knowing before you tune it: on the live feed `AWS`, `Azure`, `DevOps`, `cybersecurity` and `data engineering` match **zero** notices between them. The government writes *informatics*, *TBIPS*, *information technology*. The full funnel — date, exclusions, construction, UNSPSC coverage, relevance — prints on every ingest, so you can tune against the live distribution rather than guessing.
 
 ## Running it
 
