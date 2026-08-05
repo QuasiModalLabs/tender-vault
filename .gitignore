@@ -7,20 +7,39 @@ venv/
 # CSV cache — re-downloaded when you run ingest
 .cache/
 
-# ChromaDB — rebuilt from scratch by ingest.py or the weekly Actions run.
-# Not committed, to keep the repo small. Anyone cloning runs ingest.py once.
+# ChromaDB — rebuilt by ingest.py. Not committed, to keep the repo small.
+# Anyone cloning runs ingest.py once.
 chroma_db/
 
-# NOTE: data/contracts.db IS committed on purpose. It's a small filtered
-# SQLite derived from the Open Government Licence contracts dataset,
-# refreshed quarterly by Actions, and part of what this repo publishes.
-
 # Sampling runs (--source, --max-audits) write here instead of over the
-# committed databases, and half-finished builds land in .part / .old.
+# real databases; half-finished builds land in .part / .old.
 *.sample.db
 *.db.part
 chroma_db.sample/
 chroma_db.old/
+
+# Derived and profile-specific. These are filtered and scored against
+# vault/profiles/my-company.md, so they are NOT portable — a different
+# profile has to rebuild them, and re-running the ingest is a re-scoring
+# rather than a refresh.
+#
+# data/crosswalk.db is deliberately NOT ignored: it derives from
+# org_aliases.yaml, which is a fact about the Government of Canada rather
+# than about any one firm, and it's 53KB.
+data/contracts.db
+data/plans.db
+data/oag.db
+vault/intel/agencies/
+
+# Working state — private. The reference material in vault/reference/ is
+# committed because it's how the system works. What we're actually bidding
+# on is not.
+vault/tenders/
+vault/briefings/
+vault/searches/
+
+# Obsidian per-machine settings — pane layout, theme, window position
+vault/.obsidian/
 
 # OS
 .DS_Store
@@ -29,8 +48,3 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
-
-# The vault IS committed — that's the whole point of this project.
-# The digests directory accumulates one markdown file per week from Actions.
-
-vault/.obsidian/

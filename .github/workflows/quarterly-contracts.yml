@@ -1,3 +1,9 @@
+# Disabled 2026-08-04. This rebuilt data/contracts.db, which is no
+# longer committed: it's filtered and scored against my-company.md,
+# so the artifact isn't portable and shouldn't ship in the repo.
+# Run scripts/contracts_ingest.py locally instead.
+on:
+  workflow_dispatch:
 name: Quarterly contracts refresh
 
 # The proactive-disclosure dataset updates quarterly. Runs on the 5th of
