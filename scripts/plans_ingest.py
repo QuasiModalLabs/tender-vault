@@ -1,7 +1,7 @@
 """
 Ingest Treasury Board's Departmental Plans / Results expenditures-by-program
-data into a local SQLite database, scoring each program's variance explanation
-by SEMANTIC THEME so struggling programs surface as pre-RFP opportunity signals.
+data into a local SQLite database, scoring each program's planning and variance
+prose by SEMANTIC THEME so pre-RFP opportunity signals surface.
 
 Data: GC InfoBase — Expenditures and FTE by Program and by Organization
       https://open.canada.ca/data/en/dataset/b15ee8d7-2ac0-4656-8330-6c60d085cda8
@@ -9,23 +9,38 @@ Licence: Open Government Licence - Canada.
 
 WHY THIS EXISTS. The contracts dataset says WHAT was bought, in coarse category
 labels. It never says WHY a department might be vulnerable. Departmental Plans
-do: the `variance_explanation` field carries prose where a department explains,
-in its own words, why spending or headcount diverged from plan — "additional
-spending to address backlog pressures," "operational pressures related to the
-pay system." That's capability-level intent, the pre-RFP signal.
+do, in two different tenses:
 
-TWO-POLE SEMANTIC THEMING. The variance prose is mixed: some rows signal real
-operational pressure (opportunity), others are dry accounting noise (timing of
-statutory payments — no opportunity). A keyword filter can't tell them apart
-reliably ("unable to meet demand" has no keyword). Instead we score by MEANING:
+  - `planning_explanation` — forward-looking. What a department says it intends
+    to do: "investing to modernize the case management platform." This is the
+    PRIMARY signal, because intent precedes procurement.
+  - `variance_explanation` — retrospective. Why spending or headcount diverged
+    from plan: "additional spending to address backlog pressures," "operational
+    pressures related to the pay system." Secondary context — evidence of the
+    strain that produces intent.
+
+Both are capability-level signals a contract record can never carry.
+
+TWO-POLE SEMANTIC THEMING. Both fields are mixed: some rows carry real signal,
+others are dry boilerplate (timing of statutory payments — no opportunity). A
+keyword filter can't tell them apart reliably ("unable to meet demand" has no
+keyword). Instead we score by MEANING, each field against its own theme pair:
+
+    intent_score   = similarity(text, MODERNIZATION_theme)
+                   - similarity(text, ROUTINE_theme)
 
     pressure_score = similarity(text, PRESSURE_theme)
                    - similarity(text, ACCOUNTING_theme)
 
+Subtracting the second pole is what does the work: a single positive theme
+ranks anything that sounds governmental, while the anti-pole actively pushes
+boilerplate down. Ranking and --show-extremes use intent_score; see
+score_programs for why planning beats variance as the primary field.
+
 Each theme is defined in the profile by EXAMPLE SENTENCES (not keywords). The
 embedding model (all-MiniLM-L6-v2, the same one the tender corpus uses) turns
 the examples into a reference vector; every explanation is scored by cosine
-similarity toward the pressure pole and away from the accounting pole. Editing
+similarity toward its positive pole and away from its paired anti-pole. Editing
 the example sentences in the profile reshapes what the theme catches — you tune
 by DESCRIBING the signal, and the model generalizes to phrasings you didn't list.
 
@@ -159,10 +174,29 @@ def score_programs(df, intent_ex, noise_ex, pressure_ex, accounting_ex):
         kept as secondary context; a program that both struggled and plans to
         fix it is the strongest signal, but planning is what we rank on)
 
-    The planning field is the primary signal because it's forward-looking AND,
-    in this dataset, it stays populated through 2021 while variance dies after
-    2019. Discovered by reading the data: variance-based ranking surfaced
-    6-year-old archaeology and scored real IT modernizations negative.
+    The planning field is the primary signal because it's forward-looking AND
+    because it's the one that stays populated. Discovered by reading the data:
+    variance-based ranking surfaced years-old archaeology and scored real IT
+    modernizations negative.
+
+    Rows carrying text, measured against data/plans.db (ingested 2026-08-04,
+    the live GC InfoBase resource — an earlier frozen CSV stopped at 2021 and
+    gave a different, worse picture):
+
+        year   planning   variance
+        2020        213        834
+        2021        411        781
+        2022        444        835
+        2023        403        730
+        2024        408        490
+        2025        520          0
+
+    Variance is the field that dies, not planning — it thins from 2024 and is
+    empty for 2025, while planning is at its strongest there. Ranking on
+    variance would mean ranking on nothing for the most recent year in the
+    data, which is the only year a pre-RFP signal is actually actionable.
+    Re-measure before trusting these counts; they are a snapshot, not an
+    invariant.
     """
     from sentence_transformers import SentenceTransformer
     print(f"Loading embedding model ({EMBED_MODEL})...")

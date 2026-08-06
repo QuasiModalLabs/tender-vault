@@ -53,6 +53,55 @@ So I went looking for what happens earlier. Three more public datasets, each ans
 
 Read in order, those move steadily earlier in time: from *an RFP is open now*, back through *an RFP is predictably coming*, to *here are the conditions that will produce one*.
 
+<details>
+<summary><strong>Federal procurement vocabulary used below</strong></summary>
+
+The rest of this README assumes these. None are this project's coinages —
+they're the government's.
+
+**Classification**
+
+- **UNSPSC** — United Nations Standard Products and Services Code. The commodity
+  taxonomy CanadaBuys files notices under, hierarchical L1–L4. This project's
+  primary relevance filter, matched by prefix.
+- **GSIN** — Goods and Services Identification Number. Canada's older, parallel
+  taxonomy. PSPC publishes a GSIN↔UNSPSC mapping; this project reads only the
+  UNSPSC side of that file and never joins on GSIN. See *The profile*, below.
+- **`procurementCategory`** — a coarse CanadaBuys field (construction, goods,
+  services) populated on 100% of notices. Used to drop construction.
+
+**Instruments** — the eight `opportunity_kind` values, defined in full in
+[`vault/reference/notice-kinds.md`](vault/reference/notice-kinds.md)
+
+- **Supply arrangement / standing offer** — a pre-qualified vehicle. Being on one
+  is a precondition for bidding certain work, not a contract in itself.
+- **Qualification notice** — a posting that puts suppliers onto a vehicle. Buys
+  nothing today; often the most valuable thing in the corpus for a firm with no
+  federal past performance.
+- **Call-up** — work competed among suppliers already on a vehicle. Only holders
+  can bid.
+- **Results notice** — announces who already qualified. Nothing to bid; the
+  shortlist is closed.
+- **Source list** — a pre-qualified supplier list, common in construction.
+- **RFI / ACAN** — a request for information (nothing to bid, but a requirement
+  is coming), and an Advance Contract Award Notice (an award already intended
+  for a named supplier).
+
+**Vehicles and bodies**
+
+- **TBIPS / SBIPS** — Task-Based and Solution-Based Informatics Professional
+  Services. The two federal IT-services supply arrangements, and the words the
+  government actually uses where a vendor would write "IT consulting".
+- **PSPC** — Public Services and Procurement Canada, the central purchasing
+  department. **SSC** — Shared Services Canada, the government's IT department
+  and largest federal IT buyer. **OAG** — Office of the Auditor General.
+- **MX, PW, SSC** (as source systems) — prefixes on a notice's reference number
+  identifying the publishing system. These three file no UNSPSC codes at all.
+- **CKAN** — the open-source data portal software behind open.canada.ca. The
+  audit layer pulls through its API.
+
+</details>
+
 The last one is the most useful and the least obvious. When the Auditor General publicly reports that a department's systems are failing, that department is going to spend money. It's the most citable pre-RFP signal there is, because it's an independent authority saying the quiet part in public.
 
 ```
@@ -113,6 +162,43 @@ There are four signals about any given federal department. Each is useful alone.
 
 The shape is a department dossier: `dossier ircc` returns everything all four sources know, so a tender stops being an isolated notice and becomes *a tender from the department the AG flagged for processing backlogs, that plans to modernize case management, whose incumbent contract runs out in the spring.*
 
+<details>
+<summary><strong>Running your first dossier</strong></summary>
+
+In Claude Code you just ask — *"give me the full dossier on IRCC"* — and Claude
+calls the tool. `dossier` is a subcommand of `scripts/tender_tools.py`, not
+something you type into the chat. To see the raw JSON yourself:
+
+```bash
+python scripts/tender_tools.py dossier ircc
+```
+
+Each of the four sections needs its own layer built, and the dossier renders
+with whatever you have:
+
+| Section | Needs | On a fresh clone |
+|---|---|---|
+| `identity` | `data/crosswalk.db` — **ships with the repo** | Works immediately |
+| `audits` | `python scripts/oag_ingest.py` | Empty until built |
+| `plans` | `python scripts/plans_ingest.py` | Empty until built |
+| `contracts` | `python scripts/contracts_ingest.py` (~630MB) | Empty until built |
+| `tenders` | `python scripts/ingest.py` | Empty until built |
+
+Every section carries a `state` field, and the states distinguish *no data* from
+*no signal* — `attributed` versus `no_audits_found` is the difference between a
+layer you haven't built and a department the Auditor General has never examined.
+That distinction is the reason there's no score.
+
+Read `identity` first. On IRCC it reports that the contracts filed under the
+pre-2015 `cic` slug — 2,327 rows — are folded in, and that Passport Canada was
+absorbed in 2013 and contributes nothing to this extract. Those are the joins
+that a naive name match silently gets wrong.
+
+See [`vault/reference/dossier.md`](vault/reference/dossier.md) for how to read
+the sections and what each `state` means.
+
+</details>
+
 Before building it I found out why a naive version wouldn't work, which saved me a bad afternoon: **the four sources name departments differently.** The audits say "Immigration, Refugees and Citizenship Canada." The contracts say "National Defence | Défense nationale." The plans say "Department of Citizenship and Immigration." A naive join returns nothing at all, silently.
 
 So convergence needed a name-resolution layer underneath it first, and then the dossier on top — assembling the signals, not scoring them cleverly. I deleted a scoring formula at the start of this project and the dossier still has no score in it: it presents four sections and Claude judges. A number would have hidden the reasoning that makes the thing worth reading.
@@ -131,13 +217,19 @@ The second is that most of the OAG corpus audits nobody. Of 364 records, about 1
 
 **It's not reproducible.** Two runs of the same question won't follow identical reasoning. Acceptable for research, disqualifying for a product that needs to be auditable.
 
-**It only works because the corpus is small.** A recent run went from 901 open tenders down to 50. At ten thousand, the markdown-file pattern strains badly. This is right-sized for one firm, not for a platform.
+**It only works because the corpus is small.** A run in early August 2026 went from 901 open tenders down to 50. At ten thousand, the markdown-file pattern strains badly. This is right-sized for one firm, not for a platform.
+
+> **On every number in this file.** These are measurements from a specific day's
+> feed, recorded to show orders of magnitude and where the filter loses things —
+> they are not invariants, and they drift as the feed does. The funnel that
+> `python scripts/ingest.py` prints on each run is the authority on your corpus,
+> not anything written here.
 
 **There is no contract value.** The feed publishes no value field, and the regex that used to invent one has been retired. Measured on the 2026-08-04 feed: only 94 of 896 descriptions contain a dollar figure at all, and the first one is usually not the price — the single most common extraction was $10,000,000, off construction source lists reading "estimated value of $10 million and below", which is a ceiling on a qualification vehicle. The resulting field (median $10M, max $5B) described nothing. `estimated_value` is now omitted rather than stored as `0.0`, so unknown stops rendering as free. `--extract-values` reads the descriptions with a model instead, and needs an API key.
 
 **Four things are read out of prose, and prose rules are the fragile ones.** Results notices (postings that only announce who already qualified), call-ups whose notice type was filed as a plain RFP, provincial/territorial notices, and descriptions stating a submission deadline earlier than the closing-date field. Each is precision-first and each reports its evidence in `kind_basis`, because they are not equally strong: of the three call-ups the structured field missed, only one cites an arrangement number — the other two are recoverable only from the word "TBIPS" in the title. The arrangement numbers are a curated list, not a pattern; matching the PSPC number *format* relabelled a wharf reconstruction and a building demolition as IT call-ups, because solicitation numbers and supply-arrangement numbers are shaped identically.
 
-**Relevance leans on the publisher, and the publisher has gaps.** Tenders are filtered on their UNSPSC commodity codes where CanadaBuys files them, because guessing a procurement officer's vocabulary is how a boiling-liquid-expanding-vapour-explosion study ends up in a cloud search — "vapour cloud". But three source systems file no codes at all (MX, PW and SSC — 37 of 431 notices post-filter), and one of them is Shared Services Canada, the largest federal IT buyer. Those fall back to keyword matching, and the ingest funnel prints the split every run so the gap stays visible.
+**Relevance leans on the publisher, and the publisher has gaps.** Tenders are filtered on their UNSPSC commodity codes where CanadaBuys files them, because guessing a procurement officer's vocabulary is how a boiling-liquid-expanding-vapour-explosion study ends up in a cloud search — "vapour cloud". But three source systems file no codes at all (MX, PW and SSC — 37 of 431 notices post-filter on the 2026-08-04 feed), and one of them is Shared Services Canada, the largest federal IT buyer. Those fall back to keyword matching, and the ingest funnel prints the split every run so the gap stays visible.
 
 **The contracts data is directional, not exact.** It's unaudited, vendor names are only lightly normalized (near-variants may still count separately), reporting lags about a quarter, and contract amendments are aggregated per procurement family using the highest recorded value — which avoids double-counting but under-represents families that straddle the date window.
 
@@ -159,9 +251,11 @@ exclude: [janitorial, landscaping, catering, food service]
 min_days_until_close: 10
 ```
 
+That snippet is four keys out of a dozen; the frontmatter also carries the contracts filter and the theme example sentences that drive the plans and audit scoring. **The full specification is the profile's own inline comments** — every key is annotated in place with what it does and why the shipped value was chosen. [`docs/PROFILE.md`](docs/PROFILE.md) covers what that file can't say about itself: the two-pole scoring mechanics, how to tune the poles, and which edits force a rebuild.
+
 The profile shipped here is a representative IT-consulting firm rather than a real client, which keeps the repo self-contained — swap in your own and everything downstream retargets.
 
-`unspsc_families` is the primary filter and matches UNSPSC codes by prefix, so `8111` catches every `8111xxxx`. The list is hand-checked and committed on purpose. `scripts/unspsc_discover.py` regenerates candidates offline against PSPC's reference file, which carries the L1–L4 hierarchy and a Construction/Goods/Services type per code — but only the UNSPSC side of that file is ever read. Its GSIN linkage is unusable for this: PSPC's own caveat says the mappings were assessed at higher levels and carried through indiscriminately, and it shows, with telecom cable laying and highway paving both landing on "Foundation work, including pile driving".
+`unspsc_families` is the primary filter and matches UNSPSC codes by prefix, so `8111` catches every `8111xxxx`. The list is hand-checked and committed on purpose. `scripts/unspsc_discover.py` regenerates candidates against PSPC's reference file — downloaded to `.cache/` on first run, and carrying the L1–L4 hierarchy plus a Construction/Goods/Services type per code — but only the UNSPSC side of that file is ever read. Its GSIN linkage is unusable for this: PSPC's own caveat says the mappings were assessed at higher levels and carried through indiscriminately, and it shows, with telecom cable laying and highway paving both landing on "Foundation work, including pile driving".
 
 Construction is dropped on `procurementCategory`, the one classification field populated on 100% of notices across every source system. That alone removes 78 notices, including the Defence Construction source lists and a fishermen's-wharf reconstruction that a keyword filter kept surfacing.
 
@@ -169,27 +263,36 @@ Construction is dropped on `procurementCategory`, the one classification field p
 
 ## Running it
 
+Python 3.11. The first run downloads a ~90MB embedding model; no API key is needed.
+
 ```bash
 git clone https://github.com/QuasiModalLabs/tender-vault.git
 cd tender-vault
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-$EDITOR vault/profiles/my-company.md   # the filter reads from this
-python scripts/ingest.py               # builds the tender corpus, ~2 min
+$EDITOR vault/profiles/my-company.md   # the filter reads from this — read its comments
+python scripts/ingest.py               # tender corpus, ~2 min
+python scripts/plans_ingest.py         # departmental-plan signal, ~1 min
+python scripts/oag_ingest.py           # Auditor General signal, ~1 min
 ```
 
 Then either open Claude Code in the repo root and ask *"any good federal IT tenders for us this week?"*, or wire it into Claude Desktop as an MCP server.
 
-The plans and audit databases ship prebuilt, so a fresh clone can query them immediately. The contracts layer is a one-time ~630MB download and is optional if you only want opportunity discovery.
+**Nothing derived is committed.** Every layer is filtered and scored against your profile, so the same source data produces different results for different firms — which makes a shipped database actively misleading rather than a convenience. Only `data/crosswalk.db` ships, because it derives from `org_aliases.yaml` and is a fact about the Government of Canada rather than about any one firm. The venv is optional for the commands above but required for the MCP path.
+
+The contracts layer is a further ~630MB download (`python scripts/contracts_ingest.py`) and is optional if you only want opportunity discovery — but `contracts-intel`, `expiring-contracts` and the contracts section of the dossier stay empty without it.
 
 **Full install, MCP configuration, and troubleshooting: [`docs/SETUP.md`](docs/SETUP.md).**
 
-Fresh data arrives on its own — a GitHub Action re-runs the tender ingest every Monday and commits a markdown digest with a *new this week* section diffed against the previous run. The contracts and plans layers refresh quarterly. A month of digests is its own artifact: you can see the corpus shift.
+Fresh tender data arrives on its own — a GitHub Action re-runs the tender ingest every Monday and commits a markdown digest with a *new this week* section diffed against the previous run. A month of digests is its own artifact: you can see the corpus shift.
+
+The contracts and plans refresh workflows are manual-dispatch only. They rebuilt databases that are no longer committed, so on a schedule they would run and commit nothing — rebuild those locally when you want fresh data.
 
 ## Files worth reading, in order
 
 1. [`vault/CLAUDE.md`](vault/CLAUDE.md) — the agent's instructions. The most important design document in the repo; everything else is plumbing.
-2. [`vault/profiles/my-company.md`](vault/profiles/my-company.md) — how user context is stored.
+2. [`vault/profiles/my-company.md`](vault/profiles/my-company.md) — how user context is stored, and the key-by-key filter spec in its own comments. [`docs/PROFILE.md`](docs/PROFILE.md) is the companion on tuning it.
 3. [`scripts/tender_tools.py`](scripts/tender_tools.py) — the retrieval layer, and the clean line between retrieval and reasoning.
 4. [`vault/crosswalk/org_aliases.yaml`](vault/crosswalk/org_aliases.yaml) — the department registry. Ninety-odd hand-checked assertions about what the Government of Canada calls itself.
 5. [`scripts/org_resolve.py`](scripts/org_resolve.py) — resolving organizations named in free text against that registry, and the one department identifier every signal tool takes.
@@ -200,7 +303,7 @@ Fresh data arrives on its own — a GitHub Action re-runs the tender ingest ever
 
 ## What comes next
 
-- **A department-level tender index.** The dossier reads the open-notice feed directly and resolves entity names per query, which is fine at 896 notices and won't be at ten thousand. The attribution belongs at ingest, next to where the audits already write theirs.
+- **A department-level tender index.** The dossier reads the open-notice feed directly and resolves entity names per query, which is fine at the ~900 notices the feed carried in August 2026 and won't be at ten thousand. The attribution belongs at ingest, next to where the audits already write theirs.
 - **A pre-mortem command.** For any tender under serious consideration: *assume we bid and lost, or won and regretted it — walk backwards and tell me why.* One adversarial pass against my own enthusiasm before committing. This is the surviving core of a multi-persona "steering committee" feature I cut mid-build; the personas changed tone without changing reasoning, but the skepticism they were reaching for is real.
 - **A profile refinement loop.** Quarterly, read across everything watched, parked, and archived, and propose profile edits based on revealed preference. One structural catch to design around: the vault only knows about tenders that survived the filter, so it can improve precision but is blind to recall. It has to be paired with an audit that samples what the filter *rejected*.
 - **Similarity drift.** Flag a new tender that closely resembles one archived as a loss.

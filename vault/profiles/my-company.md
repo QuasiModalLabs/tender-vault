@@ -1,5 +1,12 @@
 ---
-company_name: Your Company Name
+# REPRESENTATIVE PROFILE — not a real client. Northwind Digital is a plausible
+# mid-sized Canadian IT consulting firm invented to keep this repo
+# self-contained and its examples concrete. Every number, capability and
+# constraint below is illustrative.
+#
+# Swap in your own and everything downstream retargets: the tender filter, the
+# contracts extract, and the plan/audit scores are all derived from this file.
+company_name: Northwind Digital Inc.
 team_size: 25
 founded: 2015
 location: Toronto, ON
@@ -17,8 +24,13 @@ location: Toronto, ON
 # Uncommenting these does nothing on its own. The range is only consulted when
 # ingest runs with --extract-values, which reads the description with a model
 # instead of a regex. See estimate_value in scripts/ingest.py.
-# value_min: 250000
-# value_max: 5000000
+#
+# THE PROSE GOVERNS. Because this filter is off, the fit range that actually
+# affects anything is the one stated under "What we're looking for" below, which
+# Claude reads and applies as judgement. These two numbers mirror it so the file
+# does not contradict itself — keep them in sync if you change the prose.
+# value_min: 500000
+# value_max: 3000000
 
 # UNSPSC commodity families — the publisher's own classification, and the
 # primary relevance filter. Prefix match, so '8111' catches every 8111xxxx code.
@@ -59,6 +71,16 @@ unspsc_families:
 # vocabulary is visible rather than assumed. The zero-hit terms are kept
 # because they cost nothing and would be real signals if they ever appeared;
 # they are simply not how the Government of Canada writes tenders.
+#
+# INTAKE VOCABULARY, NOT CAPABILITY CLAIMS. A term here means "surface notices
+# that say this so we can triage them" — never "we can deliver this". The two
+# lists answer different questions and are allowed to disagree. `cybersecurity`
+# is the standing example: it earns its place as an intake term, while the prose
+# below caps the real capability at vulnerability assessment with no active SOC
+# work. The prose governs what we bid; this list only governs what we get to
+# look at. Don't prune a term because we can't prime that work, and don't read
+# one as a capability — Claude is instructed to check the prose constraints
+# before recommending anything.
 competencies:
   - informatics             # 9  — the actual federal word for IT services
   - information technology  # 10
@@ -97,6 +119,13 @@ contracts_window_years: 3
 # Opportunity-shaping: minimum contract value for the expiring-contracts scan.
 # A future re-procurement below this isn't worth a proactive BD conversation.
 # Tune per company — a boutique might set this low, a large firm high.
+#
+# NOT A FIT RANGE. This is a floor on someone else's EXPIRING contract — how big
+# an incumbent's award has to be before its expiry is worth flagging. It says
+# nothing about what size of work we would bid. That it currently equals the
+# bottom of the prose fit range ($500K) is coincidence, not a link; changing one
+# does not imply changing the other. Read by tender_tools.py at query time, so
+# edits take effect immediately with no rebuild.
 expiry_min_value: 500000
 
 # Contracts describe work as procurement CATEGORY labels, not prose, so the
@@ -146,13 +175,32 @@ contracts_categories:
 #   road motor vehicles, office furniture, ships and boats, diesel fuel,
 #   printed matter, printing services, courier services
 
-# Departmental-plan variance theming (two-pole semantic scoring).
-# Each theme is defined by EXAMPLE SENTENCES, not keywords: the embedding model
-# scores each program's variance_explanation by meaning — toward the pressure
-# pole, away from the accounting pole. pressure_score = sim(pressure) - sim(noise).
+# Departmental-plan theming (two-pole semantic scoring). FOUR theme groups, used
+# as TWO pairs against TWO different fields — see score_programs in
+# scripts/plans_ingest.py:
+#
+#   planning_explanation  -> intent_score    (modernization_intent vs routine_noise)
+#       PRIMARY. Forward-looking: what a department says it PLANS to do.
+#       This is what program-signals ranks on and what --show-extremes prints.
+#
+#   variance_explanation  -> pressure_score  (operational_pressure vs accounting_noise)
+#       SECONDARY context. Retrospective: what strained last year. A program
+#       that both struggled and plans to fix it is the strongest signal, but
+#       ranking is on intent.
+#
+# Each theme is defined by EXAMPLE SENTENCES, not keywords. The embedding model
+# averages a group's examples into one vector and scores by meaning, toward the
+# positive pole and away from its paired anti-pole:
+#
+#   intent_score   = sim(text, modernization_intent) - sim(text, routine_noise)
+#   pressure_score = sim(text, operational_pressure) - sim(text, accounting_noise)
+#
 # Tune by editing/adding examples that capture how the signal actually reads;
-# the model generalizes to phrasings you didn't list. Run plans_ingest.py with
-# --show-extremes to see whether your examples pull the right rows.
+# the model generalizes to phrasings you didn't list. Keep the two poles of a
+# pair disjoint — an example that could sit in either drags both vectors
+# together and flattens the spread. Run plans_ingest.py with --show-extremes to
+# see whether your examples pull the right rows. Editing any group means
+# re-running plans_ingest.py: it is a re-scoring, not a refresh.
 plan_themes:
   modernization_intent:
     - "investing to modernize and replace an aging or legacy IT system"
@@ -207,6 +255,12 @@ oag_themes:
 
 # Company Profile
 
+> **Northwind Digital Inc. is a representative example, not a real client.** It's
+> an invented firm, used so this repo ships with a concrete profile rather than
+> an empty template — the specificity below is what makes the filter and the
+> scoring legible. Replace it with your own; nothing here describes a real
+> company's capabilities or portfolio.
+
 This is the single source of truth for "who we are" when Claude helps me find tenders. Claude reads this at the start of most conversations.
 
 ## About us
@@ -219,7 +273,7 @@ Mid-sized Canadian IT consulting firm, 25 people, founded 2015. Based in Toronto
 - **Application modernization:** Legacy .NET and Java to containerized microservices.
 - **DevOps / Platform engineering:** Kubernetes, Terraform, CI/CD design.
 - **Data engineering:** ETL pipelines, warehouse design (Snowflake, BigQuery).
-- **Cybersecurity:** Limited — vulnerability assessment only, no active SOC work.
+- **Cybersecurity:** Limited — vulnerability assessment only, no active SOC work. Note that `cybersecurity` still appears in the frontmatter `competencies` list: that list is intake vocabulary for surfacing notices to triage, not a claim about what we can deliver. This bullet is what governs whether we bid.
 
 ## Current portfolio
 
