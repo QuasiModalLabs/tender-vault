@@ -2,16 +2,17 @@
 # longer committed: it's filtered and scored against my-company.md,
 # so the artifact isn't portable and shouldn't ship in the repo.
 # Run scripts/contracts_ingest.py locally instead.
+#
+# Still dispatchable by hand. A manual run builds the DB on the runner
+# and discards it, which smoke-tests contracts_ingest.py against the
+# live upstream dataset without persisting anything.
 on:
   workflow_dispatch:
 name: Quarterly contracts refresh
 
-# The proactive-disclosure dataset updates quarterly. Runs on the 5th of
-# Jan/Apr/Jul/Oct at 07:00 UTC, and on manual trigger.
-on:
-  schedule:
-    - cron: "0 7 5 1,4,7,10 *"
-  workflow_dispatch:
+# The proactive-disclosure dataset updates quarterly. This ran on the 5th of
+# Jan/Apr/Jul/Oct at 07:00 UTC; that schedule is gone along with the commit
+# step it fed.
 
 concurrency:
   group: contracts
@@ -20,8 +21,6 @@ concurrency:
 jobs:
   contracts:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Check out the repo
@@ -37,18 +36,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Build contracts DB and agency intel
-        # Streams the large source CSV; only the filtered SQLite is persisted.
+        # Streams the large source CSV; the filtered SQLite and the agency
+        # intel files stay on the runner. Nothing is committed — both are
+        # profile-scored and not portable, so they are rebuilt locally.
         run: python scripts/contracts_ingest.py
-
-      - name: Commit DB and intel if changed
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/contracts.db vault/intel/agencies/
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            DATE=$(date -u +%Y-%m-%d)
-            git commit -m "contracts: quarterly refresh ${DATE}"
-            git push
-          fi

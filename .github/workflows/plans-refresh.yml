@@ -1,25 +1,23 @@
-# Disabled 2026-08-04. This rebuilt data/contracts.db, which is no
-# longer committed: it's filtered and scored against my-company.md,
-# so the artifact isn't portable and shouldn't ship in the repo.
-# Run scripts/contracts_ingest.py locally instead.
+# Disabled 2026-08-04. This rebuilt data/plans.db, which is no longer
+# committed: it's filtered and scored against my-company.md, so the
+# artifact isn't portable and shouldn't ship in the repo.
+# Run scripts/plans_ingest.py locally instead.
+#
+# Still dispatchable by hand. A manual run builds the DB on the runner
+# and discards it, which smoke-tests plans_ingest.py against the live
+# upstream dataset without persisting anything.
 on:
   workflow_dispatch:
 name: Departmental-plans refresh
 
 # The GC InfoBase DP/DRR expenditures dataset (live DataStore resource) gains a
 # new fiscal year roughly annually as departments publish plans, and revises
-# recent years in between. We refresh quarterly on the 12th at 07:00 UTC — often
-# enough to catch new publication and revisions, rare enough not to churn.
+# recent years in between. This refreshed quarterly on the 12th at 07:00 UTC;
+# that schedule is gone along with the commit step it fed.
 #
 # Unlike the contracts/tenders jobs this one runs the embedding model to score
 # planning_explanation at ingest, so it installs sentence-transformers and pulls
-# all-MiniLM-L6-v2 on each run (a couple of minutes). The scored SQLite is what
-# gets committed, so a fresh clone has a current, prebuilt plans layer with no
-# model run needed.
-on:
-  schedule:
-    - cron: "0 7 12 1,4,7,10 *"
-  workflow_dispatch:
+# all-MiniLM-L6-v2 on each run (a couple of minutes).
 
 concurrency:
   group: plans
@@ -28,8 +26,6 @@ concurrency:
 jobs:
   plans:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Check out the repo
@@ -46,18 +42,7 @@ jobs:
 
       - name: Build plans DB (scores planning_explanation at ingest)
         # Downloads the live DataStore dump, embeds and two-pole-scores the
-        # planning/variance prose, writes data/plans.db.
+        # planning/variance prose, writes data/plans.db — which stays on the
+        # runner. Nothing is committed; the DB is profile-scored and not
+        # portable, so it is rebuilt locally by whoever needs it.
         run: python scripts/plans_ingest.py
-
-      - name: Commit DB if changed
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/plans.db
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            DATE=$(date -u +%Y-%m-%d)
-            git commit -m "plans: quarterly refresh ${DATE}"
-            git push
-          fi
