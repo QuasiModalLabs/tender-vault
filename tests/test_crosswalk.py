@@ -319,8 +319,15 @@ def test_observed_names_are_never_invented():
     if not declared:
         skip("observed_names provenance", "none declared")
         return
-    if not (cw.OAG_DB.exists() or cw.TENDERS_CSV.exists()):
-        skip("observed_names provenance", "no source data to verify against")
+    # BOTH sources, not either. extract_observed_names() collects from oag.db
+    # and tenders.csv independently, and this compares every declared name
+    # against their union — so one missing source doesn't weaken the check, it
+    # invents failures. Of 24 declared names, 3 are attested only by oag.db and
+    # 15 only by tenders.csv, and whichever is absent is the list you get
+    # accused of inventing. An `or` here passed whenever either existed.
+    if not (cw.OAG_DB.exists() and cw.TENDERS_CSV.exists()):
+        skip("observed_names provenance",
+             "needs both oag.db and tenders.csv to verify against")
         return
 
     real = set(cw.extract_observed_names())
