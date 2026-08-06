@@ -56,6 +56,7 @@ import pandas as pd
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
+from crosswalk import load_aliases  # noqa: E402
 from ingest import (  # noqa: E402
     REQUEST_HEADERS, output_path, parse_profile, resolve_columns, staged_db,
 )
@@ -68,6 +69,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DEFAULT_PROFILE = PROJECT_ROOT / "vault" / "profiles" / "my-company.md"
 DB_PATH = PROJECT_ROOT / "data" / "contracts.db"
 INTEL_DIR = PROJECT_ROOT / "vault" / "intel" / "agencies"
+CROSSWALK_DB = PROJECT_ROOT / "data" / "crosswalk.db"
 CACHE_PATH = PROJECT_ROOT / ".cache" / "contracts.csv"
 CHUNK_ROWS = 50_000
 
@@ -348,21 +350,168 @@ def build_db(records_iter, window_years: int, source_note: str,
     return total
 
 
+# The frontmatter line that marks a file in INTEL_DIR as owned by THIS
+# generator. Pruning refuses to touch anything without it, so a file written by
+# hand into that directory is never deleted by an ingest.
+GENERATED_MARKER = "source: proactive-disclosure-contracts"
+
+
+def _display_slug(text: str) -> str:
+    """
+    The legacy slug of a bilingual display title.
+
+    Retained ONLY for organizations the registry cannot name. Everything it can
+    name is filed under the canonical key instead, which is the whole point of
+    org_aliases.yaml: `cic` is pre-2015 Citizenship and Immigration, and keying
+    intel on the dataset's own strings meant reading a file named for a
+    department that stopped existing in 2015.
+    """
+    return re.sub(r"[-\s]+", "-", re.sub(r"[^\w\s-]", "", text.lower())).strip("-")[:60]
+
+
+def _slug_to_key() -> dict[str, str]:
+    """
+    CKAN slug -> canonical key, read once from the crosswalk.
+
+    The same table org_resolve.department_scope reads in the other direction.
+    The slug is preferred over the display title because it is the STABLE
+    machine key ("cic") while the title is a bilingual display string that moves
+    with rebrands and translations. Empty when the crosswalk has not been built,
+    which is not an error — the title fallback still resolves most of them.
+    """
+    if not CROSSWALK_DB.exists():
+        return {}
+    con = sqlite3.connect(CROSSWALK_DB)
+    try:
+        return {slug: key for key, slug in con.execute(
+            "SELECT canonical_key, contract_owner_org FROM org_crosswalk "
+            "WHERE contract_owner_org IS NOT NULL AND contract_owner_org != ''"
+        )}
+    except sqlite3.OperationalError:
+        return {}
+    finally:
+        con.close()
+
+
+def _canonical_key(org_title: str, owner_org: str, slug_map: dict[str, str]):
+    """
+    The registry key for one contracts-dataset organization, or None.
+
+    None is a REAL ANSWER, not a failure. The contracts dataset carries bodies a
+    registry of departments and agencies has no key for, and inventing one would
+    put a department that does not exist into the vault graph.
+    """
+    if owner_org and owner_org in slug_map:
+        return slug_map[owner_org]
+    import org_resolve
+    try:
+        return org_resolve.default_resolver().resolve(org_title)
+    except org_resolve.AmbiguousOrganization:
+        # A registry defect, not something to guess through. Fall back to the
+        # display slug so the file still gets written and the defect stays
+        # visible in the filename.
+        return None
+
+
+def _prune_legacy_intel(written: set[str], canonical_keys: set[str]) -> None:
+    """
+    Remove intel files left behind by the old display-slug naming.
+
+    FOUR CONDITIONS, all required, because deleting a file out of the vault is
+    the one operation here that cannot be undone by re-running the ingest:
+
+      1. a direct child of INTEL_DIR ending in .md;
+      2. carrying this generator's frontmatter marker — a hand-written file in
+         that directory is never ours to delete;
+      3. NOT named after a canonical key. This is what protects a department
+         that merely dropped out of this run's top N: those files are named by
+         key and are spared by construction. A file whose stem is not a key is
+         legacy naming, a name no future run will ever write again;
+      4. not something this run just wrote.
+
+    One name is genuinely ambiguous and is resolved conservatively:
+    `justice-canada` is both a plausible display slug and a real canonical key,
+    so condition 3 keeps it. It is rewritten in place whenever Justice is in the
+    top N.
+    """
+    pruned, kept = [], []
+    for path in sorted(INTEL_DIR.glob("*.md")):
+        if path.name in written:
+            continue
+        if not path.is_file():
+            continue
+        if GENERATED_MARKER not in path.read_text(encoding="utf-8", errors="replace"):
+            continue                                    # not ours
+        if path.stem in canonical_keys:
+            kept.append(path.name)                      # dropped out, not orphaned
+            continue
+        path.unlink()
+        pruned.append(path.name)
+
+    # Printed every time. Silent deletion of vault files is exactly the kind of
+    # thing that should never have to be discovered afterwards.
+    if pruned:
+        print(f"Pruned {len(pruned)} legacy-named intel file(s) "
+              "(display-slug naming, superseded by canonical keys):")
+        for name in pruned:
+            print(f"  - {name}")
+    if kept:
+        print(f"Kept {len(kept)} file(s) for departments outside this run's top N: "
+              f"{', '.join(kept)}")
+
+
 def write_agency_intel(top_n: int = 10, db_path: Path = DB_PATH) -> None:
-    """Generate vault/intel/agencies/<org>.md from the freshly built DB."""
+    """
+    Generate vault/intel/agencies/<canonical-key>.md from the freshly built DB.
+
+    NAMED BY CANONICAL KEY so a tender that links [[ircc]] lands on the intel
+    file for IRCC. Under the old display-slug naming it landed nowhere, which
+    left every one of these files an isolated node in the vault graph while the
+    relationship they describe was perfectly real.
+
+    GROUPED BY KEY for the same reason: the rename folds `cic` and `pptc` onto
+    `ircc`, and two organizations mapping to one filename would otherwise mean
+    the second silently overwrote the first. The fold is recorded in the
+    frontmatter, because a fold whose contribution is invisible is a fold the
+    reader cannot check.
+    """
     con = sqlite3.connect(db_path)
     ingest_date = con.execute("SELECT value FROM meta WHERE key='ingest_date'").fetchone()[0]
-    orgs = con.execute("""
-        SELECT org, COUNT(DISTINCT family_id) AS n
-        FROM contracts WHERE org != '' GROUP BY org ORDER BY n DESC LIMIT ?
-    """, (top_n,)).fetchall()
+    slug_map = _slug_to_key()
+
+    # Bucket every organization in the extract by canonical key. Unresolved ones
+    # keep their own bucket under the display slug rather than being merged into
+    # an "unknown" pile that no reader could take apart again.
+    buckets: dict[str, dict] = {}
+    for org, owner_org in con.execute(
+        "SELECT DISTINCT org, owner_org FROM contracts WHERE org != ''"
+    ):
+        key = _canonical_key(org, owner_org or "", slug_map)
+        bucket = buckets.setdefault(key or f"\x00{_display_slug(org)}", {
+            "key": key, "orgs": [], "slugs": []})
+        bucket["orgs"].append(org)
+        if owner_org and owner_org not in bucket["slugs"]:
+            bucket["slugs"].append(owner_org)
+
+    # COUNT(DISTINCT family_id) across the whole bucket, not summed per org: a
+    # contract family spanning two folded slugs is one family, not two.
+    for bucket in buckets.values():
+        placeholders = ",".join("?" * len(bucket["orgs"]))
+        bucket["rows"] = con.execute(
+            f"SELECT vendor_norm, MAX(value) AS v FROM contracts "
+            f"WHERE org IN ({placeholders}) GROUP BY family_id", bucket["orgs"],
+        ).fetchall()
+
+    ranked = sorted(buckets.values(), key=lambda b: -len(b["rows"]))[:top_n]
+
+    import org_resolve
+    resolver = org_resolve.default_resolver()
 
     INTEL_DIR.mkdir(parents=True, exist_ok=True)
-    for org, n_families in orgs:
-        rows = con.execute("""
-            SELECT vendor_norm, MAX(value) AS v FROM contracts
-            WHERE org = ? GROUP BY family_id
-        """, (org,)).fetchall()
+    written: set[str] = set()
+    for bucket in ranked:
+        key, rows = bucket["key"], bucket["rows"]
+        n_families = len(rows)
         values = sorted(r[1] for r in rows if r[1] and r[1] > 0)
         median = values[len(values) // 2] if values else 0
         total_value = sum(values)
@@ -372,33 +521,64 @@ def write_agency_intel(top_n: int = 10, db_path: Path = DB_PATH) -> None:
                 vendor_totals[vendor] = vendor_totals.get(vendor, 0) + (v or 0)
         top_vendors = sorted(vendor_totals.items(), key=lambda x: -x[1])[:8]
 
-        slug = re.sub(r"[-\s]+", "-", re.sub(r"[^\w\s-]", "", org.lower())).strip("-")[:60]
+        primary = bucket["orgs"][0]
+        stem = key or _display_slug(primary)
+        title = resolver.display_name(key) if key else primary
+
         lines = [
             "---",
-            f'agency: "{org[:150]}"',
+            f"canonical_key: {key or 'null'}",
+            f'agency: "{title[:150]}"',
+            f"ckan_slugs: [{', '.join(bucket['slugs'])}]",
+            "contributing_org_titles: ["
+            + ", ".join(f'"{o[:150]}"' for o in bucket["orgs"]) + "]",
             f"generated: {ingest_date}",
-            "source: proactive-disclosure-contracts",
+            GENERATED_MARKER,
             "---",
             "",
-            f"# {org}",
+            f"# {title}",
             "",
             "Auto-generated from the Proactive Publication of Contracts dataset "
             f"(ingest {ingest_date}, recency window). Unaudited data; vendor names "
             "are lightly normalized (corporate suffixes and punctuation stripped, "
             "but not fuzzy-matched), so counts are directional.",
             "",
+            f"Filtered to the competencies in [[my-company]]. For how this reads "
+            f"against the other three signals on a department, see [[dossier]].",
+            "",
             f"- **Contract families in our competency space:** {n_families}",
             f"- **Total awarded value:** ${total_value:,.0f}",
             f"- **Median contract value:** ${median:,.0f}",
             "",
-            "## Top vendors by value",
-            "",
         ]
+        if len(bucket["orgs"]) > 1:
+            lines += [
+                "**Folded from more than one dataset organization**, so the "
+                "figures above span all of them: "
+                + "; ".join(bucket["orgs"]) + ". Read the relation notes in "
+                "`vault/crosswalk/org_aliases.yaml` before quoting a number "
+                "across a predecessor or an absorbed body.",
+                "",
+            ]
+        if not key:
+            lines += [
+                "**No canonical key.** The organization registry has no entry for "
+                "this body, so this file is named by its display string and no "
+                "tender will link to it. A registry miss means *not a department* "
+                "— not *not federal*; federal Crown corporations have no entry in "
+                "a registry of departments and agencies. See [[dossier]].",
+                "",
+            ]
+        lines += ["## Top vendors by value", ""]
         lines += [f"- {v} = ${amt:,.0f}" for v, amt in top_vendors]
         lines.append("")
-        (INTEL_DIR / f"{slug}.md").write_text("\n".join(lines), encoding="utf-8")
+
+        (INTEL_DIR / f"{stem}.md").write_text("\n".join(lines), encoding="utf-8")
+        written.add(f"{stem}.md")
     con.close()
-    print(f"Wrote agency intel for {len(orgs)} departments to {INTEL_DIR}")
+
+    _prune_legacy_intel(written, set(load_aliases()))
+    print(f"Wrote agency intel for {len(ranked)} departments to {INTEL_DIR}")
 
 
 def main():
@@ -475,9 +655,11 @@ def main():
 
     if kept and not args.no_intel:
         if is_sample:
-            # vault/intel/agencies/ is committed content. A partial run would
-            # rewrite it from a subset, which is the same failure as clobbering
-            # the DB — just in markdown.
+            # The directory is derived, but that is not a licence to rewrite it
+            # from a subset: a sampling run would publish partial figures under
+            # the same filenames the full run uses, and would prune the
+            # departments the sample happened to miss. Same failure as
+            # clobbering the DB — just in markdown, and now with deletions.
             print("Skipping agency intel: sampling run must not rewrite vault/intel/.")
         else:
             write_agency_intel(db_path=db_path)

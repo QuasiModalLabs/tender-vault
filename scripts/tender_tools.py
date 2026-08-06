@@ -176,6 +176,21 @@ def _display_agency(meta: dict) -> str:
     return meta.get("end_user_entity") or meta.get("contracting_entity") or ""
 
 
+def _yaml_list(raw: str) -> list[str]:
+    """
+    One inline frontmatter sequence as a list, for the no-dependency parse.
+
+    cmd_list_watching reads frontmatter by hand rather than pulling in a YAML
+    parser, so the `[a, b]` flow form is unpacked here. Quotes come off because
+    department entries are written with them: a bare [[ircc]] is a nested
+    sequence in YAML, not a string.
+    """
+    inner = raw.strip()
+    if not inner.startswith("["):
+        return [inner.strip('"')] if inner else []
+    return [p.strip().strip('"') for p in inner[1:].rstrip("]").split(",") if p.strip()]
+
+
 # ---------------------------------------------------------------------------
 # Reciprocal Rank Fusion — combine BM25 + semantic without tuning weights
 # ---------------------------------------------------------------------------
@@ -324,8 +339,69 @@ def cmd_list_watching(args) -> dict:
             "title": fields.get("title", ""),
             "closing_date": fields.get("closing_date", ""),
             "status": fields.get("status", ""),
+            # Both department fields, so "which departments are we watching" and
+            # "what did the registry fail to resolve" are answerable from the
+            # tool rather than by grepping the vault. The second is the evidence
+            # for whether the registry needs a Crown-corporation tier.
+            "department": _yaml_list(fields.get("department", "")),
+            "department_unresolved": _yaml_list(
+                fields.get("department_unresolved", "")),
         })
     return {"watching": tenders}
+
+
+# The three entity_source values in prose. Keyed rather than formatted so an
+# unrecognised source raises here instead of being quietly rendered as a bare
+# key — the set is fixed and test_dossier locks it.
+_SOURCE_PROSE = {
+    "end_user": "named as end user",
+    "contracting_entity_end_user_unstated": "contracting entity; end user unstated",
+    "contracting_entity_end_user_names_others":
+        "contracting entity; end user is another department",
+}
+
+
+def _attribution_note(attribution: dict[str, dict], unresolved: list[str]) -> str:
+    """
+    Spell the attribution out in the BODY, not only in frontmatter.
+
+    Someone reading this file in three weeks should not have to go and check a
+    metadata field to learn that its department is a buyer of record rather than
+    the stated customer, or that a registry miss means "not a department" rather
+    than "not federal". Both are easy to reconstruct wrongly and expensive to
+    reconstruct wrongly.
+    """
+    weak = [k for k, a in attribution.items() if a["entity_source"] != "end_user"]
+    named = ", ".join(f'"{u}"' for u in unresolved) or "either entity field"
+
+    if not attribution:
+        return (
+            f"\n> **Attribution note:** The organization registry did not resolve "
+            f"{named}. The registry indexes *departments and agencies*, so a miss "
+            "means **not a department**, not **not federal** — federal Crown "
+            "corporations such as CDIC, BDC and Canada Post have no entry in it. "
+            "See [[dossier]].\n"
+        )
+
+    lines = []
+    if weak:
+        lines.append(
+            ", ".join(f"[[{k}]]" for k in weak)
+            + (" is " if len(weak) == 1 else " are ")
+            + "the contracting entity here, not a stated end user. Federal IT is "
+            "routinely bought by SSC or PSPC on behalf of the department that "
+            "actually needs the work, so this is weaker evidence than an end-user "
+            "attribution. See [[dossier]]."
+        )
+    if unresolved:
+        lines.append(
+            f"The registry also did not resolve {named} — a miss there means "
+            "*not a department*, not *not federal*."
+        )
+    if not lines:
+        return ""
+    lines[0] = f"**Attribution note:** {lines[0]}"
+    return "\n" + "\n>\n".join(f"> {line}" for line in lines) + "\n"
 
 
 def cmd_promote(args) -> dict:
@@ -358,10 +434,47 @@ def cmd_promote(args) -> dict:
     value_prose = "Not stated" if value is None else f"${value:,.0f}"
     kind = meta.get("opportunity_kind", "unknown")
 
+    # Departments as WIKILINKS on the CANONICAL KEY, never the display string.
+    # The key is the identity the rest of the project already uses, so linking on
+    # it is what lets the vault graph connect a tender to its department — and,
+    # through that department's backlinks, to every other tender touching it.
+    # Resolved through _entity_attribution, shared with the dossier, so a tender
+    # file and a dossier can never disagree about who a notice is for.
+    end_user_raw = str(meta.get("end_user_entity") or "").strip()
+    contracting_raw = str(meta.get("contracting_entity") or "").strip()
+    attribution = _entity_attribution(end_user_raw, contracting_raw)
+
+    # Quoted, because a bare [[ircc]] is a nested YAML sequence rather than a
+    # string. Always a list, even for one department: a sometimes-scalar field
+    # means every reader needs a type check and one of them will forget.
+    dept_yaml = ", ".join(f'"[[{key}]]"' for key in attribution)
+    source_yaml = ", ".join(a["entity_source"] for a in attribution.values())
+
+    # Entity strings the registry did not resolve, kept as EVIDENCE rather than
+    # dropped. Recorded even when the other field DID resolve, because the
+    # question this list answers — should the registry grow a Crown-corporation
+    # tier — deserves to be settled by counts rather than by someone noticing.
+    unresolved: list[str] = []
+    for raw in (end_user_raw, contracting_raw):
+        if raw and raw not in unresolved and not _entity_keys(raw):
+            unresolved.append(raw)
+    unresolved_yaml = (
+        "\ndepartment_unresolved: ["
+        + ", ".join(f'"{u.replace(chr(34), chr(39))}"' for u in unresolved)
+        + "]"
+    ) if unresolved else ""
+
+    dept_prose = ", ".join(
+        f"[[{key}]] ({_SOURCE_PROSE[a['entity_source']]})"
+        for key, a in attribution.items()
+    ) or "None resolved — see the attribution note below."
+
     content = f"""---
 tender_id: {doc['id']}
 title: "{meta.get('title', '').replace('"', "'")}"
 agency: "{_display_agency(meta).replace('"', "'")}"
+department: [{dept_yaml}]
+entity_source: [{source_yaml}]{unresolved_yaml}
 closing_date: {meta.get('closing_date', '')}
 estimated_value: {value_yaml}
 matched_competencies: [{', '.join(matched_list)}]
@@ -375,12 +488,13 @@ promoted_at: {datetime.now().strftime('%Y-%m-%d')}
 # {meta.get('title', 'Untitled')}
 
 **Agency:** {_display_agency(meta) or 'Unknown'}
+**Departments:** {dept_prose}
 **Closes:** {meta.get('closing_date', 'Unknown')}
 **Estimated value:** {value_prose}
 **Instrument:** {kind} (per {meta.get('kind_basis', 'unclassified')})
 **Matched on:** {', '.join(matched_list) if matched_list else 'none'}
 **UNSPSC families:** {', '.join(family_list) if family_list else 'none'}
-
+{_attribution_note(attribution, unresolved)}
 ## Description
 
 {doc['document']}
@@ -1153,6 +1267,49 @@ def _entity_keys(value: str) -> dict[str, str]:
     return _entity_org_keys(value)
 
 
+def _entity_attribution(end_user_value, contracting_value) -> dict[str, dict]:
+    """
+    Every canonical department a notice attributes to, and how each was reached.
+
+    ONE definition, shared by the dossier's notice section and by promote. The
+    dossier asks "does this notice reach the department I am looking at"; promote
+    asks "which departments does this notice name" — the same resolution read from
+    two directions, and two copies of it would eventually disagree about which
+    field carried an attribution.
+
+    END-USER KEYS FIRST, and the order is load-bearing rather than cosmetic: it is
+    the order they are written into a promoted tender file, and the department that
+    needs the work outranks the one that happens to be buying. A contracting entity
+    only ever ADDS a department the end-user field did not already name; it never
+    overwrites one, because that would downgrade a stated customer to a buyer of
+    record.
+
+    The `entity_source` values are the distinction the whole thing exists for.
+    Federal IT is routinely bought by SSC or PSPC on behalf of the department that
+    actually needs it, so 'they are buying this' and 'they are the buyer of record
+    and nobody said who it is for' have to stay apart. The matched phrase rides
+    along as `entity_evidence` because an attribution that cannot say which string
+    produced it is not reviewable.
+    """
+    end_user = _entity_keys(end_user_value)
+    contracting = _entity_keys(contracting_value)
+
+    attribution: dict[str, dict] = {}
+    for key, evidence in end_user.items():
+        attribution[key] = {"entity_source": "end_user", "entity_evidence": evidence}
+
+    # Whether the end-user field named ANYONE is a property of the notice, not of
+    # the department being asked about — so it is decided once, here, rather than
+    # per lookup.
+    fallback = ("contracting_entity_end_user_unstated" if not end_user
+                else "contracting_entity_end_user_names_others")
+    for key, evidence in contracting.items():
+        attribution.setdefault(
+            key, {"entity_source": fallback, "entity_evidence": evidence}
+        )
+    return attribution
+
+
 def _profile_corpus_ids() -> set[str]:
     """
     Tender ids in the profile-filtered ChromaDB corpus, read straight out of
@@ -1654,22 +1811,19 @@ def _dossier_tenders(dept: str, limit: int) -> dict:
     with open(_TENDERS_CSV, encoding="utf-8-sig", newline="") as fh:
         for row in csv.DictReader(fh):
             scanned += 1
-            end_user = _entity_keys(row.get(_TENDER_COLS["end_user"]))
-            contracting = _entity_keys(row.get(_TENDER_COLS["contracting"]))
-            if dept in end_user:
-                source, evidence = "end_user", end_user[dept]
-            elif dept in contracting:
-                # The distinction the whole section turns on. Federal IT is
-                # routinely bought by SSC or PSPC on behalf of the department
-                # that actually needs it, so the contracting entity is often not
-                # the customer. Saying which field carried the attribution keeps
-                # "they are buying this" apart from "they are the buyer of
-                # record and nobody said who it is for".
-                source = ("contracting_entity_end_user_unstated" if not end_user
-                          else "contracting_entity_end_user_names_others")
-                evidence = contracting[dept]
-            else:
+            # The distinction the whole section turns on — which field carried
+            # the attribution — is decided by _entity_attribution, shared with
+            # promote so a tender file and a dossier never disagree about it.
+            attribution = _entity_attribution(
+                row.get(_TENDER_COLS["end_user"]),
+                row.get(_TENDER_COLS["contracting"]),
+            )
+            if dept not in attribution:
                 continue
+            source = attribution[dept]["entity_source"]
+            evidence = attribution[dept]["entity_evidence"]
+            end_user = [k for k, a in attribution.items()
+                        if a["entity_source"] == "end_user"]
 
             closing = (row.get(_TENDER_COLS["closing"]) or "")[:10]
             item = {

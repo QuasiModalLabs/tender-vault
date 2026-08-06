@@ -71,6 +71,41 @@ def test_promote():
     return files[0].name
 
 
+def test_promote_writes_department_links(filename: str):
+    """
+    The department link, the attribution, and the registry miss — in the file.
+
+    FAKE_DOC is deliberately the awkward case rather than the easy one: its end
+    user ("Test Agency") resolves to nothing and its contracting entity
+    ("Shared Services Canada") resolves to ssc. So a correct promote has to link
+    ssc, say out loud that ssc is the buyer of record rather than the customer,
+    and keep the unresolved string instead of dropping it. An easy case where
+    both fields name the same recognised department would assert none of that.
+    """
+    content = (tt.WATCHING / filename).read_text(encoding="utf-8")
+
+    # Quoted, because a bare [[ssc]] is a nested YAML sequence, not a string.
+    assert 'department: ["[[ssc]]"]' in content, (
+        "department is not a quoted wikilink list on the canonical key"
+    )
+    assert "entity_source: [contracting_entity_end_user_unstated]" in content, (
+        "entity_source must run parallel to department and say how it was reached"
+    )
+    assert 'department_unresolved: ["Test Agency"]' in content, (
+        "an unresolved entity string is evidence and must survive the promote"
+    )
+    # The attribution has to be legible without going and reading frontmatter.
+    assert "**Departments:** [[ssc]] (contracting entity; end user unstated)" in content, (
+        "body does not name the department or how it was attributed"
+    )
+    assert "**Attribution note:**" in content and "not a stated end user" in content, (
+        "body does not spell out that the attribution is via the contracting entity"
+    )
+    assert "*not a department*, not *not federal*" in content, (
+        "body does not distinguish a registry miss from a non-federal finding"
+    )
+
+
 def test_promote_duplicate_rejected():
     result = tt.cmd_promote(SimpleNamespace(tender_id=FAKE_ID))
     assert "error" in result, "second promote of same tender should error"
@@ -138,6 +173,7 @@ def test_archive_from_watching():
 def main():
     setup_temp_vault()
     filename = test_promote()
+    test_promote_writes_department_links(filename)
     test_promote_duplicate_rejected()
     test_park(filename)
     test_park_missing_file_rejected()
