@@ -41,6 +41,53 @@ jobs:
           path: ~/.cache/huggingface
           key: hf-all-MiniLM-L6-v2-v1
 
+      - name: Build OAG database
+        # What makes the test step below worth running. test_oag_attribution.py
+        # gates on data/oag.db and skips all 22 of its checks without it, and
+        # the DB is no longer committed — so on a fresh runner the suite would
+        # go green having tested nothing.
+        #
+        # No sampling flags: --max-audits writes to a *.sample.db that nothing
+        # reads. This adds a dependency on the open.canada.ca CKAN API, so an
+        # upstream outage now fails Monday before the ingest runs. That is the
+        # trade we want — a red Monday is the signal — but it is a second
+        # external service on a job that previously needed only the tender feed.
+        run: python scripts/oag_ingest.py
+
+      - name: Run test suites
+        # The suites are standalone scripts, not pytest: each has a main() and
+        # exits non-zero on failure. Run every one rather than stopping at the
+        # first, so a broken Monday reports all the damage in a single run.
+        #
+        # Placed after the model cache and before ingest deliberately: this is
+        # the step that catches a dependency that changed under us over the
+        # weekend, and it should fail before we spend ten minutes embedding.
+        run: |
+          failed=0
+          for t in tests/test_*.py; do
+            echo "--- $t"
+            python "$t" || { echo "FAILED: $t"; failed=1; }
+          done
+          exit $failed
+
+      - name: Check the MCP server still imports
+        # No test suite imports mcp_server.py and no workflow runs it, which is
+        # exactly how `from mcp.server.fastmcp import FastMCP` stayed broken
+        # through the mcp 2.0 rename — CI installed the new major every week
+        # and never once loaded the module that used it. Importing the module
+        # executes the @mcp.tool() decorators, so this catches both a moved
+        # import path and a tool that stops registering.
+        run: |
+          python - <<'PY'
+          import asyncio, importlib.util as u
+          spec = u.spec_from_file_location("mcp_server", "scripts/mcp_server.py")
+          mod = u.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          tools = asyncio.run(mod.mcp.list_tools())
+          assert len(tools) >= 14, f"expected >=14 tools, got {len(tools)}"
+          print(f"MCP server imports cleanly: {len(tools)} tools registered")
+          PY
+
       - name: Run ingest
         # ChromaDB is rebuilt into a gitignored directory — we don't commit it.
         # What we DO commit (in the next step) is the digest file: a
