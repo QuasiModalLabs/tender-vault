@@ -2,7 +2,7 @@
 MCP server exposing tender tools to Claude Desktop (and any MCP client).
 
 Reuses all the logic from tender_tools.py. This file just adapts it to
-the MCP protocol via FastMCP.
+the MCP protocol via the SDK's MCPServer (called FastMCP before mcp 2.0).
 
 To use with Claude Desktop, add to your claude_desktop_config.json:
 
@@ -31,10 +31,10 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).parent))
 import tender_tools  # noqa: E402
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp.server.mcpserver import MCPServer  # noqa: E402
 
 
-mcp = FastMCP("tender-vault")
+mcp = MCPServer("tender-vault")
 
 
 @mcp.tool()
