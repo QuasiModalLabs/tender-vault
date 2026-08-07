@@ -5,7 +5,7 @@ description: Produce the weekly tender briefing as a vault file. Use when asked 
 
 # Tender briefing
 
-Write to `vault/briefings/YYYY-MM-DD.md`, dated today. Never print the
+Write to `vault/briefings/briefing-YYYY-MM-DD.md`, dated today. Never print the
 briefing to the terminal — it gets read in Obsidian, and wide tables
 truncate in a terminal.
 

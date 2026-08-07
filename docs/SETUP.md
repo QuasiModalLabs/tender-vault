@@ -208,7 +208,7 @@ looks exactly like a server that failed to load.
 
 1. Downloads the latest CanadaBuys CSV
 2. Re-runs the filter pipeline
-3. Writes a digest to `vault/digests/YYYY-MM-DD.md`, including a **New this week** section diffed against the previous run's corpus snapshot (`vault/digests/corpus-latest.txt`)
+3. Writes a digest to `vault/digests/digest-YYYY-MM-DD.md`, including a **New this week** section diffed against the previous run's corpus snapshot (`vault/digests/corpus-latest.txt`)
 4. Commits the digest and the updated snapshot — not `chroma_db/`
 
 Because the digest is generated on the Actions runner, it can reference tenders your local corpus hasn't seen. After pulling a new digest, re-run `python scripts/ingest.py` to sync locally.

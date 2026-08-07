@@ -1,7 +1,7 @@
 """
 Generate a weekly digest of the tender corpus after ingest.
 
-Writes to vault/digests/YYYY-MM-DD.md. The digest is what gets committed
+Writes to vault/digests/digest-YYYY-MM-DD.md. The digest is what gets committed
 by GitHub Actions — it's the human-readable trail of what changed over time.
 
 Keeps the file short on purpose (~2KB). It's meant to be read in 30 seconds
@@ -240,7 +240,7 @@ def generate_digest() -> str:
 def main():
     DIGEST_DIR.mkdir(parents=True, exist_ok=True)
     today = datetime.now().strftime("%Y-%m-%d")
-    output_path = DIGEST_DIR / f"{today}.md"
+    output_path = DIGEST_DIR / f"digest-{today}.md"
     content = generate_digest()
     output_path.write_text(content, encoding="utf-8")
     print(f"Wrote digest: {output_path.relative_to(PROJECT_ROOT)}")
