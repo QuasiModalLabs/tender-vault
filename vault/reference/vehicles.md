@@ -21,9 +21,19 @@ Outcome-based solution delivery rather than resource categories. The structural 
 
 Promoted to `watching/` 2026-08-04.
 
-**Gated:** 0 of 50 notices, week of 2026-08-04. The RFSA is the only notice in
+**Gated:** 0 of 48 notices, week of 2026-08-04. The RFSA is the only notice in
 the corpus mentioning SBIPS at all. Best fit, no observed traffic — the open
 question against TBIPS's 7.
+
+**Gated:** 0 of 50 notices, week of 2026-08-06 — on a re-ingested corpus, so
+this *is* an independent second observation. `cb-20-75132174` remains the only
+notice mentioning SBIPS at all. Two separate weeks of zero observed traffic
+against TBIPS's seven is now a real comparison rather than one reading counted
+twice.
+
+_(An earlier 2026-08-06 note recorded 0 of 48 from the stale 2026-08-04 ingest
+and correctly refused to count it. The ingest has since been re-run; the line
+above replaces it.)_
 
 ---
 
@@ -50,6 +60,28 @@ Indigenous Set-Aside. Holding TBIPS would not reach either. Count reachable
 separately from gated — 5, not 7 — or the number overstates what qualifying
 buys.
 
+**Gated:** 7 of 50 notices, week of 2026-08-06 — on a re-ingested corpus, and an
+independent observation. Still **5 reachable**: `cb-998-30821848` (ISC, Indigenous
+Tier 1 only) and `cb-94-51127631` (NRC, Voluntary Indigenous Set-Aside) carry the
+same second gate as last week.
+
+The total held at 7 but the composition changed: `cb-330-42994613` (DND/MARPAC)
+closed out, and `cb-937-38464611` (Public Safety, Office of the Foreign Influence
+Commissioner) arrived. All 7 are now typed `call_up` — last week 3 of the 7 were
+plain RFPs identified from prose.
+
+_(An earlier 2026-08-06 note recorded the same 7 from the stale 2026-08-04
+ingest and correctly declined to tally it. The line above replaces it.)_
+
+**What the gate looks like from the buyer's side.** `WS5819275303-Doc5819275371`
+(DND, 2026-08-19) is the one call-up in the corpus that states the rule
+explicitly: uninvited SA holders may request an invitation up to five business
+days before closing and will normally receive one, but unqualified bidders "will
+have to qualify for Supply Arrangement # TBIPS SA EN578-170432 before they are
+given an opportunity to bid," and "Canada will not extend RFP # WS5819275303 to
+provide additional time for Bidders to qualify." Holding the SA is admission,
+not advantage. Quote it when the qualification cost comes up for decision.
+
 ---
 
 ## ProServices
@@ -61,7 +93,10 @@ Professional services for lower-value requirements.
 
 Reasonable third. Cheap to hold.
 
-**Gated:** _(none observed yet)_
+**Gated:** 0 of 48 notices, week of 2026-08-04 — recorded as a zero, not as an
+absence of checking.
+
+**Gated:** 0 of 50 notices, week of 2026-08-06, on a re-ingested corpus.
 
 ---
 
