@@ -30,7 +30,9 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(Path(__file__).parent))
 
+import conftest  # noqa: E402,F401  — MUST come first: redirects the vault
 import crosswalk as cw  # noqa: E402
 import ingest  # noqa: E402
 import tender_tools as tt  # noqa: E402

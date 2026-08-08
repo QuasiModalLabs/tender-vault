@@ -30,7 +30,16 @@ Three storage layers and three lifecycle states.
 
 Relevance is the publisher's UNSPSC classification where they filed one, and keyword matching only where they didn't (three source systems — MX, PW and SSC — file no codes at all). So `matched_competencies` being empty is normal and means the notice qualified on its commodity code; `unspsc_families` being empty means it came in on keywords alone and deserves a closer read.
 
-**Outcome tier — contracts SQLite (`data/contracts.db`) and `vault/intel/agencies/`.** Awarded-contract intelligence from the Proactive Publication of Contracts dataset, filtered to my competencies with a period-overlap window, so active incumbents stay in even if awarded years ago. Query via `contracts-intel`. The `intel/agencies/` files are auto-generated per department — read them directly, never edit them; the ingest regenerates them. **They are named by canonical key**, so a tender's `department` link reaches one directly: `[[ircc]]` is `vault/intel/agencies/ircc.md`, and that file's backlinks are every tender in the vault touching IRCC.
+**Outcome tier — contracts SQLite (`data/contracts.db`) and `vault/intel/agencies/`.** Awarded-contract intelligence from the Proactive Publication of Contracts dataset, filtered to my competencies with a period-overlap window, so active incumbents stay in even if awarded years ago. Query via `contracts-intel`. The `intel/agencies/` files are auto-generated per department — read them directly, never edit them; the ingest regenerates them. **They are named `<canonical-key>-contracts`**: `vault/intel/agencies/ircc-contracts.md`, linked as `[[<key>-contracts]]` — written with the real key, not this placeholder.
+
+### Two files per department, and they are not interchangeable
+
+A department has a **node** and an **intel file**, split on purpose:
+
+- **`vault/agencies/<key>.md`** — the department node, linked as `[[<key>]]`. Hand-editable, created on first promote of a tender attributed to that department, and **never overwritten by anything**. Its backlinks are every tender, briefing and note in the vault touching that department — this is the file to read for "what are we looking at from IRCC", and the one to write notes in.
+- **`vault/intel/agencies/<key>-contracts.md`**. Generated, rewritten on every contracts ingest, not committed, and **absent until that optional ingest has been run**. A dead `-contracts` link means *not built yet*, not *no contracts*.
+
+A tender's `department` field links the **node**, never the intel file. Don't hand-write anything into `intel/agencies/`; the generator refuses to overwrite files it doesn't own, so a stray file there means a department silently gets no intel.
 
 **Hot tier — the vault (`vault/tenders/`), three states:**
 
@@ -101,6 +110,29 @@ When I mention an event ("we just got on SBIPS," "Priya's leaving"), check `list
 ## When to write to the vault
 
 Write when I explicitly ask, or when I confirm a promote/archive. Otherwise your analysis lives in the conversation. **Never** modify a tender file's frontmatter — that came from the ingest and stays as-is. You can append to `## My notes`.
+
+**The one exception is a department node** — see below.
+
+### Department nodes: write to these as we go
+
+`vault/agencies/<key>.md` is the one file you may add to without being asked. It's where what we learn about dealing with a department accumulates, so that knowledge outlives the tender that produced it.
+
+**Append under `## Notes`, dated:** `### YYYY-MM-DD — short topic`. Never rewrite, reorder or delete anything already in the file, mine or yours. Never touch the frontmatter. Append-only means a bad entry is a line I can delete, not a lost paragraph I have to reconstruct.
+
+**What belongs here** — things still true after the tender that taught them closes:
+
+- How this department buys. Which vehicle, who contracts for them, whether they name an end user or hide behind PSPC/SSC.
+- Incumbents that keep reappearing, with where you saw them.
+- Constraints that recur: clearance levels, set-asides, Canadian-content weighting, bilingual delivery.
+- Decisions I made and the reason. *"No-bid on the CDIC RFP because the ROADMAP incumbency was unbeatable"* is the most valuable line in the file, because in six months I'll remember the decision and not the reason.
+
+**What does not:**
+
+- Per-tender analysis. That belongs in the tender file under `## My notes`. If it stops being relevant when the notice closes, it isn't a node entry.
+- Anything the contracts ingest regenerates — totals, vendor tables, family counts. Those live in `<key>-contracts.md` and are rewritten on every run. Point at that file; don't copy out of it.
+- Speculation stated as fact. Attribute every claim: a tender ID, a dossier, a notice quote, or me.
+
+**When to write one.** When something is learned that would change how we approach that department next time, and the file doesn't already say it. Tell me in one line that you wrote it — don't ask permission first, and don't log every passing mention either. If it wouldn't change what we do next time, leave it out. An empty node is more useful than one padded with restated corpus facts.
 
 ## When you're uncertain
 

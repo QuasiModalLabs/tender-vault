@@ -41,6 +41,7 @@ Usage:
     python scripts/contracts_ingest.py
     python scripts/contracts_ingest.py --source path/to/local.csv   # offline/test
     python scripts/contracts_ingest.py --no-intel                   # skip intel files
+    python scripts/contracts_ingest.py --min-share 0.25             # more agency intel
 """
 from __future__ import annotations
 
@@ -355,6 +356,72 @@ def build_db(records_iter, window_years: int, source_note: str,
 # hand into that directory is never deleted by an ingest.
 GENERATED_MARKER = "source: proactive-disclosure-contracts"
 
+# Which departments get an intel file: those holding at least this PERCENTAGE
+# of all filtered contract families.
+#
+# A FLOOR, NOT A RANK, because a rank cannot grow with the data. `top_n = 20`
+# returns exactly twenty departments forever, whatever the dataset does; it
+# happened to cut at 233 families, a number nobody chose. A floor lets the set
+# expand as departments' contracting grows, which is the behaviour asked for.
+#
+# A SHARE, NOT AN ABSOLUTE COUNT, because family counts are already filtered to
+# the `contracts_categories` in vault/profiles/my-company.md. An absolute floor
+# silently changes meaning every time that profile is edited — broaden the
+# categories and 100 families stops meaning what it did. A share renormalizes
+# against whatever the profile currently admits.
+#
+# 0.5% = 35 departments = 92.4% of filtered volume on the 2026-08-03 extract.
+# Chosen to reproduce the ≥100-family cutoff exactly while being drift-proof;
+# for reference 1.0% would have given 19 departments, not 35.
+#
+# CHEAP TO RAISE. write_agency_intel queries every bucket before filtering, so
+# this gates file writes and nothing else — no extra queries, no re-download,
+# and the files are ~4KB each in a gitignored directory. It also creates no
+# obligation on the node side: generated files reference their node in plain
+# text, so widening this never manufactures an unresolved link.
+#
+# WHAT IT DOES COST is churn. The contracts window is rolling
+# (`contracts_window_years`), so departments cross the floor in both
+# directions, and _reconcile_intel_dir spares any file whose key is still live
+# rather than deleting it. Those keep accumulating; they are stamped
+# `stale_since` so a stale file can be found later rather than only noticed at
+# run time.
+DEFAULT_INTEL_MIN_SHARE = 0.5
+
+# Filename suffix separating what this generator owns from what it does not.
+#
+# THE NAMESPACE SPLIT. A department has two files and they have different
+# owners: vault/agencies/<key>.md is the hand-editable department node, created
+# on first promote and never overwritten by anything; this generator writes
+# vault/intel/agencies/<key>-contracts.md and rewrites it on every run.
+#
+# Before the split, both roles wanted the same name. The generated file won it,
+# which made [[pspc]] resolve to a file that write_text clobbers each run, in a
+# directory documented as never-hand-edit, produced by an OPTIONAL ~630MB
+# download. A vault whose graph hub can only exist after that download is a
+# vault whose graph is empty for anyone who skipped it.
+#
+# The suffix is what tells the two apart on disk, so pruning keys off it too.
+INTEL_SUFFIX = "-contracts"
+
+
+def _intel_filename(stem: str) -> str:
+    """The on-disk name of one generated intel file. One definition."""
+    return f"{stem}{INTEL_SUFFIX}.md"
+
+
+def _intel_key(path: Path) -> str | None:
+    """
+    The canonical key a generated filename claims, or None if it claims none.
+
+    None means the name is not in current form — either legacy bare-key naming
+    (`dnd.md`) or a display slug for an organization the registry cannot name.
+    Both are prunable; a key in current form is not.
+    """
+    if not path.stem.endswith(INTEL_SUFFIX):
+        return None
+    return path.stem[: -len(INTEL_SUFFIX)] or None
+
 
 def _display_slug(text: str) -> str:
     """
@@ -413,9 +480,45 @@ def _canonical_key(org_title: str, owner_org: str, slug_map: dict[str, str]):
         return None
 
 
-def _prune_legacy_intel(written: set[str], canonical_keys: set[str]) -> None:
+def _mark_stale(path: Path, ingest_date: str) -> bool:
     """
-    Remove intel files left behind by the old display-slug naming.
+    Stamp a kept-but-unrefreshed intel file `stale_since` in its frontmatter.
+
+    IN THE FILE, NOT ONLY ON STDOUT. A run prints what it kept, and that line
+    scrolls away; the question "is what I am reading current?" gets asked weeks
+    later by someone who never saw the run. `generated:` alone cannot answer it,
+    because a file refreshed today and a file last refreshed in March both carry
+    a date and nothing distinguishes which is which.
+
+    FIRST DETECTION WINS. If the stamp is already there it is left alone, so the
+    field records how long a file has been stale rather than resetting to the
+    most recent run. A refreshed file is rewritten wholesale from the template,
+    which carries no stale fields, so the stamp clears itself.
+
+    Returns True if it stamped, False if the file was already marked.
+    """
+    text = path.read_text(encoding="utf-8")
+    if re.search(r"^stale_since:", text, re.M):
+        return False
+
+    # Insert directly after `generated:`, so the two dates read together: when
+    # the figures are from, and when they stopped being refreshed.
+    stamped, n = re.subn(
+        r"^(generated: .*)$",
+        rf"\1\nstale_since: {ingest_date}",
+        text, count=1, flags=re.M,
+    )
+    if not n:
+        return False
+    path.write_text(stamped, encoding="utf-8", newline="\n")
+    return True
+
+
+def _reconcile_intel_dir(
+    written: set[str], canonical_keys: set[str], ingest_date: str
+) -> None:
+    """
+    Prune superseded generated files; stamp the ones kept but not refreshed.
 
     FOUR CONDITIONS, all required, because deleting a file out of the vault is
     the one operation here that cannot be undone by re-running the ingest:
@@ -423,16 +526,39 @@ def _prune_legacy_intel(written: set[str], canonical_keys: set[str]) -> None:
       1. a direct child of INTEL_DIR ending in .md;
       2. carrying this generator's frontmatter marker — a hand-written file in
          that directory is never ours to delete;
-      3. NOT named after a canonical key. This is what protects a department
-         that merely dropped out of this run's top N: those files are named by
-         key and are spared by construction. A file whose stem is not a key is
-         legacy naming, a name no future run will ever write again;
+      3. NOT named `<canonical-key>-contracts`. This is what protects a
+         department that merely dropped out of this run's top N: those files are
+         named in current form and are spared by construction. Any other name is
+         superseded naming, a name no future run will ever write again;
       4. not something this run just wrote.
 
-    One name is genuinely ambiguous and is resolved conservatively:
-    `justice-canada` is both a plausible display slug and a real canonical key,
-    so condition 3 keeps it. It is rewritten in place whenever Justice is in the
-    top N.
+    CONDITION 3 IS KEYED OFF THE SUFFIX, and it has to be. The old rule spared a
+    stem that WAS a canonical key, which was correct while the generator wrote
+    bare `<key>.md` — and became wrong in both directions the moment it started
+    writing `<key>-contracts.md`:
+
+      - `dnd-contracts` is not itself a key, so a department dropping out of the
+        top N would have been deleted. That is precisely the loss the old
+        condition 3 existed to prevent, inverted by a rename.
+      - `dnd.md` from before the rename IS a key, so it would have been spared
+        forever — an orphan no run rewrites and no run removes, sitting on the
+        name [[dnd]] now belongs to vault/agencies/.
+
+    Reading the key back out of the filename fixes both: the first is spared
+    because its prefix is a key, the second is pruned because it carries no
+    suffix at all. `_intel_key` is the single definition of that reading.
+
+    Files for organizations the registry cannot name are written under a display
+    slug, so their prefix is not a key and they are pruned on dropping out. That
+    is unchanged behaviour and intended — an unnamed body has no stable identity
+    to keep a stale file under.
+
+    The split also retired a genuine ambiguity this function used to carry:
+    `justice-canada` was both a plausible display slug and a real canonical key,
+    indistinguishable under bare-key naming and resolved conservatively by
+    sparing it. The suffix now separates the two cases outright —
+    `justice-canada-contracts` is the generated file, `justice-canada` is the
+    department node in vault/agencies/ and not this function's business at all.
     """
     pruned, kept = [], []
     for path in sorted(INTEL_DIR.glob("*.md")):
@@ -442,8 +568,11 @@ def _prune_legacy_intel(written: set[str], canonical_keys: set[str]) -> None:
             continue
         if GENERATED_MARKER not in path.read_text(encoding="utf-8", errors="replace"):
             continue                                    # not ours
-        if path.stem in canonical_keys:
-            kept.append(path.name)                      # dropped out, not orphaned
+        if _intel_key(path) in canonical_keys:
+            # Dropped below the floor, not orphaned. Kept — but the reader has
+            # to be able to tell that from the file itself.
+            _mark_stale(path, ingest_date)
+            kept.append(path.name)
             continue
         path.unlink()
         pruned.append(path.name)
@@ -451,29 +580,45 @@ def _prune_legacy_intel(written: set[str], canonical_keys: set[str]) -> None:
     # Printed every time. Silent deletion of vault files is exactly the kind of
     # thing that should never have to be discovered afterwards.
     if pruned:
-        print(f"Pruned {len(pruned)} legacy-named intel file(s) "
-              "(display-slug naming, superseded by canonical keys):")
+        print(f"Pruned {len(pruned)} superseded intel file(s) "
+              f"(not named <canonical-key>{INTEL_SUFFIX}):")
         for name in pruned:
             print(f"  - {name}")
     if kept:
-        print(f"Kept {len(kept)} file(s) for departments outside this run's top N: "
-              f"{', '.join(kept)}")
+        print(f"Kept {len(kept)} file(s) for departments below this run's floor, "
+              f"stamped stale_since {ingest_date}:")
+        for name in kept:
+            print(f"  - {name}")
 
 
-def write_agency_intel(top_n: int = 10, db_path: Path = DB_PATH) -> None:
+def write_agency_intel(
+    min_share: float = DEFAULT_INTEL_MIN_SHARE, db_path: Path = DB_PATH
+) -> None:
     """
-    Generate vault/intel/agencies/<canonical-key>.md from the freshly built DB.
+    Generate vault/intel/agencies/<canonical-key>-contracts.md from the DB.
 
-    NAMED BY CANONICAL KEY so a tender that links [[ircc]] lands on the intel
-    file for IRCC. Under the old display-slug naming it landed nowhere, which
-    left every one of these files an isolated node in the vault graph while the
-    relationship they describe was perfectly real.
+    NAMED BY CANONICAL KEY so this file sits next to the department it describes
+    in the graph: [[ircc]] is the department node, [[ircc-contracts]] is what the
+    contracts dataset knows about it. Under the old display-slug naming it
+    matched neither and sat isolated while the relationship was perfectly real.
 
-    GROUPED BY KEY for the same reason: the rename folds `cic` and `pptc` onto
-    `ircc`, and two organizations mapping to one filename would otherwise mean
-    the second silently overwrote the first. The fold is recorded in the
-    frontmatter, because a fold whose contribution is invisible is a fold the
-    reader cannot check.
+    THE SUFFIX IS NOT DECORATION. It keeps this generator off [[ircc]] itself.
+    Everything written here is rewritten on every run, lives in a never-hand-edit
+    directory, and only exists at all if someone ran the optional ~630MB
+    contracts ingest — three properties that disqualify it from being the node a
+    tender links to. See INTEL_SUFFIX.
+
+    GROUPED BY KEY for the same reason the name is: the fold puts `cic` and
+    `pptc` onto `ircc`, and two organizations mapping to one filename would
+    otherwise mean the second silently overwrote the first. The fold is recorded
+    in the frontmatter, because a fold whose contribution is invisible is a fold
+    the reader cannot check.
+
+    REFUSES TO OVERWRITE WHAT IT DOES NOT OWN. write_text is destructive and
+    takes no view on what it lands on, so the marker is checked first. Without
+    that check the suffix alone is only a convention, and one hand-written
+    `<key>-contracts.md` — or one run predating the split — is enough to lose
+    somebody's notes with no error and no trace.
     """
     con = sqlite3.connect(db_path)
     ingest_date = con.execute("SELECT value FROM meta WHERE key='ingest_date'").fetchone()[0]
@@ -502,13 +647,24 @@ def write_agency_intel(top_n: int = 10, db_path: Path = DB_PATH) -> None:
             f"WHERE org IN ({placeholders}) GROUP BY family_id", bucket["orgs"],
         ).fetchall()
 
-    ranked = sorted(buckets.values(), key=lambda b: -len(b["rows"]))[:top_n]
+    # The floor is a share of what the profile currently admits, computed after
+    # every bucket is counted — so it renormalizes when the profile changes
+    # rather than silently meaning something different.
+    total_families = sum(len(b["rows"]) for b in buckets.values())
+    cutoff = total_families * min_share / 100
+    ranked = sorted(
+        (b for b in buckets.values() if len(b["rows"]) >= cutoff),
+        key=lambda b: -len(b["rows"]),
+    )
+    print(f"Intel floor: {min_share}% of {total_families:,} filtered families "
+          f"= {cutoff:,.0f}; {len(ranked)} of {len(buckets)} departments qualify")
 
     import org_resolve
     resolver = org_resolve.default_resolver()
 
     INTEL_DIR.mkdir(parents=True, exist_ok=True)
     written: set[str] = set()
+    refused: list[str] = []
     for bucket in ranked:
         key, rows = bucket["key"], bucket["rows"]
         n_families = len(rows)
@@ -538,6 +694,22 @@ def write_agency_intel(top_n: int = 10, db_path: Path = DB_PATH) -> None:
             "",
             f"# {title}",
             "",
+            # PLAIN TEXT, NOT A WIKILINK, and that is the whole point.
+            #
+            # This pointed at [[key]] briefly and it was wrong for the same
+            # reason the digest chain is backward-only: the node already links
+            # [[key-contracts]], so Obsidian's backlinks give this direction for
+            # free. Storing both ends buys nothing and costs plenty — a
+            # [[key]] here is an unresolved link for every department without a
+            # node, which turns "reconcile the nodes" into a standing chore and
+            # ratchets the node count toward the 88-stub graph that scoping node
+            # creation to promote exists to avoid.
+            #
+            # With it as text, generated files never create an obligation on the
+            # hand-editable side. Node creation stays promote-driven, full stop.
+            *([f"Department node: `vault/agencies/{key}.md` — where notes on "
+               "this department belong. This file is rewritten on every "
+               "ingest, so anything written here is lost.", ""] if key else []),
             "Auto-generated from the Proactive Publication of Contracts dataset "
             f"(ingest {ingest_date}, recency window). Unaudited data; vendor names "
             "are lightly normalized (corporate suffixes and punctuation stripped, "
@@ -573,12 +745,31 @@ def write_agency_intel(top_n: int = 10, db_path: Path = DB_PATH) -> None:
         lines += [f"- {v} = ${amt:,.0f}" for v, amt in top_vendors]
         lines.append("")
 
-        (INTEL_DIR / f"{stem}.md").write_text("\n".join(lines), encoding="utf-8")
-        written.add(f"{stem}.md")
+        # Marker check before write_text, never after: the point is to not
+        # destroy the file, and reading it back afterwards is too late.
+        target = INTEL_DIR / _intel_filename(stem)
+        if target.exists():
+            existing = target.read_text(encoding="utf-8", errors="replace")
+            if GENERATED_MARKER not in existing:
+                refused.append(target.name)
+                continue
+
+        target.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+        written.add(target.name)
     con.close()
 
-    _prune_legacy_intel(written, set(load_aliases()))
-    print(f"Wrote agency intel for {len(ranked)} departments to {INTEL_DIR}")
+    _reconcile_intel_dir(written, set(load_aliases()), ingest_date)
+    print(f"Wrote agency intel for {len(written)} departments to {INTEL_DIR}")
+
+    # Loud, not silent. A refusal means a department has no current intel and
+    # the reason is a name collision someone has to resolve by hand — exactly
+    # the kind of thing that must not be discovered three weeks later.
+    if refused:
+        print(f"REFUSED to overwrite {len(refused)} file(s) in {INTEL_DIR} "
+              f"lacking this generator's marker ({GENERATED_MARKER!r}):")
+        for name in refused:
+            print(f"  - {name}")
+        print("  Move or delete them by hand if the generated version should win.")
 
 
 def main():
@@ -588,6 +779,15 @@ def main():
     parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE)
     parser.add_argument("--source", help="Local CSV path instead of downloading (testing)")
     parser.add_argument("--no-intel", action="store_true", help="Skip agency intel files")
+    parser.add_argument(
+        "--min-share", type=float, default=DEFAULT_INTEL_MIN_SHARE,
+        help=f"Percentage of all filtered contract families a department must "
+             f"hold to get an intel file (default {DEFAULT_INTEL_MIN_SHARE}%%, "
+             f"about 35 of 88 departments). A share rather than a count, so the "
+             f"floor renormalizes when the profile's contracts_categories "
+             f"change. Every bucket is queried regardless, so lowering this "
+             f"costs writes and nothing else.",
+    )
     parser.add_argument("--force", action="store_true", help="Re-download even if cached")
     parser.add_argument(
         "--db", type=Path, default=None,
@@ -662,7 +862,7 @@ def main():
             # clobbering the DB — just in markdown, and now with deletions.
             print("Skipping agency intel: sampling run must not rewrite vault/intel/.")
         else:
-            write_agency_intel(db_path=db_path)
+            write_agency_intel(min_share=args.min_share, db_path=db_path)
 
     print("\nAttribution: contains information licensed under the "
           "Open Government Licence - Canada.")

@@ -101,7 +101,13 @@ The download is **resumable by design**. That Azure endpoint drops residential c
 
 **The recency window.** A contract is kept if `max(award_date, period_end)` falls within the last N years (`contracts_window_years`, default 3). This captures recent awards and still-active older contracts in one pass. A strict period-overlap filter was tried first, but the dataset skews heavily toward completed historical contracts, so "active today" left almost nothing — and a recently-awarded contract that has already ended is still exactly the competitive signal this layer exists to surface.
 
-This ingest also generates the per-department summaries in `vault/intel/agencies/`. Those are derived from your filtered database and are not committed.
+This ingest also generates the per-department summaries in `vault/intel/agencies/`, named `<canonical-key>-contracts.md`. Those are derived from your filtered database and are not committed.
+
+**Which departments get one** is a floor, not a fixed count: any department holding at least `--min-share` percent of all filtered contract families, default 0.5% (35 of 88 departments, 92.4% of volume on the shipped profile). A floor rather than a "top N" because a rank cannot grow with the data — top 20 returns twenty departments forever, whatever the dataset does. A *share* rather than an absolute family count because those counts are already filtered to your `contracts_categories`, so an absolute floor would silently change meaning every time you edit the profile. Lower it with `--min-share 0.25` for wider coverage; every bucket is queried regardless, so this costs file writes and nothing else.
+
+**Departments that fall below the floor keep their file rather than losing it**, and get stamped `stale_since: <date>` in frontmatter. The contracts window is rolling, so departments cross the floor in both directions, and a file that stopped being refreshed is otherwise indistinguishable from a current one — both carry a `generated:` date. Search `stale_since` to find them. The stamp clears itself when the department comes back above the floor and the file is rewritten.
+
+**It does not create department nodes, and that is deliberate.** `vault/agencies/<key>.md` — the file a tender's `[[pspc]]` link actually resolves to — is created by `promote` and never overwritten. Keeping the two apart means the vault graph works whether or not you ever run this optional 630MB ingest, and means nothing here can overwrite a file you wrote by hand. The generator refuses to write over anything in `vault/intel/agencies/` that doesn't carry its own frontmatter marker, and says so loudly rather than skipping in silence.
 
 ## Using it with Claude Code
 
@@ -224,9 +230,12 @@ The contracts and plans refresh workflows are present but disabled. They rebuilt
 | `data/plans.db`, `data/oag.db` | Scored from one profile's theme examples |
 | `vault/intel/agencies/` | Derived from the filtered contracts database |
 | `vault/tenders/`, `vault/briefings/`, `vault/searches/` | Working state — what's actually being bid on |
+| `vault/agencies/` | Working state — the directory listing alone names who you're pursuing |
 | `.cache/` | Source CSVs, re-downloaded on ingest |
 
 `data/crosswalk.db` **is** committed. It derives from `org_aliases.yaml`, which is a hand-curated set of assertions about what the Government of Canada calls itself — the same file every user needs, and 53KB.
+
+`vault/agencies/` is ignored for a different reason from the rest of the table, and it's worth being explicit about. Nothing here regenerates it — each node is created once by `promote` and hand-edited afterwards — so the usual "it rebuilds from a command" argument doesn't apply. It stays out anyway: this repo is public, the directory listing alone publishes which departments you're pursuing, and the node exists precisely so private notes accumulate in it. Durability is your Obsidian sync's job, not a public repo's.
 
 ## Tests
 

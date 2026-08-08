@@ -1,0 +1,8 @@
+# The vault is Markdown read by Obsidian on whatever platform, and the digests
+# are dated snapshots that must not show as modified just because a generator
+# ran on Windows. LF in the repo and in the working tree, everywhere.
+#
+# The writers pass newline="\n" explicitly as well. Both belong: this settles
+# what git stores and checks out, the argument settles what a script writes
+# before git ever sees it.
+*.md text eol=lf

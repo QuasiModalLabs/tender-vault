@@ -27,7 +27,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+sys.path.insert(0, str(Path(__file__).parent))
 
+import conftest  # noqa: E402,F401  — MUST come first: redirects the vault
 from ingest import classify_notice  # noqa: E402
 import tender_tools  # noqa: E402
 

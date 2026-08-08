@@ -30,6 +30,31 @@ PARKED_DIR = PROJECT_ROOT / "vault" / "tenders" / "parked"
 CORPUS_SNAPSHOT = DIGEST_DIR / "corpus-latest.txt"
 
 
+def _previous_digest(today: str) -> str | None:
+    """
+    The wikilink stem of the most recent digest strictly before `today`.
+
+    BACKWARD ONLY, and that is the whole design. A forward link cannot be
+    written when a digest is generated — its successor does not exist yet — so
+    the only way to have one is to reopen and patch last week's file on every
+    run. That would make a dated snapshot of a past week show up as modified in
+    git every week forever, and turn one write per run into two.
+
+    Obsidian supplies the forward direction for free: the backlinks pane on any
+    digest lists the digest that links to it, which is its successor. The chain
+    is navigable both ways; only one end of it is stored.
+
+    Filenames are ISO-dated and prefixed, so a lexicographic sort is a
+    chronological one. `<` rather than `<=` makes a same-day re-run idempotent:
+    today's own file, if it already exists, is never its own predecessor.
+    """
+    stems = sorted(
+        path.stem for path in DIGEST_DIR.glob("digest-*.md")
+        if path.stem < f"digest-{today}"
+    )
+    return stems[-1] if stems else None
+
+
 def _summarize_parked() -> str:
     """
     Return a markdown summary of parked tenders. Splits into:
@@ -227,10 +252,13 @@ def generate_digest() -> str:
     if parked_section:
         lines += ["", "## Parked tenders to keep an eye on", "", parked_section]
 
+    # Footer, not header: this is navigation, and Obsidian previews a file by
+    # its opening lines. The corpus-size line earns that space; a link does not.
+    lines += ["", "---", ""]
+    previous = _previous_digest(today)
+    if previous:
+        lines += [f"_Previous digest: [[{previous}]]_", ""]
     lines += [
-        "",
-        "---",
-        "",
         "_Generated automatically by `scripts/digest.py` after weekly ingest._",
         "",
     ]
@@ -242,13 +270,14 @@ def main():
     today = datetime.now().strftime("%Y-%m-%d")
     output_path = DIGEST_DIR / f"digest-{today}.md"
     content = generate_digest()
-    output_path.write_text(content, encoding="utf-8")
+    output_path.write_text(content, encoding="utf-8", newline="\n")
     print(f"Wrote digest: {output_path.relative_to(PROJECT_ROOT)}")
 
     # Update the committed snapshot so next week's digest can diff against it.
     # Must happen AFTER generate_digest() reads the old snapshot.
     ids = sorted(d["id"] for d in tender_tools.doc_index)
-    CORPUS_SNAPSHOT.write_text("\n".join(ids) + "\n", encoding="utf-8")
+    CORPUS_SNAPSHOT.write_text(
+        "\n".join(ids) + "\n", encoding="utf-8", newline="\n")
     print(f"Updated snapshot: {CORPUS_SNAPSHOT.relative_to(PROJECT_ROOT)} ({len(ids)} IDs)")
 
 

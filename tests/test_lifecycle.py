@@ -18,11 +18,11 @@ short-circuits, then point the vault paths at a temp directory.
 from __future__ import annotations
 
 import sys
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+sys.path.insert(0, str(Path(__file__).parent))
+import conftest  # noqa: E402  — MUST come first: redirects the vault on import
 import tender_tools as tt  # noqa: E402
 
 
@@ -45,13 +45,8 @@ FAKE_DOC = {
 
 
 def setup_temp_vault() -> Path:
-    """Point tender_tools at a temp vault and seed a fake corpus."""
-    root = Path(tempfile.mkdtemp(prefix="tender-vault-test-"))
-    tt.PROJECT_ROOT = root
-    tt.VAULT = root / "vault"
-    tt.WATCHING = tt.VAULT / "tenders" / "watching"
-    tt.PARKED = tt.VAULT / "tenders" / "parked"
-    tt.ARCHIVED = tt.VAULT / "tenders" / "archived"
+    """Seed a fake corpus. The vault redirect itself lives in conftest."""
+    root = conftest.redirect_vault()
     tt.WATCHING.mkdir(parents=True)
 
     # Short-circuit ChromaDB loading: non-None sentinel + seeded index
@@ -104,6 +99,56 @@ def test_promote_writes_department_links(filename: str):
     assert "*not a department*, not *not federal*" in content, (
         "body does not distinguish a registry miss from a non-federal finding"
     )
+
+
+def test_promote_creates_agency_node():
+    """
+    The [[ssc]] the tender file writes has to resolve to a real file.
+
+    A wikilink to a note that does not exist has no backlinks pane, so the one
+    question these nodes exist to answer — what else is this department in? —
+    cannot be asked until the file is there.
+    """
+    node = tt.AGENCIES / "ssc.md"
+    assert node.exists(), "promote linked [[ssc]] but created no node for it"
+    content = node.read_text(encoding="utf-8")
+    assert "canonical_key: ssc" in content, "node is not keyed"
+    # The generated companion is a SEPARATE name. If these two ever collide
+    # again, the hand-editable node is what gets overwritten.
+    assert "[[ssc-contracts]]" in content, (
+        "node must point at its generated intel file under the split name"
+    )
+    assert not (tt.AGENCIES / "Test Agency.md").exists(), (
+        "an unresolved entity string must not become a department node"
+    )
+
+
+def test_agency_node_never_overwritten():
+    """
+    Promote must not touch a node that already exists.
+
+    This is the property the namespace split was made for: the node accumulates
+    hand-written notes across every tender a department appears in, so a promote
+    that rewrote it would destroy work in proportion to how useful the file had
+    become.
+    """
+    node = tt.AGENCIES / "ssc.md"
+    node.write_text("hand-written, do not touch\n", encoding="utf-8")
+
+    second = dict(FAKE_DOC)
+    second["id"] = f"{FAKE_ID}-B"
+    second["metadata"] = dict(FAKE_DOC["metadata"], tender_id=f"{FAKE_ID}-B")
+    tt.doc_index = [FAKE_DOC, second]
+    result = tt.cmd_promote(SimpleNamespace(tender_id=f"{FAKE_ID}-B"))
+    assert "promoted" in result, f"second promote failed: {result}"
+
+    assert node.read_text(encoding="utf-8") == "hand-written, do not touch\n", (
+        "promote overwrote an existing department node"
+    )
+    assert "agency_nodes_created" not in result, (
+        "promote reported creating a node it did not create"
+    )
+    tt.doc_index = [FAKE_DOC]
 
 
 def test_promote_duplicate_rejected():
@@ -174,6 +219,8 @@ def main():
     setup_temp_vault()
     filename = test_promote()
     test_promote_writes_department_links(filename)
+    test_promote_creates_agency_node()
+    test_agency_node_never_overwritten()
     test_promote_duplicate_rejected()
     test_park(filename)
     test_park_missing_file_rejected()

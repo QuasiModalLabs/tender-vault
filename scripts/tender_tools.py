@@ -51,6 +51,20 @@ WATCHING = VAULT / "tenders" / "watching"
 ARCHIVED = VAULT / "tenders" / "archived"
 PARKED = VAULT / "tenders" / "parked"
 
+# Department nodes, named by canonical key. The target of every [[key]] link a
+# tender file writes, and the file whose backlinks answer "what are we looking
+# at from this department".
+#
+# HAND-EDITABLE AND NEVER OVERWRITTEN. Deliberately not derived from the
+# contracts ingest: that generator writes <key>-contracts.md, rewrites it every
+# run, and only runs at all if someone took the optional ~630MB download. Graph
+# connectivity cannot be a side effect of an optional step.
+#
+# CREATED ON PROMOTE, not generated in bulk. The registry carries ~100 keys and
+# a vault holding 100 department stubs for the handful actually in play is a
+# graph that hides its own signal.
+AGENCIES = VAULT / "agencies"
+
 
 # ---------------------------------------------------------------------------
 # Lightweight BM25 — paired with ChromaDB's vector search for hybrid retrieval
@@ -404,6 +418,76 @@ def _attribution_note(attribution: dict[str, dict], unresolved: list[str]) -> st
     return "\n" + "\n>\n".join(f"> {line}" for line in lines) + "\n"
 
 
+def _ensure_agency_nodes(attribution: dict[str, dict]) -> list[str]:
+    """
+    Create a department node for every key this tender links, if absent.
+
+    CREATE-IF-MISSING, NEVER OVERWRITE. An existing node is left exactly as it
+    is — it is the one file in this pair a person is expected to write in, and
+    a promote that rewrote it would eat notes accumulated across every tender
+    that department has ever appeared in. The check is `exists()`, not a marker
+    check, because there is nothing here worth clobbering a stranger's file for.
+
+    Returns the keys actually created, so promote can report them rather than
+    leaving new vault files to be noticed later.
+    """
+    created: list[str] = []
+    if not attribution:
+        return created
+
+    AGENCIES.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d")
+
+    for key in attribution:
+        target = AGENCIES / f"{key}.md"
+        if target.exists():
+            continue
+
+        # display_name falls back to the key itself for anything the registry
+        # cannot name, which is the right failure: a node named after a key that
+        # resolves to nothing is still a working link target.
+        try:
+            title = org_resolve.default_resolver().display_name(key) or key
+        except Exception:
+            title = key
+
+        target.write_text(
+            f"""---
+canonical_key: {key}
+agency: "{title[:150].replace('"', "'")}"
+type: department
+created: {stamp}
+created_by: tender_tools.promote
+---
+
+# {title}
+
+Department node — **hand-editable, and nothing regenerates it.** Created on the
+first promote of a tender attributed to `{key}`; never rewritten afterwards.
+
+The backlinks on this file are every tender, briefing and note in the vault that
+links [[{key}]]. That list is the reason this file exists.
+
+Awarded-contract intelligence is a separate, generated file: [[{key}-contracts]],
+written by `scripts/contracts_ingest.py` and rewritten on every run. It is not
+committed and will not exist until that ingest has been run, so treat a dead
+link there as "not built yet" rather than "no contracts".
+
+## Notes
+
+What we've learned about dealing with this department: how they buy, who keeps
+winning, which constraints recur, and what we decided and why. Both of us write
+here — Claude appends dated entries as things come up, per `vault/CLAUDE.md`.
+Append-only, newest at the bottom; nothing above is edited or removed.
+""",
+            encoding="utf-8",
+            newline="\n",
+        )
+        created.append(key)
+
+    return created
+
+
 def cmd_promote(args) -> dict:
     """Copy a tender from ChromaDB into vault/tenders/watching/ as markdown."""
     load_collection()
@@ -503,8 +587,20 @@ promoted_at: {datetime.now().strftime('%Y-%m-%d')}
 
 <!-- Claude can append analysis here under "## Fit assessment" -->
 """
-    target.write_text(content, encoding="utf-8")
-    return {"promoted": str(target.relative_to(PROJECT_ROOT))}
+    target.write_text(content, encoding="utf-8", newline="\n")
+
+    # After the tender is on disk: the tender file is the artifact being asked
+    # for, and the nodes exist to serve it. Reported rather than silent — these
+    # are new vault files, and a tool that creates files without saying so is a
+    # tool you have to audit afterwards.
+    created = _ensure_agency_nodes(attribution)
+
+    result = {"promoted": str(target.relative_to(PROJECT_ROOT))}
+    if created:
+        result["agency_nodes_created"] = [
+            str((AGENCIES / f"{key}.md").relative_to(PROJECT_ROOT)) for key in created
+        ]
+    return result
 
 
 def cmd_archive(args) -> dict:
@@ -532,7 +628,7 @@ def cmd_archive(args) -> dict:
     stamp = datetime.now().strftime("%Y-%m-%d")
     from_dir = source.parent.name
     content += f"\n\n## Archived {stamp} (from {from_dir})\n\n{args.reason}\n"
-    target.write_text(content, encoding="utf-8")
+    target.write_text(content, encoding="utf-8", newline="\n")
     source.unlink()
     return {
         "archived": str(target.relative_to(PROJECT_ROOT)),
@@ -564,7 +660,7 @@ def cmd_park(args) -> dict:
         f"**Reason:** {args.reason}\n\n"
         f"**Revisit when:** {args.revisit_when}\n"
     )
-    target.write_text(content, encoding="utf-8")
+    target.write_text(content, encoding="utf-8", newline="\n")
     source.unlink()
     return {
         "parked": str(target.relative_to(PROJECT_ROOT)),

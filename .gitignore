@@ -37,6 +37,11 @@ vault/intel/agencies/
 vault/tenders/
 vault/briefings/
 vault/searches/
+# Department nodes. Same category as vault/tenders/: the directory listing
+# alone publishes which departments are being pursued, and the node exists so
+# private notes accumulate in it. Durability is Obsidian sync's job, not a
+# public repo's.
+vault/agencies/
 
 # Obsidian per-machine settings — pane layout, theme, window position
 vault/.obsidian/
