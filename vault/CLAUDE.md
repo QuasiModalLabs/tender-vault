@@ -37,7 +37,7 @@ Relevance is the publisher's UNSPSC classification where they filed one, and key
 A department has a **node** and an **intel file**, split on purpose:
 
 - **`vault/agencies/<key>.md`** — the department node, linked as `[[<key>]]`. Hand-editable, created on first promote of a tender attributed to that department, and **never overwritten by anything**. Its backlinks are every tender, briefing and note in the vault touching that department — this is the file to read for "what are we looking at from IRCC", and the one to write notes in.
-- **`vault/intel/agencies/<key>-contracts.md`**. Generated, rewritten on every contracts ingest, not committed, and **absent until that optional ingest has been run**. A dead `-contracts` link means *not built yet*, not *no contracts*.
+- **`vault/intel/agencies/<key>-contracts.md`**. Generated, rewritten on every contracts ingest, not committed, and **absent until that optional ingest has been run**. A dead `-contracts` link means *not built yet*, not *no contracts*. It always links back to `[[<key>]]`, which is dead in the same sense until the first promote creates that node — the link is the claim that the department exists, not that anyone has written about it yet.
 
 A tender's `department` field links the **node**, never the intel file. Don't hand-write anything into `intel/agencies/`; the generator refuses to overwrite files it doesn't own, so a stray file there means a department silently gets no intel.
 

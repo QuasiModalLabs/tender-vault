@@ -694,20 +694,15 @@ def write_agency_intel(
             "",
             f"# {title}",
             "",
-            # PLAIN TEXT, NOT A WIKILINK, and that is the whole point.
-            #
-            # This pointed at [[key]] briefly and it was wrong for the same
-            # reason the digest chain is backward-only: the node already links
-            # [[key-contracts]], so Obsidian's backlinks give this direction for
-            # free. Storing both ends buys nothing and costs plenty — a
-            # [[key]] here is an unresolved link for every department without a
-            # node, which turns "reconcile the nodes" into a standing chore and
-            # ratchets the node count toward the 88-stub graph that scoping node
-            # creation to promote exists to avoid.
-            #
-            # With it as text, generated files never create an obligation on the
-            # hand-editable side. Node creation stays promote-driven, full stop.
-            *([f"Department node: `vault/agencies/{key}.md` — where notes on "
+            # Unconditional, and dead on purpose for departments nobody has
+            # promoted a tender to yet: the link resolves the moment promote
+            # creates the node, and a graph set to hideUnresolved never draws
+            # it meanwhile. Where the node does exist this adds no edge — it
+            # already links [[key-contracts]] and the graph is undirected — so
+            # this is a convenience link, not the thing holding the pair
+            # together. Emitting it either way keeps output a function of the
+            # database alone, which a state-dependent version would not.
+            *([f"Department node: [[{key}]] — where notes on "
                "this department belong. This file is rewritten on every "
                "ingest, so anything written here is lost.", ""] if key else []),
             "Auto-generated from the Proactive Publication of Contracts dataset "
@@ -715,8 +710,19 @@ def write_agency_intel(
             "are lightly normalized (corporate suffixes and punctuation stripped, "
             "but not fuzzy-matched), so counts are directional.",
             "",
+            # ONE LINK, ONE PATH, and the asymmetry is the point. The profile
+            # link stays: contracts_categories decides what these files contain,
+            # so "change the competency list — what does that affect?" has to be
+            # answerable from my-company's backlinks. That it lands on all 35 is
+            # not a reason to drop it; the star it makes is a display problem,
+            # fixed with a graph filter (-file:my-company), not by deleting a
+            # real dependency. The dossier pointer is the other case — generic
+            # "how to read this" on every file, discriminating nothing. It keeps
+            # its links where they mean something: _attribution_note in
+            # tender_tools.py emits [[dossier]] only when attribution is weak.
             f"Filtered to the competencies in [[my-company]]. For how this reads "
-            f"against the other three signals on a department, see [[dossier]].",
+            f"against the other three signals on a department, see "
+            f"`vault/reference/dossier.md`.",
             "",
             f"- **Contract families in our competency space:** {n_families}",
             f"- **Total awarded value:** ${total_value:,.0f}",
@@ -738,7 +744,8 @@ def write_agency_intel(
                 "this body, so this file is named by its display string and no "
                 "tender will link to it. A registry miss means *not a department* "
                 "— not *not federal*; federal Crown corporations have no entry in "
-                "a registry of departments and agencies. See [[dossier]].",
+                "a registry of departments and agencies. See "
+                "`vault/reference/dossier.md`.",
                 "",
             ]
         lines += ["## Top vendors by value", ""]
