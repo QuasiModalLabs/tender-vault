@@ -6,3 +6,8 @@
 # what git stores and checks out, the argument settles what a script writes
 # before git ever sees it.
 *.md text eol=lf
+
+# The crosswalk registry and its attestation record, for the same reason. The
+# attestation file is rewritten wholesale by `crosswalk.py --attest`, so without
+# this it shows as modified after every run that changed nothing.
+*.yaml text eol=lf

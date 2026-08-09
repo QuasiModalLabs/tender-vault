@@ -498,7 +498,12 @@ def write_attestation(records: dict[str, dict]) -> None:
         {"names": {k: records[k] for k in sorted(records)}},
         sort_keys=False, allow_unicode=True, default_flow_style=False, width=100,
     )
-    ATTESTATION_PATH.write_text(ATTESTATION_HEADER + "\n" + body, encoding="utf-8")
+    # newline="\n" for the reason .gitattributes gives: without it Python writes
+    # CRLF on Windows, git stores LF, and every --attest run leaves the file
+    # showing as modified with an empty diff. A generator that dirties its own
+    # output on a no-op run teaches you to ignore its output.
+    ATTESTATION_PATH.write_text(
+        ATTESTATION_HEADER + "\n" + body, encoding="utf-8", newline="\n")
 
 
 def cmd_attest() -> int:
