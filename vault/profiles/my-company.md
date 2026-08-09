@@ -109,8 +109,28 @@ exclude:
   - catering
   - food service
 
-# Timeline constraints
-min_days_until_close: 10
+# Timeline. NOT A FILTER — this excludes nothing.
+#
+# Days-until-close below which a notice is tagged `imminent`. Everything still
+# open enters the corpus regardless; this only labels the near ones so the
+# briefing can lead with them and so you can decide whether a short fuse is
+# disqualifying. Read at query time, so changing it takes effect immediately
+# with no re-ingest.
+#
+# It was `min_days_until_close` and it did delete those notices. Three things
+# were wrong with that, none of them visible from the corpus:
+#
+#   - The date-conflict detector ran AFTER the drop, so a notice closing in
+#     eight days was never read for a prose deadline that contradicted its
+#     field. Exactly the error that costs a bid.
+#   - A tender promoted to watching/ fell out of the corpus in its final ten
+#     days — when it matters most.
+#   - The briefing's "act now" section asks for a 7-day window against this
+#     10-day cutoff, so it could never fill. 7 < 10 is not a tuning problem.
+#
+# The old key is still read, with a printed migration notice. Renaming it here
+# silences that.
+imminent_within_days: 10
 
 # Contracts intelligence: keep contracts whose award date OR delivery period
 # falls within the last N years (captures recent awards + still-active work)

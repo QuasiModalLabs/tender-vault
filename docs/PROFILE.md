@@ -19,7 +19,8 @@ needs a rebuild:
 
 | Key | Read by | Effect | After editing |
 |---|---|---|---|
-| `unspsc_families`, `competencies`, `exclude`, `min_days_until_close` | `ingest.py` | Which notices enter the corpus at all | Re-run `ingest.py` (~2 min) |
+| `unspsc_families`, `competencies`, `exclude` | `ingest.py` | Which notices enter the corpus at all | Re-run `ingest.py` (~2 min) |
+| `imminent_within_days` | `scripts/tender_tools.py`, at query time | Which notices are labelled `imminent`. **Excludes nothing** | **Nothing — takes effect on the next query** |
 | `value_min` / `value_max` | `ingest.py` | Nothing, unless run with `--extract-values` | Re-run `ingest.py --extract-values` |
 | `plan_themes` | `plans_ingest.py` | How departmental-plan prose is ranked | Re-run `plans_ingest.py` (~1 min) |
 | `oag_themes` | `oag_ingest.py` | How audits are ranked for IT relevance | Re-run `oag_ingest.py` (~1 min) |

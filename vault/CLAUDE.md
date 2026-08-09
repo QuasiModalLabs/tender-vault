@@ -28,6 +28,8 @@ Three storage layers and three lifecycle states.
 
 **Cold tier — ChromaDB (`chroma_db/`).** The filtered corpus of active tenders matching my profile, accessed through `scripts/tender_tools.py`. I re-run `scripts/ingest.py` for fresh data — check the timestamp on `chroma_db/` if it matters. The funnel output from that run is the authority on corpus size; don't quote a number from memory.
 
+The only thing dropped on date is a notice that has already closed. Everything still open is in there, including notices closing in two days — they are labelled `imminent`, not deleted. That is a deliberate reversal: the old cutoff removed them before the date-conflict detector could read them, and dropped a watched tender out of the corpus in its final days. Judging whether a short fuse is disqualifying is a decision for the reader, which is the same reason the scoring formula is gone.
+
 Relevance is the publisher's UNSPSC classification where they filed one, and keyword matching only where they didn't (three source systems — MX, PW and SSC — file no codes at all). So `matched_competencies` being empty is normal and means the notice qualified on its commodity code; `unspsc_families` being empty means it came in on keywords alone and deserves a closer read.
 
 **Outcome tier — contracts SQLite (`data/contracts.db`) and `vault/intel/agencies/`.** Awarded-contract intelligence from the Proactive Publication of Contracts dataset, filtered to my competencies with a period-overlap window, so active incumbents stay in even if awarded years ago. Query via `contracts-intel`. The `intel/agencies/` files are auto-generated per department — read them directly, never edit them; the ingest regenerates them. **They are named `<canonical-key>-contracts`**: `vault/intel/agencies/ircc-contracts.md`, linked as `[[<key>-contracts]]` — written with the real key, not this placeholder.
@@ -47,13 +49,15 @@ A tender's `department` field links the **node**, never the intel file. Don't ha
 - `parked/` — not now, but maybe later. Each has a `## Parked` section with a reason and a "Revisit when:" trigger. **Always check `parked/` when I mention an event that might match a trigger** ("we just got the clearance," "the partnership came through").
 - `archived/` — done, decision final. Useful for pattern recognition, not actionable. Don't surface unless I ask about historical patterns.
 
-### Four field gotchas that apply to every tender
+### Five field gotchas that apply to every tender
 
 **`department` is a list of wikilinks on the canonical key, and `entity_source` runs parallel to it.** End-user departments come first. Where `entity_source` reads `contracting_entity_*` rather than `end_user`, that department is the buyer of record and not necessarily the customer — SSC and PSPC buy federal IT on behalf of others constantly. The file body spells this out too; don't quote a department as the customer without checking which one it was. An empty `department` with a `department_unresolved` value means the registry didn't recognise the entity — see the `jurisdiction` gotcha below, it's the same distinction.
 
 **`estimated_value` is usually absent, and absent means unknown, not zero.** The feed publishes no value field. Don't infer a contract size from its absence, and don't call a tender small because no figure came through.
 
 **`closing_date_conflict`, when present, outranks `closing_date`.** It means the description states a submission deadline *earlier* than the structured field — typically a notice amended on a third-party portal while the field kept the original date. Rare. When you see it, lead with it: planning to the later date loses the bid. Absence is not verification, only that no conflicting date was found in the prose.
+
+**`closing_window` is derived per query, not stored, and `imminent` notices are in the corpus because they used to be deleted.** `list-corpus` and `get` compute it from `closing_date` against the profile's `imminent_within_days`, so it is right on the day you ask rather than the day of the ingest. Five values: `imminent` (inside the threshold), `open`, `closed` (expired since the ingest — real, and the reason to check it rather than assume everything in the corpus is live), `standing` (a sentinel year like 2076 or 2100, meaning an arrangement with no real close — `days_until_close` is null, never a five-digit number), and `unknown` (no parseable date, which is not the same as closed). The threshold excludes nothing; changing it needs no re-ingest. Don't write either field into a promoted tender's frontmatter — that file is a dated snapshot and these two change under it.
 
 **`jurisdiction: unrecognised` does not mean non-federal.** It means the organization registry didn't resolve the entity. Federal Crown corporations — CDIC, BDC, Canada Post — have no entry in a registry of *departments*. Treat them as federal; just note that a Crown corporation isn't departmental past performance. Provincial and territorial notices are dropped at ingest and never reach you.
 
@@ -62,6 +66,7 @@ A tender's `department` field links the **node**, never the intel file. Don't ha
 Python scripts in `scripts/tender_tools.py`, run as `python scripts/tender_tools.py <command> <args>`. Each prints JSON to stdout. `--help` for exact syntax.
 
 **Corpus**
+- `list-corpus [--window imminent|open|closed|standing|unknown]` — every notice, ordered by closing window. This is how you survey what's open; `search` ranks against a query and answers a different question.
 - `search <query> [--n 10]` — hybrid BM25 + semantic search over the corpus.
 - `get <tender_id>` — full description and metadata for one tender.
 - `similar <tender_id> [--n 5]` — tenders similar to a given one.
