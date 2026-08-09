@@ -1,0 +1,203 @@
+# Provenance for the observed_names in org_aliases.yaml.
+#
+# GENERATED — do not hand-edit. Rewritten wholesale by:
+#     python scripts/crosswalk.py --attest
+#
+# Each record says where a name was seen and when. It is committed so the claim
+# outlives the source it came from: `.cache/tenders.csv` holds only the notices
+# open on the day it was downloaded, so an organization with nothing open right
+# now vanishes from it. That is not evidence the name was invented, and this
+# file exists so nothing mistakes it for evidence.
+#
+# `last_seen` not advancing on a run means the name was not observed that day.
+# Only a name that has NEVER been observed, and so has no record here at all, is
+# an error — see tests/test_crosswalk.py.
+
+names:
+  Canada Energy Regulator:
+    key: cer
+    sources:
+    - oag
+    - tender_contracting
+    count: 4
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Canadian Armed Forces:
+    key: dnd
+    sources:
+    - oag
+    count: 5
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Canadian Coast Guard:
+    key: dfo
+    sources:
+    - oag
+    - tender_contracting
+    - tender_end_user
+    count: 25
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Canadian Transportation Accident Investigation and Safety Board:
+    sources:
+    - tender_contracting
+    count: 1
+    first_seen: '2026-08-03'
+    last_seen: '2026-08-03'
+    note: Verified by the union check in commit 60234be; absent from the feed since. Legal name of the
+      Transportation Safety Board.
+    key: tsb
+  Correctional Service Canada:
+    key: csc
+    sources:
+    - oag
+    - tender_contracting
+    count: 4
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Correctional Services Canada:
+    key: csc
+    sources:
+    - oag
+    count: 1
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Department of Citizenship & Immigration:
+    key: ircc
+    sources:
+    - tender_contracting
+    - tender_end_user
+    count: 4
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Department of Foreign Affairs, Trade and Development:
+    key: gac
+    sources:
+    - tender_contracting
+    count: 7
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Department of Industry:
+    key: ised
+    sources:
+    - tender_end_user
+    count: 4
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Department of Public Safety and Emergency Preparedness:
+    key: public-safety
+    sources:
+    - tender_contracting
+    count: 1
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Department of Public Works and Government Services:
+    key: pspc
+    sources:
+    - tender_contracting
+    - tender_end_user
+    count: 492
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Department of the Environment:
+    key: eccc
+    sources:
+    - tender_contracting
+    - tender_end_user
+    count: 3
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Elections Canada:
+    key: elections-canada
+    sources:
+    - tender_contracting
+    count: 1
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Foreign Affairs, Trade And Development:
+    key: gac
+    sources:
+    - tender_contracting
+    - tender_end_user
+    count: 2
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Immigration Refugee Board:
+    key: irb
+    sources:
+    - tender_contracting
+    count: 1
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Immigration and Refugee Board:
+    key: irb
+    sources:
+    - tender_contracting
+    count: 1
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Infrastructure Canada:
+    key: housing-infrastructure
+    sources:
+    - oag
+    count: 4
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Office of the Chief Electoral Officer:
+    key: elections-canada
+    sources:
+    - tender_contracting
+    count: 5
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Parks Canada:
+    key: parks-canada
+    sources:
+    - oag
+    - tender_contracting
+    - tender_end_user
+    count: 19
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Parks Canada Agency:
+    key: parks-canada
+    sources:
+    - tender_contracting
+    - tender_end_user
+    count: 28
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Polar Knowledge Canada:
+    sources:
+    - tender_contracting
+    count: 1
+    first_seen: '2026-08-03'
+    last_seen: '2026-08-03'
+    note: Verified by the union check in commit 60234be; absent from the feed since. Applied name of the
+      Canadian High Arctic Research Station.
+    key: polar
+  Public Works and Government Services Canada:
+    key: pspc
+    sources:
+    - tender_contracting
+    - tender_end_user
+    count: 25
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Royal Canadian Mounted Police:
+    key: rcmp
+    sources:
+    - oag
+    - tender_contracting
+    - tender_end_user
+    count: 21
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'
+  Treasury Board:
+    key: tbs
+    sources:
+    - oag
+    - tender_contracting
+    count: 16
+    first_seen: '2026-08-09'
+    last_seen: '2026-08-09'

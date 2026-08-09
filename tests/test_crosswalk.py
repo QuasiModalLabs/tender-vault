@@ -307,33 +307,152 @@ def test_canonical_keys_are_unique_and_stable():
               f"stale slug {stale!r} is not a canonical key")
 
 
-def test_observed_names_are_never_invented():
+def test_every_observed_name_has_recorded_provenance():
     """
-    THE seeding rule: every observed_name must appear verbatim in the OAG audit
-    text or tenders.csv. This is the check that keeps the list evidence rather
-    than guesswork — a plausible variant nobody has ever published is exactly
-    what must not be in here, and it is the easiest thing to add by accident.
+    THE seeding rule, and it now runs on committed files alone.
+
+    Every observed_name must carry a record in attestation.yaml saying where it
+    was seen and when. A plausible variant nobody ever published is what must
+    not be in the registry, and it is the easiest thing to add by accident.
+
+    This replaces a check that RE-DERIVED the evidence on every run from
+    `.cache/tenders.csv`. Two things were wrong with that, and both bit:
+
+    The evidence expired. That CSV is a gitignored snapshot of the notices open
+    on the day it was downloaded, so an organization with nothing open drops out
+    of it. On 2026-08-09 the Transportation Safety Board and Polar Knowledge
+    Canada were both absent and the check called two correct, legally-attested
+    aliases invented. A committed file was being validated against a mutable
+    one, so the verdict changed with the weather.
+
+    And it never ran where it mattered. weekly-ingest.yml runs the suite before
+    ingest.py has created the CSV, so on a fresh runner the old check hit its own
+    "needs both sources" guard and skipped — every Monday, silently.
+
+    Reading only committed files fixes both: deterministic, and green or red in
+    CI rather than absent.
     """
     entries = cw.load_aliases()
     declared = {n for e in entries.values() for n in (e.get("observed_names") or [])}
     if not declared:
         skip("observed_names provenance", "none declared")
         return
-    # BOTH sources, not either. extract_observed_names() collects from oag.db
-    # and tenders.csv independently, and this compares every declared name
-    # against their union — so one missing source doesn't weaken the check, it
-    # invents failures. Of 24 declared names, 3 are attested only by oag.db and
-    # 15 only by tenders.csv, and whichever is absent is the list you get
-    # accused of inventing. An `or` here passed whenever either existed.
+
+    records = cw.load_attestation()
+    check(bool(records),
+          "attestation.yaml exists and is populated — run crosswalk.py --attest")
+
+    unrecorded = sorted(declared - set(records))
+    check(not unrecorded,
+          f"every observed_name has recorded provenance; unrecorded: {unrecorded}")
+
+    # A record has to actually say something. An empty stamp would satisfy the
+    # membership check above while asserting nothing, which is the shape the old
+    # circular harvest had.
+    malformed = []
+    for name in sorted(declared & set(records)):
+        rec = records[name] or {}
+        if not rec.get("sources"):
+            malformed.append(f"{name}: no sources")
+        elif not all(s == "oag" or s.startswith("tender_") for s in rec["sources"]):
+            malformed.append(f"{name}: unknown source in {rec['sources']}")
+        if not isinstance(rec.get("count"), int) or rec.get("count", 0) < 1:
+            malformed.append(f"{name}: count is not a positive integer")
+        for field in ("first_seen", "last_seen"):
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(rec.get(field, ""))):
+                malformed.append(f"{name}: {field} is not an ISO date")
+    check(not malformed, f"every record is well-formed; malformed: {malformed}")
+
+
+def test_stale_records_are_not_dropped_and_are_not_invented():
+    """
+    The distinction the old check could not make: absent-today vs never-seen.
+
+    Both must be preserved. Carrying a name forward on a stale record is what
+    stops feed rotation from deleting correct aliases; refusing to carry one
+    forward with no record at all is what stops the file becoming a place to
+    launder guesses. Synthetic input, so it holds with no sources present.
+    """
+    aliases = {
+        "a": {"observed_names": ["Seen Today"]},
+        "b": {"observed_names": ["Seen Last Month"]},
+        "c": {"observed_names": ["Never Seen Anywhere"]},
+    }
+    observed = {"Seen Today": {"sources": {"tender_contracting"}, "count": 7}}
+    prior = {"Seen Last Month": {"sources": ["oag"], "count": 2,
+                                 "first_seen": "2026-07-01", "last_seen": "2026-07-01"}}
+
+    original_load = cw.load_attestation
+    cw.load_attestation = lambda: prior
+    try:
+        records, summary = cw.build_attestation(aliases, observed, today="2026-08-09")
+    finally:
+        cw.load_attestation = original_load
+
+    check(summary["confirmed"] == ["Seen Today"], "a live name is confirmed")
+    check(records["Seen Today"]["last_seen"] == "2026-08-09",
+          "a confirmed name advances last_seen")
+
+    check(summary["carried"] == ["Seen Last Month"],
+          "a name absent today is carried, not dropped")
+    check(records["Seen Last Month"]["last_seen"] == "2026-07-01",
+          "a carried name keeps its stale last_seen rather than being re-dated")
+
+    check(summary["missing"] == ["c: Never Seen Anywhere"],
+          "a name with no evidence and no record is reported missing")
+    check("Never Seen Anywhere" not in records,
+          "a never-seen name earns no record")
+
+
+def test_first_seen_survives_reconfirmation():
+    """
+    Re-attesting must not rewrite history. first_seen is the age of the claim,
+    and an --attest run that reset it would quietly turn a two-year-old
+    observation into a fresh one every time it ran.
+    """
+    aliases = {"a": {"observed_names": ["Long Standing Name"]}}
+    observed = {"Long Standing Name": {"sources": {"oag"}, "count": 3}}
+    prior = {"Long Standing Name": {"sources": ["tender_contracting"], "count": 1,
+                                    "first_seen": "2026-01-15", "last_seen": "2026-07-01"}}
+
+    original_load = cw.load_attestation
+    cw.load_attestation = lambda: prior
+    try:
+        records, _ = cw.build_attestation(aliases, observed, today="2026-08-09")
+    finally:
+        cw.load_attestation = original_load
+
+    rec = records["Long Standing Name"]
+    check(rec["first_seen"] == "2026-01-15", "first_seen is preserved across runs")
+    check(rec["last_seen"] == "2026-08-09", "last_seen advances")
+    # Sources accumulate: a name seen in the feed last month and in the audit
+    # text today is attested by both, and dropping either narrows the claim.
+    check(rec["sources"] == ["oag", "tender_contracting"],
+          "sources accumulate rather than being replaced")
+
+
+def test_live_evidence_is_never_weaker_than_the_record():
+    """
+    The opportunistic half, and it only ever fails in the direction that means
+    someone forgot to run --attest.
+
+    A name the sources attest RIGHT NOW must be recorded; there is no excuse for
+    a missing stamp when the evidence is sitting there. A name the sources do not
+    attest proves nothing either way — that is the feed-rotation case, and
+    failing on it is the bug this whole change removes.
+    """
     if not (cw.OAG_DB.exists() and cw.TENDERS_CSV.exists()):
-        skip("observed_names provenance",
-             "needs both oag.db and tenders.csv to verify against")
+        skip("live attestation", "needs both oag.db and tenders.csv")
         return
 
-    real = set(cw.extract_observed_names())
-    invented = sorted(declared - real)
-    check(not invented,
-          f"every observed_name appears in the source data; invented: {invented}")
+    entries = cw.load_aliases()
+    declared = {n for e in entries.values() for n in (e.get("observed_names") or [])}
+    records = cw.load_attestation()
+    live = set(cw.extract_observed_names())
+
+    stale = sorted((declared & live) - set(records))
+    check(not stale,
+          f"names visible in the sources are recorded; run --attest for: {stale}")
 
 
 def test_a_truncated_name_is_not_attested_by_its_own_extension():
