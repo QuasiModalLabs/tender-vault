@@ -235,6 +235,10 @@ The contracts and plans refresh workflows are present but disabled. They rebuilt
 
 `data/crosswalk.db` **is** committed. It derives from `org_aliases.yaml`, which is a hand-curated set of assertions about what the Government of Canada calls itself — the same file every user needs, and 53KB.
 
+`vault/crosswalk/attestation.yaml` is committed for a subtler reason: it is generated, but it cannot be regenerated. It records where and when each `observed_names` entry was seen, and the sources it was seen in do not keep. `.cache/tenders.csv` holds only the notices open the day it was downloaded, so an organization with no open solicitation this week is simply not in it — the Transportation Safety Board and Polar Knowledge Canada both dropped out between 2026-08-03 and 2026-08-09. Re-deriving the evidence on demand therefore deletes it. Recording it once and committing it does not.
+
+Re-run `python scripts/crosswalk.py --attest` whenever you add an `observed_names` entry; the test suite fails until the new name has a record. Running it periodically is also worth doing even when nothing changed — every run permanently captures whatever the sources happen to attest that day, which is how a name that rotates in and out of the feed ends up recorded rather than lost.
+
 `vault/agencies/` is ignored for a different reason from the rest of the table, and it's worth being explicit about. Nothing here regenerates it — each node is created once by `promote` and hand-edited afterwards — so the usual "it rebuilds from a command" argument doesn't apply. It stays out anyway: this repo is public, the directory listing alone publishes which departments you're pursuing, and the node exists precisely so private notes accumulate in it. Durability is your Obsidian sync's job, not a public repo's.
 
 ## Tests

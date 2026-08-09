@@ -351,6 +351,198 @@ def extract_observed_names() -> dict[str, dict]:
     return observed
 
 
+# ---------------------------------------------------------------------------
+# Attestation — provenance that survives the sources it was taken from
+# ---------------------------------------------------------------------------
+# org_aliases.yaml is committed and hand-curated. Its observed_names were
+# checked against real data, and the check that enforced that re-derived the
+# evidence on every run from `.cache/tenders.csv` — a gitignored snapshot of
+# CURRENTLY OPEN notices, re-downloaded by every ingest.
+#
+# So the evidence expired. A small agency with no open solicitation this week
+# simply is not in the feed: on 2026-08-09 the Transportation Safety Board and
+# Polar Knowledge Canada were both absent, and the check reported two correct,
+# legally-attested aliases as invented. It also never ran in CI, because the
+# workflow runs the suite before ingest.py has created the CSV, and the check
+# skipped itself when the file was missing.
+#
+# The fix is to stop re-deriving and start RECORDING. Attestation is written
+# once, when the evidence is seen, and committed alongside the registry. A name
+# absent from today's feed is then inconclusive — its record stands and its
+# last_seen simply does not advance — which is the honest reading, because the
+# feed never claimed to be a census of federal organizations.
+#
+# Kept in its own file rather than as a block inside org_aliases.yaml for the
+# same reason vault/agencies/ and vault/intel/agencies/ are separate: one is
+# hand-written and full of curated prose, the other is machine-owned and
+# rewritten wholesale. Rewriting the curated file to stamp a date would mean a
+# YAML round-trip through its comments, and those comments are the reasoning.
+
+ATTESTATION_PATH = PROJECT_ROOT / "vault" / "crosswalk" / "attestation.yaml"
+
+ATTESTATION_HEADER = """\
+# Provenance for the observed_names in org_aliases.yaml.
+#
+# GENERATED — do not hand-edit. Rewritten wholesale by:
+#     python scripts/crosswalk.py --attest
+#
+# Each record says where a name was seen and when. It is committed so the claim
+# outlives the source it came from: `.cache/tenders.csv` holds only the notices
+# open on the day it was downloaded, so an organization with nothing open right
+# now vanishes from it. That is not evidence the name was invented, and this
+# file exists so nothing mistakes it for evidence.
+#
+# `last_seen` not advancing on a run means the name was not observed that day.
+# Only a name that has NEVER been observed, and so has no record here at all, is
+# an error — see tests/test_crosswalk.py.
+"""
+
+
+# The bootstrap. These two were attested before this file existed, and the
+# evidence has since expired, so there is no run of --attest that can rediscover
+# them — the only honest options are to record the verification that did happen
+# or to delete two correct aliases.
+#
+# What happened: commit 60234be (2026-08-03) rewrote the provenance check to
+# compare every declared observed_name against the UNION of oag.db and
+# tenders.csv, and removed the five it could not substantiate. Both names below
+# were in org_aliases.yaml at that commit and both survived it. That is a real
+# verification against real data, and the commit is the citation.
+#
+# Neither is guesswork on the merits either. "Canadian Transportation Accident
+# Investigation and Safety Board" is the TSB's legal name in the Act that
+# created it; "Polar Knowledge Canada" is the applied name of the Canadian High
+# Arctic Research Station. Both are small enough to have no open solicitation in
+# a given week, which is exactly how they fell out of a feed of open notices.
+#
+# Superseded the moment either name is observed live: build_attestation layers
+# the file over this, and live evidence over both.
+PRIOR_ATTESTATION: dict[str, dict] = {
+    "Canadian Transportation Accident Investigation and Safety Board": {
+        "sources": ["tender_contracting"],
+        "count": 1,
+        "first_seen": "2026-08-03",
+        "last_seen": "2026-08-03",
+        "note": "Verified by the union check in commit 60234be; absent from the "
+                "feed since. Legal name of the Transportation Safety Board.",
+    },
+    "Polar Knowledge Canada": {
+        "sources": ["tender_contracting"],
+        "count": 1,
+        "first_seen": "2026-08-03",
+        "last_seen": "2026-08-03",
+        "note": "Verified by the union check in commit 60234be; absent from the "
+                "feed since. Applied name of the Canadian High Arctic Research "
+                "Station.",
+    },
+}
+
+
+def load_attestation() -> dict[str, dict]:
+    """Recorded provenance, name -> record. Empty when the file is absent."""
+    if not ATTESTATION_PATH.exists():
+        return {}
+    doc = yaml.safe_load(ATTESTATION_PATH.read_text(encoding="utf-8")) or {}
+    return doc.get("names") or {}
+
+
+def build_attestation(aliases: dict[str, dict],
+                      observed: dict[str, dict],
+                      today: str | None = None) -> tuple[dict, dict]:
+    """
+    Merge today's live evidence into the recorded provenance.
+
+    Returns `(records, summary)`. ADDITIVE BY DESIGN: a name observed today has
+    its record refreshed and its source set widened; a name not observed today
+    keeps whatever was recorded before, untouched. Nothing is ever dropped here,
+    because "absent from this download" and "never existed" are different
+    claims and only the tests get to act on the difference.
+    """
+    today = today or datetime.now().strftime("%Y-%m-%d")
+    # The recorded file wins over the bootstrap, and live evidence wins over
+    # both — so the seed decays out of relevance instead of pinning anything.
+    previous = {**PRIOR_ATTESTATION, **load_attestation()}
+    records: dict[str, dict] = {}
+    confirmed, carried, missing = [], [], []
+
+    for key, entry in sorted(aliases.items()):
+        for name in entry.get("observed_names") or []:
+            live = observed.get(name)
+            prior = previous.get(name) or {}
+            if live:
+                sources = sorted(set(live["sources"]) | set(prior.get("sources") or []))
+                records[name] = {
+                    "key": key,
+                    "sources": sources,
+                    "count": int(live["count"]),
+                    "first_seen": prior.get("first_seen", today),
+                    "last_seen": today,
+                }
+                confirmed.append(name)
+            elif prior:
+                # Carried forward verbatim, including its stale last_seen. That
+                # date is the useful part: it says how long it has been since
+                # anyone saw this string, which is a fact worth keeping visible.
+                records[name] = {**prior, "key": key}
+                carried.append(name)
+            else:
+                missing.append(f"{key}: {name}")
+
+    return records, {"confirmed": confirmed, "carried": carried, "missing": missing}
+
+
+def write_attestation(records: dict[str, dict]) -> None:
+    """Rewrite the attestation file. Machine-owned, so a full rewrite is safe."""
+    ATTESTATION_PATH.parent.mkdir(parents=True, exist_ok=True)
+    body = yaml.safe_dump(
+        {"names": {k: records[k] for k in sorted(records)}},
+        sort_keys=False, allow_unicode=True, default_flow_style=False, width=100,
+    )
+    ATTESTATION_PATH.write_text(ATTESTATION_HEADER + "\n" + body, encoding="utf-8")
+
+
+def cmd_attest() -> int:
+    """Re-derive provenance from live sources and record it. Returns an exit code."""
+    aliases = load_aliases()
+    have_oag, have_csv = OAG_DB.exists(), TENDERS_CSV.exists()
+    print(f"Sources: {OAG_DB.name} {'present' if have_oag else 'ABSENT'}, "
+          f"{TENDERS_CSV.name} {'present' if have_csv else 'ABSENT'}")
+    if not (have_oag or have_csv):
+        sys.stderr.write(
+            "Neither source is available, so nothing can be attested.\n"
+            "Build them with scripts/oag_ingest.py and scripts/ingest.py.\n"
+        )
+        return 2
+
+    observed = extract_observed_names()
+    records, summary = build_attestation(aliases, observed)
+
+    print(f"  confirmed today:  {len(summary['confirmed'])}")
+    print(f"  carried forward:  {len(summary['carried'])}")
+    for name in summary["carried"]:
+        prior = records[name]
+        print(f"      {name!r} — not in today's sources; last seen "
+              f"{prior.get('last_seen', 'unknown')}")
+    if summary["missing"]:
+        # The only real error: no live evidence AND nothing ever recorded.
+        print(f"  NEVER ATTESTED:   {len(summary['missing'])}")
+        for item in summary["missing"]:
+            print(f"      {item}")
+        sys.stderr.write(
+            "\nThese observed_names have no evidence in any source and no prior\n"
+            "record. Either they were never seen, or they were added by hand.\n"
+            "Remove them from org_aliases.yaml, or attest them from a source\n"
+            "that contains them.\n"
+        )
+        write_attestation(records)
+        return 1
+
+    write_attestation(records)
+    print(f"\nWrote {len(records)} records to "
+          f"{ATTESTATION_PATH.relative_to(PROJECT_ROOT)}")
+    return 0
+
+
 def attach_observed(rows: list[dict], observed: dict[str, dict],
                     aliases: dict) -> tuple[list[dict], list[dict]]:
     """
@@ -1038,8 +1230,18 @@ def main():
     parser.add_argument("--collisions", action="store_true",
                         help="Print organizations sharing a leading token run — the "
                              "pairs the not: exclusions are written against")
+    parser.add_argument("--attest", action="store_true",
+                        help="Re-derive observed_name provenance from the live sources "
+                             "and record it in attestation.yaml, then exit")
     parser.add_argument("--db", type=Path, default=None, help=f"Output DB (default {DB_PATH})")
     args = parser.parse_args()
+
+    # Before the crosswalk build, deliberately: attestation needs only the
+    # registry and the two evidence sources, and the build ahead of it reads a
+    # 640 MB contracts CSV. Making provenance cheap to re-record is most of what
+    # decides whether it actually gets re-recorded.
+    if args.attest:
+        sys.exit(cmd_attest())
 
     db_path = output_path(DB_PATH, args.db, None)
 
