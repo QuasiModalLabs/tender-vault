@@ -12,6 +12,7 @@ Usage:
     python scripts/tender_tools.py search "cloud migration federal"
     python scripts/tender_tools.py get W1234-567890
     python scripts/tender_tools.py similar W1234-567890
+    python scripts/tender_tools.py list-corpus --window imminent
     python scripts/tender_tools.py list-watching
     python scripts/tender_tools.py list-parked
     python scripts/tender_tools.py contracts-intel "cloud"
@@ -266,6 +267,10 @@ def cmd_search(args) -> dict:
             "title": doc["metadata"].get("title", ""),
             "agency": _display_agency(doc["metadata"]),
             "closing_date": doc["metadata"].get("closing_date", ""),
+            # Derived now, not stored — see _window_fields. `imminent` means
+            # inside the profile threshold; those notices used to be deleted at
+            # ingest. `closed` means it expired since the corpus was built.
+            **_window_fields(doc["metadata"]),
             # None, never 0. The ingest omits this key when no value was
             # extracted, and defaulting it to 0 is what made every tender in
             # the corpus read as a $0 contract.
@@ -293,6 +298,10 @@ def cmd_get(args) -> dict:
     return {
         "tender_id": doc["id"],
         "metadata": doc["metadata"],
+        # Alongside metadata rather than merged into it: metadata is what the
+        # ingest wrote and is stable until the next one, these two are computed
+        # for today and change under a corpus that hasn't moved.
+        "derived": _window_fields(doc["metadata"]),
         "document": doc["document"],
         "in_watching": (WATCHING / f"{_slugify(doc['id'])}.md").exists(),
     }
@@ -329,6 +338,55 @@ def cmd_similar(args) -> dict:
                 "similarity": round(1 / (1 + distance), 4),
             })
     return {"target": args.tender_id, "similar": similar[:args.n]}
+
+
+def cmd_list_corpus(args) -> dict:
+    """
+    Every notice in the corpus, ordered by closing date.
+
+    The briefing is instructed to read the corpus end to end rather than search
+    it, and until now there was no command that returned it — doing that meant
+    reading ChromaDB directly, outside the tool layer that every other corpus
+    operation goes through. `search` cannot substitute: it ranks against a query
+    and returns n, which is the opposite of surveying what is open.
+
+    Sorted by closing date with `standing` and `unknown` last, because a
+    placeholder year sorted numerically puts a permanent supply arrangement at
+    the bottom of the list and a missing date at the top of it.
+    """
+    load_collection()
+    rows = []
+    for doc in doc_index:
+        meta = doc["metadata"]
+        derived = _window_fields(meta)
+        if args.window and derived["closing_window"] != args.window:
+            continue
+        rows.append({
+            "tender_id": doc["id"],
+            "title": meta.get("title", ""),
+            "agency": _display_agency(meta),
+            "closing_date": meta.get("closing_date", ""),
+            **derived,
+            "opportunity_kind": meta.get("opportunity_kind", "unknown"),
+            "kind_basis": meta.get("kind_basis", "unclassified"),
+            "matched_competencies": meta.get("matched_competencies", ""),
+            "unspsc_families": meta.get("unspsc_families", ""),
+            "in_watching": (WATCHING / f"{_slugify(doc['id'])}.md").exists(),
+        })
+
+    rank = {"closed": 0, "imminent": 1, "open": 2, "standing": 3, "unknown": 4}
+    rows.sort(key=lambda r: (rank.get(r["closing_window"], 9), r["closing_date"]))
+
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["closing_window"]] = counts.get(r["closing_window"], 0) + 1
+    return {
+        "count": len(rows),
+        "by_window": counts,
+        "imminent_within_days": _profile_imminence_threshold(),
+        "filtered_to": args.window,
+        "corpus": rows,
+    }
 
 
 def cmd_list_watching(args) -> dict:
@@ -1323,11 +1381,11 @@ _TENDER_COLS = {
     "url": "noticeURL-URLavis-eng",
 }
 
-# Past this horizon a closing date is a placeholder meaning "this arrangement
-# has no real close", not a date. 2065-04-27, 2076-12-31 and 2100-12-31 all
-# appear in the live feed on standing arrangements. Rendering them as closing
-# dates makes a permanent vehicle look like an imminent deadline.
-_SENTINEL_HORIZON_YEARS = 10
+# Single definition, in ingest.py, imported here. It used to be declared in both
+# modules with the same value and the same comment — which is fine until one of
+# them is tuned and the corpus and the dossier start disagreeing about what a
+# placeholder date is.
+from ingest import SENTINEL_HORIZON_YEARS as _SENTINEL_HORIZON_YEARS  # noqa: E402
 
 
 def _profile_expiry_min_value() -> float:
@@ -1339,6 +1397,40 @@ def _profile_expiry_min_value() -> float:
         return parse_profile(PROFILE).get("expiry_min_value", 0)
     except Exception:
         return 0
+
+
+def _profile_imminence_threshold() -> int:
+    """
+    Days-until-close below which a notice is `imminent`, from the profile.
+
+    Read at call time, mirroring _profile_expiry_min_value: the window is
+    derived per query rather than stored, so retuning the threshold takes effect
+    on the next command with no re-ingest.
+    """
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent))
+        from ingest import parse_profile
+        return int(parse_profile(PROFILE).get("imminent_within_days", 5))
+    except Exception:
+        return 5
+
+
+def _window_fields(meta: dict) -> dict:
+    """
+    `closing_window` and `days_until_close` for a corpus notice, computed now.
+
+    Deliberately not stored in ChromaDB. Both values depend on today's date, and
+    a corpus is read for up to a week after it is built — a stored `imminent`
+    would still say `imminent` after the notice had closed. Computing here means
+    a briefing written three days after an ingest sees the truth on the day it
+    is written, including notices that expired in between.
+    """
+    from ingest import closing_window
+    window, days = closing_window(
+        meta.get("closing_date", ""), _profile_imminence_threshold()
+    )
+    return {"closing_window": window, "days_until_close": days}
 
 
 def _months_until(date_str: str, today: datetime) -> int | None:
@@ -2153,6 +2245,17 @@ def build_parser() -> argparse.ArgumentParser:
     sim.add_argument("tender_id")
     sim.add_argument("--n", type=int, default=5)
     sim.set_defaults(func=cmd_similar)
+
+    lc = sub.add_parser(
+        "list-corpus",
+        help="Every notice in the corpus by closing date — for reading it end to end",
+    )
+    lc.add_argument(
+        "--window",
+        choices=["closed", "imminent", "open", "standing", "unknown"],
+        help="Only notices in this closing window (default: all)",
+    )
+    lc.set_defaults(func=cmd_list_corpus)
 
     lw = sub.add_parser("list-watching", help="List promoted tenders")
     lw.set_defaults(func=cmd_list_watching)

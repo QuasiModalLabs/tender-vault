@@ -217,7 +217,7 @@ The second is that most of the OAG corpus audits nobody. Of 364 records, about 1
 
 **It's not reproducible.** Two runs of the same question won't follow identical reasoning. Acceptable for research, disqualifying for a product that needs to be auditable.
 
-**It only works because the corpus is small.** A run in early August 2026 went from 901 open tenders down to 50. At ten thousand, the markdown-file pattern strains badly. This is right-sized for one firm, not for a platform.
+**It only works because the corpus is small.** A run in early August 2026 went from 896 open tenders down to 70. At ten thousand, the markdown-file pattern strains badly. This is right-sized for one firm, not for a platform.
 
 > **On every number in this file.** These are measurements from a specific day's
 > feed, recorded to show orders of magnitude and where the filter loses things —
@@ -248,7 +248,7 @@ Everything filters through one file: `vault/profiles/my-company.md`. Its frontma
 unspsc_families: ['8111', '8116', '4323', '80101507']
 competencies: [informatics, information technology, TBIPS, software, cloud, SaaS, ...]
 exclude: [janitorial, landscaping, catering, food service]
-min_days_until_close: 10
+imminent_within_days: 10   # labels near-close notices; excludes nothing
 ```
 
 That snippet is four keys out of a dozen; the frontmatter also carries the contracts filter and the theme example sentences that drive the plans and audit scoring. **The full specification is the profile's own inline comments** — every key is annotated in place with what it does and why the shipped value was chosen. [`docs/PROFILE.md`](docs/PROFILE.md) covers what that file can't say about itself: the two-pole scoring mechanics, how to tune the poles, and which edits force a rebuild.

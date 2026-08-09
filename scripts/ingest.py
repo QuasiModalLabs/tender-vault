@@ -19,7 +19,7 @@ import re
 import shutil
 import sqlite3
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -582,6 +582,97 @@ def staged_db(db_path: Path):
 # Profile parsing — the frontmatter of the profile is the filter config
 # ---------------------------------------------------------------------------
 
+# Past this horizon a closing date is a placeholder meaning "this arrangement
+# has no real close", not a date. 2065-04-27, 2076-12-31 and 2100-12-31 all
+# appear in the live feed on standing arrangements. Rendering them as closing
+# dates makes a permanent vehicle look like an imminent deadline, and computing
+# a days-until figure from one yields a meaningless five-digit integer.
+#
+# Defined here rather than in tender_tools because both modules need it and the
+# import already runs that way (tender_tools imports parse_profile from here).
+SENTINEL_HORIZON_YEARS = 10
+
+
+def closing_window(closing_date, imminent_within_days: int, today=None):
+    """
+    Classify a closing date into a window. Returns `(window, days_until_close)`.
+
+    DERIVED, NEVER STORED. Both outputs depend on what day it is, so freezing
+    them into ChromaDB at ingest would make them wrong by up to a week before
+    the next run. The corpus keeps `closing_date`; this is computed against it
+    at query time, which also means the threshold can change with no re-ingest.
+
+    The five windows, and why each exists:
+
+    - `closed`    — the date has passed. Only reachable from a corpus older than
+                    today, which is the normal case: a briefing written three
+                    days after an ingest needs to see that something expired.
+    - `imminent`  — inside the profile threshold. These used to be deleted at
+                    ingest; they are here now so the reader decides.
+    - `open`      — comfortably open.
+    - `standing`  — past SENTINEL_HORIZON_YEARS. A placeholder, not a deadline,
+                    so days_until_close is None rather than a five-digit number.
+    - `unknown`   — no parseable date. Not the same as closed, and not the same
+                    as standing.
+
+    `days_until_close` is None for `standing` and `unknown` — the two cases where
+    an integer would be a fabrication.
+    """
+    if today is None:
+        today = datetime.now().date()
+    elif hasattr(today, "date") and not isinstance(today, date):
+        today = today.date()
+
+    if closing_date is None or closing_date == "":
+        return "unknown", None
+    try:
+        if isinstance(closing_date, str):
+            parsed = datetime.strptime(closing_date[:10], "%Y-%m-%d").date()
+        elif hasattr(closing_date, "date"):
+            if pd.isna(closing_date):
+                return "unknown", None
+            parsed = closing_date.date()
+        else:
+            parsed = closing_date
+    except (ValueError, TypeError):
+        return "unknown", None
+
+    if parsed.year - today.year > SENTINEL_HORIZON_YEARS:
+        return "standing", None
+
+    days = (parsed - today).days
+    if days < 0:
+        return "closed", days
+    if days < imminent_within_days:
+        return "imminent", days
+    return "open", days
+
+
+def _imminence_threshold(fm: dict) -> int:
+    """
+    Days-until-close below which a notice is `imminent`.
+
+    Accepts the old `min_days_until_close` key so a profile written before the
+    rename keeps working, but says so once, loudly: the key did not just change
+    name, it changed meaning. It used to delete those notices. Reading it
+    silently would leave someone believing their corpus is still filtered.
+    """
+    if "imminent_within_days" in fm:
+        return int(fm["imminent_within_days"])
+    if "min_days_until_close" in fm:
+        value = int(fm["min_days_until_close"])
+        print(
+            f"  NOTE: profile uses `min_days_until_close: {value}`, which is now "
+            f"`imminent_within_days`.\n"
+            f"        It no longer excludes anything — notices closing sooner "
+            f"than {value} days now\n"
+            f"        enter the corpus tagged `imminent` instead of being "
+            f"dropped. Rename the key to silence this."
+        )
+        return value
+    return 5
+
+
 def parse_profile(profile_path: Path) -> dict:
     """
     Extract filter criteria from the YAML frontmatter of the profile markdown.
@@ -606,7 +697,14 @@ def parse_profile(profile_path: Path) -> dict:
         "unspsc_families": [str(f).strip() for f in fm.get("unspsc_families", [])],
         "competencies": [c.lower() for c in fm.get("competencies", [])],
         "exclude": [e.lower() for e in fm.get("exclude", [])],
-        "min_days_until_close": int(fm.get("min_days_until_close", 5)),
+        # Imminence threshold, NOT an exclusion. Renamed from
+        # min_days_until_close, which described the behaviour this key used to
+        # have: a hard drop of everything closing sooner. That drop removed
+        # notices before the date-conflict detector ever read them, made the
+        # briefing's "act now" section unreachable by construction, and deleted
+        # a watched tender from the corpus in its final days. Now nothing is
+        # excluded on it — it only decides what counts as `imminent`.
+        "imminent_within_days": _imminence_threshold(fm),
         "contracts_window_years": int(fm.get("contracts_window_years", 3)),
         "contracts_categories": [c.lower() for c in fm.get("contracts_categories", [])],
         "expiry_min_value": float(fm.get("expiry_min_value", 0)),
@@ -810,9 +908,42 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
         utc=True,
     ).dt.tz_localize(None)
 
-    min_close = datetime.now() + timedelta(days=criteria["min_days_until_close"])
-    df = df[df["_closing"] >= min_close]
-    print(f"  After date filter (>={criteria['min_days_until_close']} days out): {len(df):,}")
+    # Drop only what is dead. Everything still open enters and is tagged; the
+    # reader decides whether a near-close notice is worth acting on.
+    #
+    # TWO BUGS LIVED IN THE THREE LINES THIS REPLACES, and both were invisible:
+    #
+    # 1. It dropped everything closing within `min_days_until_close`, which ran
+    #    BEFORE body_date_conflict below — so a notice closing in eight days was
+    #    never read for a conflicting prose deadline, and a tender in watching/
+    #    vanished from the corpus in its final days. It also made the briefing's
+    #    7-day "act now" section unreachable against a 10-day cutoff.
+    #
+    # 2. It compared `datetime.now() + timedelta(...)` against a full timestamp,
+    #    so the cutoff was a wall-clock INSTANT, not a date. Notices closing at
+    #    14:00 on the boundary day survived a 09:00 ingest and were dropped by a
+    #    15:00 one — same feed, same day, 53 notices versus 48. Corpus size was
+    #    not reproducible within a day, which quietly put noise into every
+    #    week-over-week diff and every gating denominator recorded from them.
+    #
+    # Hence `.dt.normalize()` on both sides: "ten days out" is a count of days,
+    # never a time of day.
+    today = pd.Timestamp(datetime.now().date())
+    closing_day = df["_closing"].dt.normalize()
+
+    # NaT is not "closed". Comparison against NaT is False either way, so the
+    # old expression dropped undated notices as a side effect of the arithmetic
+    # rather than as a decision. There are none in the current feed; that is a
+    # property of today's data, not a guarantee. Keep them and say so.
+    undated = closing_day.isna()
+    before = len(df)
+    df = df[undated | (closing_day >= today)]
+    closed = before - len(df)
+    if closed:
+        print(f"  After dropping closed notices: {len(df):,}  ({closed:,} already closed)")
+    if int(undated.sum()):
+        print(f"    {int(undated.sum()):,} notice(s) have no parseable closing date — "
+              f"kept, tagged unknown")
 
     # Combined text for matching (title + description)
     df["_text"] = (
@@ -976,6 +1107,18 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     juris = df["_jurisdiction"].apply(lambda j: j["jurisdiction"]).value_counts().to_dict()
     print("  by jurisdiction: "
           + ", ".join(f"{k} {v}" for k, v in sorted(juris.items(), key=lambda x: -x[1])))
+
+    # A SNAPSHOT, and labelled as one. The window is derived at query time from
+    # closing_date, so this line describes the corpus on the day it was built
+    # and drifts afterwards. Printed because the imminent count is the number
+    # that used to be silently deleted, and it should be visible every run.
+    threshold = criteria["imminent_within_days"]
+    windows = df["_closing"].apply(
+        lambda c: closing_window(c, threshold)[0]
+    ).value_counts().to_dict()
+    order = ["imminent", "open", "standing", "unknown", "closed"]
+    print(f"  closing window at ingest (<{threshold} days = imminent): "
+          + ", ".join(f"{k} {windows[k]}" for k in order if k in windows))
 
     conflicts = df["_date_conflict"].notna().sum()
     if conflicts:

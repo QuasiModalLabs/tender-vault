@@ -12,6 +12,11 @@ truncate in a terminal.
 Read `vault/profiles/my-company.md` and `vault/reference/vehicles.md`
 first. The profile decides fit; the vehicles file decides eligibility.
 
+Then read the corpus end to end with `list-corpus`, which returns every
+notice ordered by closing window. Don't survey with `search` — it ranks
+against a query and returns n, which answers a different question — and
+don't read ChromaDB directly.
+
 ## Structure
 
 Open with an H1 naming the week, then two lines summarising what needs
@@ -20,18 +25,35 @@ that summary is how a reader scans months of briefings without opening
 them.
 
 **1. Act now**
-Only things with a clock: closing within 7 days, and any
+Things with a clock: `closing_window: imminent`, and any
 `closing_date_conflict`. A body deadline earlier than the field is the
 costliest error in the corpus — lead with it and quote the notice.
 Absence of a conflict key means none was detected, not that the date
 was verified.
 
-Nothing goes in this section that doesn't need a decision this week.
+`closing_window` is derived per query from `closing_date` against the
+profile's `imminent_within_days`, so it is correct on the day you write
+rather than the day of the ingest. Get it from `list-corpus` or `get`;
+it is not stored in the corpus. A `closed` window means the notice
+expired since the ingest — say so, don't list it as open.
+
+**Nothing goes in this section that doesn't need a decision this
+week, and imminent is not the same as actionable.** Most weeks a dozen
+or more notices are imminent and nearly all are call-ups against a
+vehicle not held, product buys or staff augmentation. Those go to
+section 5 under their failure class exactly as they would at any other
+closing date — putting them here replaces an empty section with a
+useless one. Section 1 takes imminent notices that would otherwise be
+worth acting on, plus every conflict.
+
+**Report the imminent count either way**, including when none of them
+are actionable. A verified zero and an unexamined zero read the same
+on the page, and only one of them is worth anything in three months.
 
 **2. Closing soon, no action**
-Closing within 14 days but not actionable. One collapsed callout with
-a table inside. A reader who wants to confirm nothing was missed can
-open it; nobody has to scroll past it.
+Closing within 14 days but *not* imminent, and not actionable. One
+collapsed callout with a table inside. A reader who wants to confirm
+nothing was missed can open it; nobody has to scroll past it.
 
 **3. Worth bidding**
 The short list. For each: what the work actually is, why it fits, and
@@ -79,7 +101,7 @@ it expanded but foldable.
 
 | Callout | For |
 |---|---|
-| `danger` | date conflicts, anything closing within 7 days |
+| `danger` | date conflicts, anything `imminent` |
 | `tip` | worth bidding |
 | `warning` | stretches, weak `kind_basis`, confirm-before-acting |
 | `failure` | gated behind a vehicle not held |
@@ -114,9 +136,10 @@ gantt
 ```
 ````
 
-Use `crit` for date conflicts and sub-7-day closes, `active` for the
-worth-bidding set, `done` for everything else. Don't put the skip list
-on it.
+Use `crit` for date conflicts and the `imminent` window, `active` for
+the worth-bidding set, `done` for everything else. Don't put the skip
+list on it, and leave `standing` notices off entirely — a placeholder
+year renders as a bar running off the chart.
 
 **No emoji status markers.** They age badly and read as noise at
 length.
@@ -150,6 +173,13 @@ colour or icon standing in for one. Present the facts and the
 reasoning; the reader decides. This is the formula that was
 deliberately deleted from this project, and a briefing template is
 exactly where it would return.
+
+**A `standing` window is not a deadline.** Sentinel years — 2065, 2076,
+2100 — are the feed's way of saying an arrangement has no real close.
+`closing_window` reports them as `standing` with a null
+`days_until_close`, so don't quote a countdown for one, don't sort them
+into the tail of a date-ordered list, and don't describe one as closing
+in fifty years.
 
 **Don't rank by value either.** `estimated_value` is unreliable —
 present in a small minority of notices and often reading a ceiling or
