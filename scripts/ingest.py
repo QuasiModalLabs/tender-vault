@@ -1143,8 +1143,34 @@ def _meta_str(value, limit: int) -> str:
     return str(value).strip()[:limit]
 
 
-def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict) -> None:
-    """Embed filtered tenders and write to a persistent ChromaDB collection."""
+def _feed_mtime_iso(feed_path: Optional[Path]) -> Optional[str]:
+    """
+    When the feed CSV this run read was downloaded, or None if there wasn't one.
+
+    Separate from the build time on purpose. A rebuild off an unchanged cache
+    moves `corpus_built_at` and leaves this alone, and that difference is the
+    only way to tell "I have newer data" from "I re-ran the ingest" — which
+    matters because only the first one changes what is in the corpus.
+
+    Returns None rather than raising: --cache can point anywhere, and a test
+    harness that drives build_chroma directly has no feed at all.
+    """
+    if feed_path is None or not feed_path.exists():
+        return None
+    return datetime.fromtimestamp(
+        feed_path.stat().st_mtime).isoformat(timespec="seconds")
+
+
+def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
+                 feed_path: Optional[Path] = None) -> None:
+    """
+    Embed filtered tenders and write to a persistent ChromaDB collection.
+
+    `feed_path` is the CSV this run read, recorded as provenance. Optional and
+    keyword-defaulted because tests drive this directly with no feed on disk;
+    absent means the corpus is stamped with a build time and no feed date,
+    which is a different fact from an unstamped corpus.
+    """
     # Imported here, not at module level: this is the only function that needs
     # ChromaDB, and contracts_ingest.py imports this module purely for its
     # profile parser and HTTP headers.
@@ -1168,7 +1194,7 @@ def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict) -> None:
         db_path.rename(retired)
 
     try:
-        _write_chroma(df, db_path, cols)
+        _write_chroma(df, db_path, cols, feed_path)
     except BaseException:
         if retired is not None:
             # Best effort: clear whatever partial exists and put the old corpus
@@ -1195,7 +1221,8 @@ def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict) -> None:
         shutil.rmtree(retired, ignore_errors=True)
 
 
-def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict) -> None:
+def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
+                  feed_path: Optional[Path] = None) -> None:
     """Embed and write. Split out so build_chroma owns the rollback logic."""
     import chromadb
     from chromadb.utils import embedding_functions
@@ -1204,10 +1231,28 @@ def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict) -> None:
     embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name="all-MiniLM-L6-v2"
     )
+
+    # Provenance, written here because it cannot be recovered afterwards:
+    # ChromaDB rewrites its segment files whenever anything LOADS the
+    # collection, so chroma_db/ mtimes report when the corpus was last queried,
+    # not when it was built. A briefing that reads them describes its own read.
+    provenance = {
+        "corpus_built_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    # OMITTED when unknown, never None. Chroma raises
+    # `TypeError: argument 'metadata': Cannot convert Python object to
+    # MetadataValue` on a None value (verified, chromadb 1.5.9), so the obvious
+    # inline `"feed_downloaded_at": _feed_mtime_iso(...)` crashes the whole
+    # ingest the first time there is no cached feed. An absent key is the
+    # signal — see the provenance states in tender_tools._corpus_provenance.
+    feed_at = _feed_mtime_iso(feed_path)
+    if feed_at is not None:
+        provenance["feed_downloaded_at"] = feed_at
+
     collection = client.create_collection(
         name="tenders",
         embedding_function=embedder,
-        metadata={"hnsw:space": "cosine"},
+        metadata={"hnsw:space": "cosine", **provenance},
     )
 
     documents, metadatas, ids = [], [], []
@@ -1347,7 +1392,7 @@ def main():
         print("\nNo tenders passed the filter. Loosen your criteria.", file=sys.stderr)
         sys.exit(1)
 
-    build_chroma(df, db_path, cols)
+    build_chroma(df, db_path, cols, feed_path=args.cache)
     print("\nDone. Claude Code can now search this corpus via scripts/tender_tools.py")
 
 
