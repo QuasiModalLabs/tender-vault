@@ -15,7 +15,8 @@ first. The profile decides fit; the vehicles file decides eligibility.
 Then read the corpus end to end with `list-corpus`, which returns every
 notice ordered by closing window. Don't survey with `search` — it ranks
 against a query and returns n, which answers a different question — and
-don't read ChromaDB directly.
+don't read ChromaDB directly. Read the `provenance` block it returns
+before anything else, and report it (see Rules).
 
 ## Structure
 
@@ -145,6 +146,30 @@ year renders as a bar running off the chart.
 length.
 
 ## Rules
+
+**Report corpus provenance, and never infer it from file timestamps.**
+`list-corpus` returns a `provenance` block: `corpus_built_at` and
+`feed_downloaded_at` as recorded by the ingest, the same two from the
+newest digest, and a `state`. State them in the briefing. If this
+machine's feed stamp is behind the digest's, say so and say plainly that
+the briefing cannot see anything the newer corpus holds — the reader's
+fix is `git pull` then `python scripts/ingest.py`.
+
+`chroma_db/` mtimes are **not** evidence of anything: ChromaDB rewrites
+its segment files on every read, so they report when you last queried.
+A briefing that dates the corpus from them is describing its own read,
+and one already did.
+
+**A fresh `corpus_built_at` is not a fresh briefing.** A corpus rebuilt
+off an unchanged `.cache/tenders.csv` has a new build stamp and the old
+feed stamp; the data is exactly as old as it was. When the two digests
+agree on the feed but not the build, any change in what's in the corpus
+is a filter or profile effect — never report it as new notices.
+
+**`unstamped` and `no_feed_at_build` are different findings.** The first
+means the corpus predates stamping and a rebuild will date it. The
+second means it was built with no cached feed, so its data cannot be
+dated and a rebuild alone will not help. Don't collapse them.
 
 **Wikilink only tenders that exist in the vault** — `watching/`,
 `parked/` or `archived/`. Everything else is plain text with the ID.

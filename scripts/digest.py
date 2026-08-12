@@ -172,8 +172,54 @@ def generate_digest() -> str:
         }
         new_ids = current_ids - old_ids
 
-    # Build the markdown
-    lines = [
+    # Build the markdown.
+    #
+    # Frontmatter carries the corpus stamps, and this is the one thing in the
+    # digest written for a machine rather than for the Monday-morning reader:
+    # chroma_db/ is gitignored and rebuilt on the Actions runner, so the digest
+    # is the ONLY committed record of what corpus another machine last built.
+    # tender_tools._corpus_provenance reads it back to answer "am I behind".
+    #
+    # It does not violate the "footer, not header" rule below — Obsidian
+    # renders frontmatter as a properties block, so it costs none of the
+    # preview lines that the corpus-size line is deliberately given.
+    # NOT `getattr(..., None) or {}`: an UNLOADED collection and an UNSTAMPED
+    # one would both collapse to {}, and those are different facts — the same
+    # conflation the provenance states exist to prevent, one level up.
+    # load_collection() above makes None unreachable, so assert it rather than
+    # coercing it and hoping.
+    collection = tender_tools._collection
+    if collection is None:
+        raise RuntimeError(
+            "generate_digest: collection is not loaded, so corpus provenance "
+            "cannot be read. load_collection() must run first — an unloaded "
+            "collection and an unstamped corpus must never both read as empty."
+        )
+    provenance = dict(collection.metadata or {})
+
+    stamps = [(key, provenance[key])
+              for key in ("corpus_built_at", "feed_downloaded_at")
+              if provenance.get(key)]
+
+    lines: list[str] = []
+    if stamps:
+        # Values are QUOTED, and that is load-bearing. An unquoted ISO
+        # timestamp is a YAML timestamp scalar, so yaml.safe_load resolves
+        # `corpus_built_at: 2026-08-09T14:27:11` to a datetime.datetime — while
+        # the same stamp read out of Chroma metadata is a str. Every equality
+        # check between them would then be False without raising, and the very
+        # machine that produced this digest would report itself as behind.
+        # Quoting keeps it a string for every reader, including Obsidian.
+        #
+        # The whole block is skipped when nothing is stamped, rather than
+        # emitting a bare `---\n---`. That degenerate form happens to parse as
+        # "no frontmatter" only because the closing delimiter never matches —
+        # the right answer for the wrong reason, and not something to rely on.
+        lines += ["---"]
+        lines += [f'{key}: "{value}"' for key, value in stamps]
+        lines += ["---", ""]
+
+    lines += [
         f"# Weekly digest — {today}",
         "",
         f"**Corpus size:** {total} tenders after filtering",

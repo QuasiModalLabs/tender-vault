@@ -26,7 +26,15 @@ When I ask something like *"any good federal IT tenders for us?"*:
 
 Three storage layers and three lifecycle states.
 
-**Cold tier — ChromaDB (`chroma_db/`).** The filtered corpus of active tenders matching my profile, accessed through `scripts/tender_tools.py`. I re-run `scripts/ingest.py` for fresh data — check the timestamp on `chroma_db/` if it matters. The funnel output from that run is the authority on corpus size; don't quote a number from memory.
+**Cold tier — ChromaDB (`chroma_db/`).** The filtered corpus of active tenders matching my profile, accessed through `scripts/tender_tools.py`. I re-run `scripts/ingest.py` for fresh data. The funnel output from that run is the authority on corpus size; don't quote a number from memory.
+
+**Never infer corpus age from `chroma_db/` file times.** ChromaDB rewrites its segment files whenever anything *loads* the collection, so those mtimes report when the corpus was last queried, not when it was built — read them and you are describing your own read. Corpus age comes from the `provenance` block on `list-corpus` and `get`, recorded by the ingest that built the corpus.
+
+**Two stamps, because they answer different questions.** `feed_downloaded_at` is how old the *data* is; `corpus_built_at` is when it was last processed. A rebuild off an unchanged `.cache/tenders.csv` moves the second and not the first, so a membership change across that is a filter or profile effect rather than new notices. Both are reported next to the newest digest's stamps — that digest was written by whatever machine last committed one, normally CI. If its feed stamp is newer than yours, the fix is `git pull` then `python scripts/ingest.py`.
+
+**The `state` field says which kind of answer you got:** `stamped`; `unstamped`, meaning it predates stamping and needs a rebuild; or `no_feed_at_build`, meaning it was built with no cached feed, so its data cannot be dated and a rebuild alone will not fix that.
+
+**`chroma_db/` is gitignored and CI rebuilds it on its own runner, committing only the digest — so the scheduled weekly ingest never refreshes a local corpus.** Only running `scripts/ingest.py` here does.
 
 The only thing dropped on date is a notice that has already closed. Everything still open is in there, including notices closing in two days — they are labelled `imminent`, not deleted. That is a deliberate reversal: the old cutoff removed them before the date-conflict detector could read them, and dropped a watched tender out of the corpus in its final days. Judging whether a short fuse is disqualifying is a decision for the reader, which is the same reason the scoring formula is gone.
 
@@ -66,9 +74,9 @@ A tender's `department` field links the **node**, never the intel file. Don't ha
 Python scripts in `scripts/tender_tools.py`, run as `python scripts/tender_tools.py <command> <args>`. Each prints JSON to stdout. `--help` for exact syntax.
 
 **Corpus**
-- `list-corpus [--window imminent|open|closed|standing|unknown]` — every notice, ordered by closing window. This is how you survey what's open; `search` ranks against a query and answers a different question.
+- `list-corpus [--window imminent|open|closed|standing|unknown]` — every notice, ordered by closing window. This is how you survey what's open; `search` ranks against a query and answers a different question. Carries the `provenance` block — how old this corpus is, and whether it's behind the newest digest's. Read it before trusting the survey.
 - `search <query> [--n 10]` — hybrid BM25 + semantic search over the corpus.
-- `get <tender_id>` — full description and metadata for one tender.
+- `get <tender_id>` — full description and metadata for one tender. Also carries `provenance`, on the same terms as `list-corpus`.
 - `similar <tender_id> [--n 5]` — tenders similar to a given one.
 
 **Lifecycle**

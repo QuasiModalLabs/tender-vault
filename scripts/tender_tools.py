@@ -52,6 +52,12 @@ WATCHING = VAULT / "tenders" / "watching"
 ARCHIVED = VAULT / "tenders" / "archived"
 PARKED = VAULT / "tenders" / "parked"
 
+# Committed, unlike chroma_db/ — which is what makes the corpus stamp
+# comparable across machines. CI rebuilds the corpus on its runner and pushes
+# only the digest, so the digest's stamp is the one observable fact about what
+# another machine last built.
+DIGESTS = VAULT / "digests"
+
 # Department nodes, named by canonical key. The target of every [[key]] link a
 # tender file writes, and the file whose backlinks answer "what are we looking
 # at from this department".
@@ -207,6 +213,168 @@ def _yaml_list(raw: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Corpus provenance — how old is what you are reading
+# ---------------------------------------------------------------------------
+# A briefing once dated the corpus from `chroma_db/` file times and got it
+# wrong: ChromaDB rewrites its HNSW segment files whenever anything LOADS the
+# collection, so those mtimes report when the corpus was last queried. Reading
+# them describes your own read. The ingest therefore stamps the collection, and
+# this is where that stamp is read back.
+#
+# TWO stamps, because they answer different questions. `feed_downloaded_at`
+# says how old the DATA is; `corpus_built_at` says when it was last processed.
+# A rebuild off an unchanged cache moves the second and not the first, and that
+# is a filter or profile change rather than new notices.
+#
+# NO THRESHOLD, and deliberately no "stale" field. How old is too old is not
+# stateable — the ingest cron is weekly, so two days is normal — and a boolean
+# verdict in a data field is the kind of judgement this project keeps out of
+# its tools. Report the stamps beside the newest digest's and let the reader
+# compare two observed dates.
+
+def _digest_frontmatter(path: Path) -> dict[str, str]:
+    """
+    Frontmatter of one digest as a flat dict of STRINGS.
+
+    Hand-parsed rather than run through PyYAML, and the type matters more than
+    the parser. `corpus_built_at: 2026-08-09T14:27:11` unquoted is a YAML
+    timestamp scalar: safe_load returns a datetime.datetime, while the stamp it
+    gets compared against — read out of Chroma metadata — is a str. Every
+    equality check between the two is then False without anything raising, and
+    the machine that produced the digest reports itself as behind. digest.py
+    quotes the values for exactly this reason.
+
+    So the string type is asserted rather than assumed. If this is ever swapped
+    for safe_load, or the quoting in digest.py is dropped, it fails loudly here
+    instead of returning a confident wrong answer downstream.
+    """
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
+    if not match:
+        return {}
+    fields: dict[str, str] = {}
+    for line in match.group(1).split("\n"):
+        if ":" in line:
+            key, _, value = line.partition(":")
+            fields[key.strip()] = value.strip().strip('"')
+    bad = {k: type(v).__name__ for k, v in fields.items() if not isinstance(v, str)}
+    if bad:
+        raise TypeError(
+            f"{path.name}: frontmatter values must be str, got {bad}. An ISO "
+            f"timestamp parsed as a YAML date compares unequal to the string "
+            f"stamp in the collection metadata, silently, in every direction."
+        )
+    return fields
+
+
+def _newest_digest() -> Path | None:
+    """
+    The most recent digest file, or None if there are none.
+
+    Same glob and ordering as digest._previous_digest, which documents the
+    invariant this relies on: "Filenames are ISO-dated and prefixed, so a
+    lexicographic sort is a chronological one." Kept identical on purpose — two
+    lookups over the same directory that sort differently is a bug nobody sees.
+    """
+    digests = sorted(DIGESTS.glob("digest-*.md"), key=lambda p: p.stem)
+    return digests[-1] if digests else None
+
+
+def _corpus_provenance() -> dict:
+    """
+    When this corpus was built, and how that compares to the newest digest.
+
+    Four states per source, and they are NOT interchangeable:
+
+      stamped           both fields present.
+      unstamped         neither — built before provenance stamping. Rebuild.
+      no_feed_at_build  built, but with no cached feed to date. The corpus is
+                        current as a build and its DATA cannot be dated. That
+                        is not the same fact as `unstamped`, which is why it
+                        gets its own name: reading it as "predates stamping"
+                        invites a rebuild that would fix nothing.
+      not_found         (digest only) no digest file resolved at all. Distinct
+                        from `unstamped` so a glob that silently matches
+                        nothing cannot masquerade as working code.
+    """
+    meta = dict(getattr(_collection, "metadata", None) or {})
+    built_at = meta.get("corpus_built_at")
+    feed_at = meta.get("feed_downloaded_at")
+
+    if built_at is None:
+        local_state = "unstamped"
+        local_note = ("This corpus predates provenance stamping. "
+                      "Re-run: python scripts/ingest.py")
+    elif feed_at is None:
+        local_state = "no_feed_at_build"
+        local_note = ("Ingest ran with no cached feed, so the corpus is "
+                      "stamped but the age of the data in it is unknown. "
+                      "This is not the same as predating stamping — a rebuild "
+                      "alone will not date it.")
+    else:
+        local_state, local_note = "stamped", None
+
+    out = {
+        "corpus_built_at": built_at,
+        "feed_downloaded_at": feed_at,
+        "state": local_state,
+    }
+    if local_note:
+        out["note"] = local_note
+
+    newest = _newest_digest()
+    if newest is None:
+        out["newest_digest"] = None
+        out["newest_digest_state"] = "not_found"
+        out["newest_digest_note"] = (
+            f"No digest matched {DIGESTS}/digest-*.md. Expected at least one; "
+            f"if digests exist, the lookup is broken rather than empty."
+        )
+        return out
+
+    fm = _digest_frontmatter(newest)
+    d_built = fm.get("corpus_built_at") or None
+    d_feed = fm.get("feed_downloaded_at") or None
+    out["newest_digest"] = newest.stem
+    out["newest_digest_corpus_built_at"] = d_built
+    out["newest_digest_feed_downloaded_at"] = d_feed
+
+    if d_built is None:
+        out["newest_digest_state"] = "unstamped"
+        out["newest_digest_note"] = (
+            "This digest predates provenance stamping. "
+            "Re-run: python scripts/digest.py")
+        return out
+    if d_feed is None:
+        out["newest_digest_state"] = "no_feed_at_build"
+    else:
+        out["newest_digest_state"] = "stamped"
+
+    # The comparison, and it reads BOTH stamps. "The digest is newer so I am
+    # behind" only holds if the FEED moved; an equal feed stamp with a later
+    # build is a rebuild of the same data.
+    if local_state == "stamped" and d_feed is not None:
+        if feed_at == d_feed:
+            if built_at == d_built:
+                out["reading"] = "this corpus produced the newest digest"
+            else:
+                out["reading"] = (
+                    "same feed, different build — a membership difference is a "
+                    "filter or profile effect, not new notices")
+        elif feed_at < d_feed:
+            out["reading"] = (
+                "behind on data — the newest digest was built from a feed this "
+                "machine has not downloaded. Run: python scripts/ingest.py")
+        else:
+            out["reading"] = (
+                "this machine has a feed the newest digest has not seen")
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Reciprocal Rank Fusion — combine BM25 + semantic without tuning weights
 # ---------------------------------------------------------------------------
 
@@ -302,6 +470,10 @@ def cmd_get(args) -> dict:
         # ingest wrote and is stable until the next one, these two are computed
         # for today and change under a corpus that hasn't moved.
         "derived": _window_fields(doc["metadata"]),
+        # A third category again: not this notice's data, but how old the
+        # corpus it came out of is. `derived` changes daily under a static
+        # corpus; this says how static the corpus actually is.
+        "provenance": _corpus_provenance(),
         "document": doc["document"],
         "in_watching": (WATCHING / f"{_slugify(doc['id'])}.md").exists(),
     }
@@ -382,6 +554,9 @@ def cmd_list_corpus(args) -> dict:
         counts[r["closing_window"]] = counts.get(r["closing_window"], 0) + 1
     return {
         "count": len(rows),
+        # First, because a survey of what is open is worth exactly as much as
+        # the corpus it reads, and the reader cannot judge that from the rows.
+        "provenance": _corpus_provenance(),
         "by_window": counts,
         "imminent_within_days": _profile_imminence_threshold(),
         "filtered_to": args.window,
@@ -2084,6 +2259,17 @@ def _dossier_tenders(dept: str, limit: int) -> dict:
         "in_profile_corpus": sum(1 for n in notices if n["in_profile_corpus"]),
         "feed_scanned": scanned,
         "dropped_already_closed": expired,
+        # How old the feed is, on the same footing as the `as_of` the
+        # contracts, plans and audits sections already carry — this section
+        # was the only one reporting undated numbers.
+        #
+        # The mtime of the file just read, NOT the stamp in the corpus
+        # metadata: this section deliberately bypasses ChromaDB and reads the
+        # CSV directly, so it must report the provenance of what IT read. The
+        # two can legitimately differ — a corpus built this morning off a feed
+        # downloaded yesterday, then the feed re-downloaded since.
+        "feed_downloaded_at": datetime.fromtimestamp(
+            _TENDERS_CSV.stat().st_mtime).isoformat(timespec="seconds"),
     }
     if not notices:
         section["state"] = "none_open"
