@@ -51,14 +51,25 @@ corpus, not a new week. Worth recording because it rules something out: the
 three-week zero was not an artefact of the closing-date filter hiding SBIPS
 call-ups. Seventeen previously invisible notices produced none.
 
-**Three weeks of zero, against TBIPS's 7 → 7 → 9.** This is now a series rather
-than a pair of readings, and it says something the individual weeks did not: the
-vehicle that best fits the profile produces no observable call-up traffic in this
-corpus, and the vehicle that fits worst gates everything. That is the argument for
-qualifying on TBIPS *despite* preferring SBIPS — and it is an argument from three
-weeks of a filtered IT-services corpus, not from the whole feed. What this count
-excludes: call-ups competed among SBIPS holders with no public notice, which is
-most of them. Zero observed is not zero occurring.
+**Gated:** 0 of 71 notices, week of 2026-08-11 — fourth independent ingest, on a
+feed downloaded the same evening (912 raw notices against Sunday's 896).
+`cb-20-75132174` is still the only notice in the corpus mentioning SBIPS at all.
+Four separate weeks now, one of them on a corpus that grew.
+
+**Four weeks of zero, against TBIPS's 7 → 7 → 9 → 15.** This is now a series
+rather than a pair of readings, and it says something the individual weeks did
+not: the vehicle that best fits the profile produces no observable call-up
+traffic in this corpus, and the vehicle that fits worst gates everything. That is
+the argument for qualifying on TBIPS *despite* preferring SBIPS — and it is an
+argument from four weeks of a filtered IT-services corpus, not from the whole
+feed. What this count excludes: call-ups competed among SBIPS holders with no
+public notice, which is most of them. Zero observed is not zero occurring.
+
+_(Counted "three weeks" until 2026-08-11. The TBIPS series is not directly
+comparable across its whole length — 7 and 7 were taken under the old
+closing-date filter, 9 was too, and 15 follows the fix. The **zero** is
+comparable throughout, because a filter that hid near-close notices could only
+ever have hidden SBIPS traffic, not invented it.)_
 
 ---
 
@@ -122,6 +133,20 @@ notices. Five call-ups had been invisible: `cb-303-67468850` (Transport Canada),
 closed out, which it had not; it closes 2026-08-15). Supersede the 9-of-53 line
 above with this one when comparing; do not count both.
 
+**Gated:** 15 of 71 notices, week of 2026-08-11 — **13 not second-gated**. Fourth
+independent ingest, on a feed downloaded the same evening. Compare this against
+the 14-of-70 restatement above, not against the 9-of-53 line, which was taken
+under the old closing-date filter.
+
+One arrival: `cb-40-97221487` (GAC, "TBIPS AI Support Services", closes
+2026-08-28) — up to three years, business analysts, data scientists and platform
+resources. The same two Indigenous second gates as every previous week
+(`cb-998-30821848`, `cb-94-51127631`), so reachable is 13 of 15.
+
+_(A briefing earlier on 2026-08-11 re-read the 2026-08-09 rows and correctly
+declined to tally them as a new observation. The line above is from a genuinely
+new ingest and replaces nothing.)_
+
 ### Open question: "holding TBIPS" is not one thing
 
 The five newly visible call-ups make a distinction the earlier counts could not.
@@ -142,6 +167,25 @@ would qualify for*, and it cannot be computed until that choice is made.
 would repeat the mistake this file exists to catch. When the tier decision is
 made, re-derive the count against it and note which tier the count assumes —
 a reachable figure without its tier is not interpretable.
+
+**2026-08-11: the evidence now points somewhere.** `cb-40-97221487` (GAC) states
+its gate explicitly and is the fourth call-up in this corpus to do so, which
+makes a table possible where before there were scattered notes:
+
+| Notice | Tier | Region |
+|---|---|---|
+| `cb-303-67468850` (Transport Canada) | Tier 2 | National Capital Region |
+| `cb-935-52253963` (Canadian Coast Guard) | Tier 1 | National Capital Region |
+| `cb-998-30821848` (ISC) | Tier 1, Indigenous holders | National Capital Region |
+| `cb-40-97221487` (GAC) | Tier 1 | National Capital Region |
+
+**Every call-up that names a region names the NCR; three of four are Tier 1.**
+Still not a decision, and deliberately not converted into a reachable count. What
+it does establish is a direction: a qualification that is not Tier 1 / NCR would
+reach less of the observed traffic than the headline count implies. What it
+excludes, as always: call-ups competed among holders with no public notice, which
+is most of them — and eleven of the fifteen gated notices state no tier at all,
+so this table is four observations out of fifteen, not a distribution.
 
 **What the gate looks like from the buyer's side.** `WS5819275303-Doc5819275371`
 (DND, 2026-08-19) is the one call-up in the corpus that states the rule
@@ -170,6 +214,9 @@ absence of checking.
 
 **Gated:** 0 of 53 notices, week of 2026-08-09. Third verified zero. Restated on
 the unfiltered corpus the same day: **0 of 70**.
+
+**Gated:** 0 of 71 notices, week of 2026-08-11. Fourth verified zero, independent
+ingest.
 
 **Read the RFSA before qualifying.** `cb-8448-42897985` states that part of this
 method of supply is set aside under the Procurement Strategy for Indigenous
@@ -202,6 +249,9 @@ notices.
 > subscriptions over twelve months — was inside the old cutoff and invisible.
 > Two observations, both quantity lists of licences, both selective-tendered to
 > named SA holders and Class-1 resellers. The decline is now evidenced twice.
+>
+> **Gated: 2 of 71, week of 2026-08-11** — the same two notices, both still open.
+> No new traffic through the vehicle on a fresh feed.
 
 **SaaS Method of Supply** — we would be the SaaS vendor. We are not one.
 
