@@ -38,6 +38,16 @@ That last part turned out to matter more than expected. Because every decision i
 
 The split is deliberate: the search corpus is rebuilt from scratch every week and holds everything; the vault holds only the handful worth attention and never gets overwritten. Most tenders are noise. A few deserve persistent context. The storage matches the reality.
 
+### Then the files started linking to each other
+
+Markdown files in a folder are a filesystem. Markdown files that reference each other by name are a graph, and Obsidian renders one for free.
+
+A department gets two files, deliberately split. `vault/agencies/ircc.md` is the department *node* — created on first promote, hand-edited afterwards, never overwritten by anything. `vault/intel/agencies/ircc-contracts.md` is generated from the contracts database and rewritten on every ingest. Keeping them apart means the graph works whether or not you've built the optional contracts layer, and means nothing generated can land on top of something written by hand: the generator only writes over files carrying its own frontmatter marker.
+
+A tender's `department` field links the node, so the node's backlinks are every tender, briefing and note touching that department. *What are we looking at from IRCC* becomes a question the vault answers by structure rather than by search.
+
+The node is also the one file Claude writes to unprompted, appending dated entries under `## Notes`. An entry has to still be true after the tender that taught it closes — *how this department buys, which incumbents keep reappearing, what I decided and why.* Per-tender analysis stays in the tender file. In six months I'll remember the no-bid and not the reason for it, and the reason is the part worth keeping.
+
 ## Then I realised the tender feed is already too late
 
 Here's the problem with the whole premise. A tender notice is the *end* of a process. Someone identified a need, got budget, wrote requirements, and published. If your first contact with a department is the notice, you're responding to a document shaped by other people's conversations.
@@ -132,6 +142,18 @@ Contract awards are **records** — vendor, department, value, date. The questio
 
 Plans and audits sit in between: prose with structure. Their text gets scored once, at ingest, by pointing the embedding model at two poles — pull *toward* modernization language, push *away* from routine-operations language — and the resulting score lands in SQLite for cheap ranked queries. It costs zero model tokens and runs in about a minute.
 
+## The corpus reports its own age
+
+Research that spans weeks needs to know how old its evidence is, so every `list-corpus` and `get` carries a `provenance` block rather than leaving that to inference.
+
+There are **two stamps, because they answer different questions.** `feed_downloaded_at` is how old the data is; `corpus_built_at` is when it was last processed. A rebuild off an unchanged feed moves the second and not the first — so if corpus membership changes across that, it's a filter or profile effect rather than new notices. The block also carries the same two stamps from the newest committed digest, which makes a local corpus running behind the weekly CI run say so out loud, with the fix (`git pull`, then re-ingest).
+
+Stamps rather than file timestamps, because ChromaDB rewrites its segment files whenever anything *loads* the collection: `chroma_db/` mtimes report when the corpus was last queried, not when it was built. Read them and you're describing your own read.
+
+The `state` field keeps three cases apart that would otherwise look identical — `stamped`, `unstamped` (predates stamping; a rebuild will date it), and `no_feed_at_build` (built with no cached feed, so its data can't be dated and a rebuild alone won't fix it).
+
+**Closing windows are computed per query, not stored.** `closing_window` is derived from `closing_date` against the profile's `imminent_within_days`, so it's correct on the day you ask rather than the day of the ingest: `imminent`, `open`, `closed`, `standing`, `unknown`. Notices closing in two days are *labelled*, never dropped — whether a short fuse is disqualifying is the reader's call, for the same reason the scoring formula is gone. `standing` catches the sentinel years the feed uses for arrangements with no real close, so nothing ever reports a fifty-year countdown.
+
 ## Does the pre-RFP idea actually work?
 
 The hypothesis was that a department which says it plans to modernize something will, later, buy that thing.
@@ -211,13 +233,61 @@ Two findings about the audits cost me a day. An audit rarely has one department:
 
 The second is that most of the OAG corpus audits nobody. Of 364 records, about 110 examine a federal department. The rest are committee briefing packages, the Auditor General's own quarterly financials, Crown corporation examinations and territorial audits. Counting those as unattributed invented a 62% coverage gap that was never real. The figure worth quoting is 91% of the federal audits.
 
+## What four weeks of counting produced
+
+The first thing this thing told me that I didn't already believe came out of counting the same number four weeks running.
+
+Two federal IT supply arrangements matter here. **SBIPS** sells outcomes — solution delivery priced as a result, the structural opposite of the body-shop work the profile excludes. **TBIPS** sells resource categories and levels, which is precisely the work we'd rather not do. On fit, it isn't close: SBIPS is the one to want.
+
+Every weekly briefing records how many notices each vehicle *gated* — listings we couldn't bid because we don't hold the arrangement — including the zeros, because a zero you verified and a zero you never checked read identically three months later.
+
+| Ingest | Corpus | SBIPS gated | TBIPS gated | TBIPS reachable |
+|---|---|---|---|---|
+| 2026-08-04 | 48 | 0 | 7 | 5 |
+| 2026-08-06 | 50 | 0 | 7 | 5 |
+| 2026-08-09 | 53 | 0 | 9 | 7 |
+| 2026-08-11 | 71 | 0 | 15 | 13 |
+
+Four independent ingests. The vehicle that fits the profile best produces no observable call-up traffic at all; the vehicle that fits worst gates everything, and its share is growing. That's the argument for qualifying on TBIPS *despite* preferring SBIPS, and no single week could have made it — one reading is an anecdote, four is a series. The denominators move with the corpus and with one filter change partway through; the SBIPS zero is unaffected by both, since a filter that hid near-close notices could only ever have hidden traffic, not invented it.
+
+Two refinements came out of the counting, and both cut the headline number down.
+
+**Gated and reachable are different questions.** Two of the notices carry a second gate — an Indigenous Tier 1 restriction and a Voluntary Indigenous Set-Aside — that holding TBIPS wouldn't reach. Reported as one number, the count overstates what qualifying buys.
+
+**"Holding TBIPS" isn't one thing.** Call-ups open to holders qualified in a specific **tier, region and resource category**. Four notices in the corpus state theirs explicitly:
+
+| Notice | Tier | Region |
+|---|---|---|
+| `cb-303-67468850` (Transport Canada) | Tier 2 | National Capital Region |
+| `cb-935-52253963` (Canadian Coast Guard) | Tier 1 | National Capital Region |
+| `cb-998-30821848` (ISC) | Tier 1, Indigenous holders | National Capital Region |
+| `cb-40-97221487` (GAC) | Tier 1 | National Capital Region |
+
+Every call-up that names a region names the NCR, and three of four are Tier 1. That's a direction rather than a decision — eleven of the fifteen gated notices state no tier at all, so this is four observations, not a distribution — and the reachable count gets re-derived against the tier once that choice is made, because a reachable figure without its tier isn't interpretable.
+
+What every one of these counts excludes: call-ups competed quietly among holders with no public notice, which is most of them. Zero observed is not zero occurring.
+
+The sharpest statement of what a vehicle is actually worth came from the notices themselves. One DND call-up spells the rule out: uninvited arrangement holders may request an invitation up to five business days before closing and will normally receive one, while unqualified bidders "will have to qualify for Supply Arrangement # TBIPS SA EN578-170432 before they are given an opportunity to bid," and "Canada will not extend RFP # WS5819275303 to provide additional time for Bidders to qualify." **Holding the arrangement is admission, not advantage.**
+
+## The weekly briefing
+
+The recurring output is a briefing written to `vault/briefings/`, not printed to a terminal — it gets read in Obsidian, where the tables and the Mermaid closing-date timeline render. It's defined as a [skill](.claude/skills/tender-briefing/SKILL.md): six sections, ordered by what needs a decision rather than by what scored highest. *Act now* (anything imminent, and every date conflict), *closing soon, no action*, *worth bidding*, *vehicles*, *skip* grouped by failure class, and *pre-RFP signals*.
+
+The presentation rules turned out to carry design weight, because a template is where a deleted formula tries to come back:
+
+**Colour by instrument state, never by fit.** "Gated behind TBIPS" is a fact about the notice; "strong match" is a judgment, and rendering a judgment as a colour is a rating scale wearing a costume. There's no `success` callout in the palette for exactly that reason — it would imply a verdict the reader hasn't reached yet.
+
+**Report the zero.** An empty section says why it's empty; uncovered ground gets named rather than left as a silent gap. Most of the value in a series of briefings is in the counts that didn't change.
+
+**Correct the reference files.** They're written from past observation and aren't regenerated by any ingest, so when live data disagrees with a recorded count, the file gets fixed in place. The failure worth designing against is the line that's *true but incomplete* — TBIPS gating 7 notices was correct, and still overstated what qualifying reached until the set-asides were separated out. Record what a number excludes, not only what it counts.
+
 ## What I know is wrong with it
 
 **It's slow.** The old pipeline answered in three seconds. A multi-step Claude session takes twenty to sixty. Fine for *what should I look at this week*. Not fine for anything with a UI.
 
 **It's not reproducible.** Two runs of the same question won't follow identical reasoning. Acceptable for research, disqualifying for a product that needs to be auditable.
 
-**It only works because the corpus is small.** A run in early August 2026 went from 896 open tenders down to 70. At ten thousand, the markdown-file pattern strains badly. This is right-sized for one firm, not for a platform.
+**It only works because the corpus is small.** The 2026-08-11 run went from 912 open tenders down to 71. At ten thousand, the markdown-file pattern strains badly. This is right-sized for one firm, not for a platform.
 
 > **On every number in this file.** These are measurements from a specific day's
 > feed, recorded to show orders of magnitude and where the filter loses things —
@@ -293,19 +363,22 @@ The contracts and plans refresh workflows are manual-dispatch only. They rebuilt
 
 1. [`vault/CLAUDE.md`](vault/CLAUDE.md) — the agent's instructions. The most important design document in the repo; everything else is plumbing.
 2. [`vault/profiles/my-company.md`](vault/profiles/my-company.md) — how user context is stored, and the key-by-key filter spec in its own comments. [`docs/PROFILE.md`](docs/PROFILE.md) is the companion on tuning it.
-3. [`scripts/tender_tools.py`](scripts/tender_tools.py) — the retrieval layer, and the clean line between retrieval and reasoning.
-4. [`vault/crosswalk/org_aliases.yaml`](vault/crosswalk/org_aliases.yaml) — the department registry. Ninety-odd hand-checked assertions about what the Government of Canada calls itself. Its `observed_names` are the ones seen in real source data, and `vault/crosswalk/attestation.yaml` records where and when each was seen — written by `python scripts/crosswalk.py --attest`, and committed because the evidence itself expires. The tender feed carries only notices open on the day it was downloaded, so an agency with nothing open drops out of it; without a durable record, a correct alias starts looking invented.
-5. [`scripts/org_resolve.py`](scripts/org_resolve.py) — resolving organizations named in free text against that registry, and the one department identifier every signal tool takes.
-6. [`scripts/plans_ingest.py`](scripts/plans_ingest.py) — the two-pole scoring technique, with the docstring explaining why the forward-looking field beats the retrospective one.
-7. [`scripts/contracts_ingest.py`](scripts/contracts_ingest.py) — streaming filter over millions of rows into SQLite; the design notes are in the module docstring.
-8. [`scripts/oag_ingest.py`](scripts/oag_ingest.py) — the audit pull, relevance scoring, and department attribution.
-9. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how data stays fresh without me remembering.
+3. [`vault/reference/vehicles.md`](vault/reference/vehicles.md) — the gating series above, as it was actually recorded: dated observations, what each count excludes, and an open question left as a question rather than rounded into a number.
+4. [`.claude/skills/tender-briefing/SKILL.md`](.claude/skills/tender-briefing/SKILL.md) — the briefing skill. The presentation layer is where "don't produce a score" has to be enforced concretely, so this is more design document than template.
+5. [`scripts/tender_tools.py`](scripts/tender_tools.py) — the retrieval layer, and the clean line between retrieval and reasoning.
+6. [`vault/crosswalk/org_aliases.yaml`](vault/crosswalk/org_aliases.yaml) — the department registry. Ninety-odd hand-checked assertions about what the Government of Canada calls itself. Its `observed_names` are the ones seen in real source data, and `vault/crosswalk/attestation.yaml` records where and when each was seen — written by `python scripts/crosswalk.py --attest`, and committed because the evidence itself expires. The tender feed carries only notices open on the day it was downloaded, so an agency with nothing open drops out of it; without a durable record, a correct alias starts looking invented.
+7. [`scripts/org_resolve.py`](scripts/org_resolve.py) — resolving organizations named in free text against that registry, and the one department identifier every signal tool takes.
+8. [`scripts/plans_ingest.py`](scripts/plans_ingest.py) — the two-pole scoring technique, with the docstring explaining why the forward-looking field beats the retrospective one.
+9. [`scripts/contracts_ingest.py`](scripts/contracts_ingest.py) — streaming filter over millions of rows into SQLite; the design notes are in the module docstring.
+10. [`scripts/oag_ingest.py`](scripts/oag_ingest.py) — the audit pull, relevance scoring, and department attribution.
+11. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how data stays fresh without me remembering.
 
 ## What comes next
 
 - **A department-level tender index.** The dossier reads the open-notice feed directly and resolves entity names per query, which is fine at the ~900 notices the feed carried in August 2026 and won't be at ten thousand. The attribution belongs at ingest, next to where the audits already write theirs.
 - **A pre-mortem command.** For any tender under serious consideration: *assume we bid and lost, or won and regretted it — walk backwards and tell me why.* One adversarial pass against my own enthusiasm before committing. This is the surviving core of a multi-persona "steering committee" feature I cut mid-build; the personas changed tone without changing reasoning, but the skepticism they were reaching for is real.
 - **A profile refinement loop.** Quarterly, read across everything watched, parked, and archived, and propose profile edits based on revealed preference. One structural catch to design around: the vault only knows about tenders that survived the filter, so it can improve precision but is blind to recall. It has to be paired with an audit that samples what the filter *rejected*.
+- **The tier decision, and the count that follows it.** The gating series says qualify on TBIPS; it doesn't yet say at which tier, region and resource categories. Once that's chosen, the reachable count gets re-derived against it — and the series keeps running either way, since the value of a weekly zero is that it accumulates.
 - **Similarity drift.** Flag a new tender that closely resembles one archived as a loss.
 - **Win/loss pattern mining**, once the archive is deep enough to say things like *we lose every tender that requires active SOC work*.
 
