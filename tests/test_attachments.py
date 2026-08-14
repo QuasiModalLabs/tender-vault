@@ -158,18 +158,51 @@ def test_extracts_a_dropped_file():
 
 
 def test_unsupported_type_still_listed():
-    """A dropped pricing spreadsheet must be visible even though unreadable."""
-    _drop("pricing.xlsx", "not really a spreadsheet, but nothing reads it")
+    """
+    A dropped file nothing can read must still be visible.
+
+    The extension here has to be one with NO registered extractor. This test
+    used .xlsx until a spreadsheet reader was added, at which point it kept
+    passing for the wrong reason — openpyxl was failing to parse a fake
+    workbook, so the assertion was measuring a corrupt file rather than an
+    unsupported format. .dwg is a real thing to find in a construction annex
+    and there is no plausible reader for it here.
+    """
+    assert ".dwg" not in at.EXTRACTORS, "pick an extension with no extractor"
+    _drop("site-plan.dwg", "binary-ish CAD payload nothing here reads")
     result = _list()
 
-    rec = _record(result, "pricing.xlsx")
+    rec = _record(result, "site-plan.dwg")
     assert rec["extraction_status"] == at.STATUS_UNSUPPORTED, rec
     assert rec["extractor"] is None, rec
     assert rec["extracted_path"] is None, "unsupported type must produce no text"
+    # No extractor ran, so there is nothing to warn about — this is a fact
+    # about the format, not a failure.
+    assert not any("site-plan.dwg" in w for w in result["warnings"]), (
+        f"an unsupported format is not an error: {result['warnings']}"
+    )
     # The point of listing it at all: identity and size are still recorded.
     assert len(rec["sha256"]) == 64, rec
     assert rec["size_bytes"] > 0, rec
-    assert rec["extension"] == ".xlsx", rec
+    assert rec["extension"] == ".dwg", rec
+
+
+def test_corrupt_file_is_distinguished_from_unsupported():
+    """
+    A file whose extractor ran and threw is not the same as one nothing reads.
+
+    Both land on unsupported_type — the enum has three values and this is the
+    honest bucket — but the corrupt one carries a warning naming the failure,
+    which is the only thing telling the user to re-download it.
+    """
+    _drop("Broken.xlsx", "this is not a zip and openpyxl will say so")
+    result = _list()
+
+    rec = _record(result, "Broken.xlsx")
+    assert rec["extraction_status"] == at.STATUS_UNSUPPORTED, rec
+    assert any("Broken.xlsx" in w for w in result["warnings"]), (
+        f"a file that failed to parse must say so: {result['warnings']}"
+    )
 
 
 def test_no_text_layer_writes_no_file():
@@ -516,6 +549,110 @@ def test_docx_dropped_before_support_existed():
     )
 
 
+def test_real_xlsx_keeps_every_value_addressable():
+    """
+    The whole reason .xlsx was held back: a figure must stay attached to its
+    row. This asserts the addressing survives, not merely that text came out.
+    """
+    try:
+        import openpyxl
+    except ImportError:
+        print("  SKIP test_real_xlsx_keeps_every_value_addressable (no openpyxl)")
+        return
+
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = "Pricing"
+    for row in [
+        ("Ref", "Resource", "Days", "Rate"),
+        ("L1", "Senior developer", 100, 950),
+        ("L2", "Business analyst", 60, 720),
+    ]:
+        sheet.append(row)
+    book.save(str(_folder() / "Pricing-Table.xlsx"))
+
+    rec = _record(_list(), "Pricing-Table.xlsx")
+    assert rec["extraction_status"] == at.STATUS_EXTRACTED, rec
+    assert rec["extractor"].startswith("openpyxl "), rec
+    assert rec["page_count"] is None, f"sheets are not pages: {rec}"
+
+    lines = (_folder() / rec["extracted_path"]).read_text(
+        encoding="utf-8").splitlines()
+
+    assert any("Pricing" in ln and "Sheet 1 of 1" in ln for ln in lines), (
+        f"sheet identity missing: {lines[:4]}"
+    )
+    assert any(ln.startswith("cols | A | B | C | D") for ln in lines), (
+        f"column letters missing, so no value can be addressed: {lines[:6]}"
+    )
+    # The claim that matters: rate 950 is on the row that says "Senior
+    # developer", and it is row 2, not "somewhere in the document".
+    senior = next(ln for ln in lines if "Senior developer" in ln)
+    assert senior.startswith("r2 | "), f"row number lost: {senior!r}"
+    assert senior.endswith("| 950"), f"rate detached from its row: {senior!r}"
+    analyst = next(ln for ln in lines if "Business analyst" in ln)
+    assert analyst.startswith("r3 | ") and analyst.endswith("| 720"), analyst
+
+
+def test_xlsx_uncalculated_formula_is_labelled_not_blank():
+    """
+    THE TRAP. openpyxl returns the value Excel cached on its last save. A
+    workbook written by a script has no cache, so every formula reads as None
+    — and a pricing column of blanks looks like the bidder left it empty
+    rather than like a number we failed to read.
+    """
+    try:
+        import openpyxl
+    except ImportError:
+        print("  SKIP test_xlsx_uncalculated_formula_is_labelled_not_blank")
+        return
+
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = "Totals"
+    sheet.append(("Item", "Qty", "Unit", "Total"))
+    sheet.append(("Licences", 10, 500, "=B2*C2"))     # never calculated
+    book.save(str(_folder() / "Totals.xlsx"))
+
+    rec = _record(_list(), "Totals.xlsx")
+    text = (_folder() / rec["extracted_path"]).read_text(encoding="utf-8")
+
+    assert "<uncalculated formula>" in text, (
+        f"an uncalculated formula rendered as blank: {text!r}"
+    )
+    # The banner has to name the cell and say what the blank is NOT.
+    assert "Totals!D2" in text, f"the trap is not located: {text!r}"
+    assert "NOT zero" in text, f"the banner does not say what blank isn't: {text!r}"
+    # And it must lead, not trail.
+    assert text.splitlines()[0].startswith("!!"), (
+        "the warning must be read before the numbers are"
+    )
+
+
+def test_xlsx_hidden_sheet_is_marked():
+    """A hidden pricing tab read as though it were live is its own kind of wrong."""
+    try:
+        import openpyxl
+    except ImportError:
+        print("  SKIP test_xlsx_hidden_sheet_is_marked")
+        return
+
+    book = openpyxl.Workbook()
+    book.active.title = "Visible"
+    book.active.append(("live", "data", "here"))
+    hidden = book.create_sheet("Draft-Pricing")
+    hidden.append(("superseded", 111, 222))
+    hidden.sheet_state = "hidden"
+    book.save(str(_folder() / "Mixed.xlsx"))
+
+    rec = _record(_list(), "Mixed.xlsx")
+    text = (_folder() / rec["extracted_path"]).read_text(encoding="utf-8")
+    marker = next(ln for ln in text.splitlines() if "Draft-Pricing" in ln)
+    assert "[HIDDEN SHEET]" in marker, f"hidden sheet not marked: {marker!r}"
+    # It is still extracted -- concealing it would be its own failure.
+    assert "superseded" in text, "a hidden sheet's content should still be read"
+
+
 def test_list_before_attach_errors():
     result = tt.cmd_list_attachments(SimpleNamespace(tender_id="NO-SUCH-TENDER"))
     assert "error" in result, "listing a nonexistent tender should error"
@@ -529,6 +666,7 @@ def main():
     test_manifest_written_with_lf()
     test_extracts_a_dropped_file()
     test_unsupported_type_still_listed()
+    test_corrupt_file_is_distinguished_from_unsupported()
     test_no_text_layer_writes_no_file()
     test_unchanged_file_is_not_re_extracted()
     test_amended_document_detected_and_re_extracted()
@@ -547,6 +685,9 @@ def main():
     test_missing_library_is_reported_not_fatal()
     test_real_docx_extraction()
     test_docx_dropped_before_support_existed()
+    test_real_xlsx_keeps_every_value_addressable()
+    test_xlsx_uncalculated_formula_is_labelled_not_blank()
+    test_xlsx_hidden_sheet_is_marked()
     test_list_before_attach_errors()
     print("All attachment tests passed.")
 
