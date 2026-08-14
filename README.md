@@ -307,7 +307,9 @@ The presentation rules turned out to carry design weight, because a template is 
 
 **Promoted tenders can drift.** Promoting copies the description into a markdown file. If CanadaBuys amends the notice afterwards, the copy doesn't know. Amendments are rare in practice.
 
-**The tender documents themselves are off-limits.** They're hosted on commercial platforms — Ariba, MERX — behind account walls. This project deliberately doesn't scrape them. `scripts/probe_attachments.py` is the throwaway diagnostic that established that, kept in the repo because the negative result is part of the record.
+**The tender documents themselves are off-limits to the code.** The notice is public; the RFP package it points at is not. Those live on commercial platforms — Ariba, MERX — behind account walls that exist to know who took the document, and getting past one programmatically means holding a credential and behaving like a browser. This project deliberately doesn't scrape them, and there's no fetcher anywhere in it to quietly grow into one. This paragraph is the whole record of that decision; the diagnostic that established it was a throwaway and wasn't kept.
+
+**Attachments are a manual drop, and that is the same decision rather than a reversal of it.** `attach <tender_id>` creates a folder beside the tender note and prints its path. A human opens MERX or Ariba in a browser, signs in, downloads the package, and drops the files there; `list-attachments` extracts the text and `read-attachment` pages through it. Nothing in that path touches the platform — the code reads a directory. The extracted text stays out of git and out of the ChromaDB corpus, because it's third-party content from a commercial platform and the extraction is that same content in another encoding. The corpus exclusion is also structural: it's rebuilt from scratch weekly with no survival exemptions, and a document that outlived a rebuild would be the first thing to break that.
 
 ## The profile
 

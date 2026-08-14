@@ -489,6 +489,105 @@ def archive(filename: str, reason: str) -> dict:
     return tender_tools.cmd_archive(args)
 
 
+@mcp.tool()
+def create_attachment_folder(tender_id: str, platform: str) -> dict:
+    """
+    Create the folder where the user drops a tender's RFP documents by hand.
+
+    NOTHING IS DOWNLOADED BY THIS TOOL, and you cannot fetch these documents
+    yourself. The RFP package lives on MERX or Ariba behind an account wall;
+    this project deliberately does not scrape those platforms. The user opens
+    the platform in a browser, signs in, downloads the package, and drops the
+    files into the folder this returns. Then call list_attachments.
+
+    Call this when the user says they're actually working a tender — not on
+    every promote. The folder's existence is a signal in itself: it marks the
+    tenders that got real effort.
+
+    Args:
+        tender_id: The tender id. Its note may be in watching/, parked/ or
+            archived/ — all three are searched.
+        platform: Where the user is pulling the package from. One of
+            "merx", "ariba", "other". Recorded as provenance in the manifest.
+
+    Returns:
+        Dict with the ABSOLUTE attachment_folder path (give this to the user
+        verbatim — it's what they need to drop files into), whether it was
+        newly created, and the tender note it belongs to.
+    """
+    args = SimpleNamespace(
+        tender_id=tender_id,
+        platform=platform,
+        # Never try to open a file manager from the MCP server: stdout here is
+        # the protocol channel, and the server may not be on the user's machine.
+        no_reveal=True,
+    )
+    return tender_tools.cmd_attach(args)
+
+
+@mcp.tool()
+def list_attachments(tender_id: str) -> dict:
+    """
+    List the documents dropped for a tender, extracting new or changed ones.
+
+    Call this before reading anything, and again whenever the user says they've
+    added files — there is no watcher, so this call is what detects them.
+
+    Read the per-file extraction_status before trusting a document is readable:
+      - "extracted"        text is available via read_attachment
+      - "no_text_layer"    a scanned PDF with no text in it. NOT OCR'd. Say so
+                           to the user rather than reporting the file as empty.
+      - "unsupported_type" no extractor for this format (e.g. .xlsx). The file
+                           is still listed with its hash and size.
+
+    ALWAYS check the "changed" list. A non-empty entry means the document was
+    re-dropped with different content — MERX posts addenda mid-solicitation —
+    so any earlier reading of that file, including yours, may describe the
+    superseded version. Tell the user which file changed.
+
+    Args:
+        tender_id: The tender id.
+
+    Returns:
+        Dict with files (each carrying sha256, size, extraction_status,
+        page_count), plus added / changed / removed / warnings for this call.
+    """
+    return tender_tools.cmd_list_attachments(SimpleNamespace(tender_id=tender_id))
+
+
+@mcp.tool()
+def read_attachment(
+    tender_id: str, filename: str, offset: int = 0, limit: int = 400
+) -> dict:
+    """
+    Read a window of one dropped document's extracted text.
+
+    Paginated deliberately — a 40-page RFP will not fit in one call and must
+    not be requested as one. Start at offset 0, then walk forward using
+    total_lines and eof from the response. Offsets and limits are in LINES.
+
+    Prefer reading the sections you need over pulling the whole document: these
+    are long, and the tender note plus a targeted read usually answers the
+    question. If eof is false and you have what you need, stop.
+
+    Args:
+        tender_id: The tender id.
+        filename: The dropped filename as listed by list_attachments
+            (e.g. "RFP-W2187-SPO.pdf"), not the extracted .txt name.
+        offset: First line to return, 0-based (default 0).
+        limit: How many lines (default 400, max 2000).
+
+    Returns:
+        Dict with text, offset, limit, total_lines, lines_returned and eof.
+        Returns an error naming the extraction_status if the document has no
+        extracted text — a scan reports "no_text_layer" rather than empty text.
+    """
+    args = SimpleNamespace(
+        tender_id=tender_id, filename=filename, offset=offset, limit=limit
+    )
+    return tender_tools.cmd_read_attachment(args)
+
+
 def _preload_in_background() -> None:
     """
     Start loading ChromaDB + the embedding model the moment the server starts.
