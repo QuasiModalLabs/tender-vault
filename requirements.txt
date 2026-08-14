@@ -13,9 +13,16 @@ mcp>=2.0.0,<3
 # (requires ANTHROPIC_API_KEY; default ingest path needs no credentials)
 anthropic>=0.40.0,<1
 
-# PDF text extraction for tender documents the user drops in by hand.
-# Optional in the same sense as mcp/anthropic: scripts/attachments.py imports
-# and runs without it, and reports the miss per-file rather than failing. It is
-# listed here because CI installs from this file and nothing else, so this line
-# is what gives the extractor a runtime at all.
+# Text extraction for tender documents the user drops in by hand — one line per
+# format registered in scripts/attachments.py's dispatch table.
+#
+# Optional in the same sense as mcp/anthropic: attachments.py imports and runs
+# without either of these, and reports the miss per-file rather than failing.
+# They are listed here because CI installs from this file and nothing else, so
+# these lines are what give the extractors a runtime at all.
+#
+# There is deliberately no spreadsheet reader. See the module docstring: a
+# flattened evaluation grid reads as confident prose that is wrong about which
+# figure belongs to which line item.
 pdfplumber>=0.11,<1
+python-docx>=1.1,<2

@@ -30,12 +30,18 @@ change, and it does not ask the user to re-drop files already in the folder: a
 file sitting at `unsupported_type` is picked up on the next refresh once its
 extension has an extractor (see `_needs_extraction`).
 
-`.docx` IS THE OBVIOUS NEXT ONE. `.xlsx` IS NOT — and they should not be added
-in the same pass. Flattening an evaluation grid or a pricing table to a stream
-of text loses the row/column structure that gives every cell its meaning, and
-the result reads as confident prose that can be badly wrong about which figure
-belongs to which line item. A spreadsheet extractor needs its own design pass
-about what shape it should even produce. A Word SOW has none of that problem.
+`.pdf` and `.docx` are registered. `.xlsx` IS DELIBERATELY NOT, and adding it
+alongside the other two would have been a mistake. Flattening an evaluation
+grid or a pricing table to a stream of text loses the row/column structure that
+gives every cell its meaning, and the result reads as confident prose that can
+be badly wrong about which figure belongs to which line item. A spreadsheet
+extractor needs its own design pass about what shape it should even produce.
+
+A Word SOW is prose and does not have that problem. It can still *contain* a
+requirements table, which `_extract_docx` keeps one row per line rather than
+dissolving into the surrounding text — that is the most a flattener can
+honestly preserve, and the reason the same treatment does not rescue a
+spreadsheet, where every sheet is that table and nothing else.
 
 WHAT `page_count: null` IS FOR
 
@@ -115,9 +121,56 @@ def _extract_pdf(path: Path) -> ExtractResult:
     )
 
 
+def _extract_docx(path: Path) -> ExtractResult:
+    """
+    python-docx. Lazy import for the same reason as the PDF extractor.
+
+    Walks the document body rather than reading `document.paragraphs` and
+    `document.tables` separately, because those two lists lose the interleaving
+    — and in a statement of work the table sits between the clauses that
+    explain it, so reading all the prose and then all the tables reorders the
+    document into something that never existed.
+
+    Table rows are joined with ` | ` and kept one row per line. That is the
+    limit of what flattening can honestly preserve: a requirements matrix stays
+    row-shaped, which is enough to read a mandatory criterion against its
+    response. It is also exactly why .xlsx is not here — see the module
+    docstring.
+
+    `page_count` is None. A .docx has no pages until something renders it, and
+    the page count you see in Word is a property of the renderer plus the
+    printer, not of the file. Reporting a number here would be inventing one.
+    """
+    import docx  # noqa: PLC0415 — lazy on purpose, see docstring
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    document = docx.Document(str(path))
+    blocks: list[str] = []
+    for child in document.element.body.iterchildren():
+        if child.tag.endswith("}p"):
+            blocks.append(Paragraph(child, document).text)
+        elif child.tag.endswith("}tbl"):
+            for row in Table(child, document).rows:
+                blocks.append(" | ".join(cell.text.strip() for cell in row.cells))
+
+    try:
+        from importlib.metadata import version as _package_version
+        installed = _package_version("python-docx")
+    except Exception:
+        installed = "unknown"
+
+    return ExtractResult(
+        text="\n".join(blocks),
+        page_count=None,
+        extractor=f"python-docx {installed}",
+    )
+
+
 # The dispatch table. One row per format; nothing below reads it by name.
 EXTRACTORS: dict[str, Callable[[Path], ExtractResult]] = {
     ".pdf": _extract_pdf,
+    ".docx": _extract_docx,
 }
 
 
@@ -174,7 +227,7 @@ _FILE_FIELDS = (
     "first_seen",
     "last_changed",
     "superseded_sha256",
-    "note",
+    "status_note",
 )
 
 
@@ -339,12 +392,26 @@ def _classify(text: str, page_count: int | None) -> tuple[str, int]:
     return STATUS_EXTRACTED, chars
 
 
-def _extracted_name(path: Path, claimed: set[str]) -> str:
+def _extracted_name(path: Path, claimed: set[str], reserved: dict[str, str]) -> str:
     """
-    `RFP-W2187-SPO.pdf` -> `RFP-W2187-SPO.txt`, unless that name is already
-    spoken for. Two documents with the same stem and different extensions would
-    otherwise overwrite each other's text silently.
+    `RFP-W2187-SPO.pdf` -> `RFP-W2187-SPO.txt`, unless that name is taken.
+
+    `reserved` maps a dropped filename to the .txt it already owns, and it is
+    what makes this safe ACROSS runs rather than only within one. A file that
+    is skipped as unchanged still owns its text, so without the reservation a
+    newly-dropped `Annex-A.docx` would be handed `Annex-A.txt` — the name an
+    untouched `Annex-A.pdf` was already using — and overwrite it. Both manifest
+    records would then point at one file holding one document's text, which is
+    the exact "confidently wrong" failure the hashes elsewhere exist to prevent.
+
+    Returning a file's own reserved name also keeps the .txt path stable across
+    re-extractions, so an amendment doesn't leave the old text orphaned.
     """
+    own = reserved.get(path.name)
+    if own:
+        claimed.add(own)
+        return own
+
     candidate = f"{path.stem}.txt"
     if candidate in claimed:
         candidate = f"{path.name}.txt"
@@ -373,9 +440,24 @@ def refresh(folder: Path) -> dict:
     added: list[str] = []
     changed: list[str] = []
     warnings: list[str] = []
-    claimed: set[str] = set()
 
-    for path in dropped_files(folder):
+    # Reserve the .txt names already owned by files still on disk, BEFORE
+    # extracting anything. A file skipped as unchanged never reaches
+    # _extracted_name, so its text would otherwise look unclaimed and be
+    # handed to a different document. See _extracted_name.
+    on_disk = dropped_files(folder)
+    on_disk_names = {p.name for p in on_disk}
+    claimed: set[str] = set()
+    reserved: dict[str, str] = {}
+    for old_record in manifest.get("files", []):
+        name = old_record.get("filename")
+        rel = old_record.get("extracted_path")
+        if name in on_disk_names and rel:
+            base = str(rel).rsplit("/", 1)[-1]
+            reserved[name] = base
+            claimed.add(base)
+
+    for path in on_disk:
         ext = path.suffix.lower()
         sha = sha256_file(path)
         old = previous.get(path.name)
@@ -404,7 +486,7 @@ def refresh(folder: Path) -> dict:
 
         if not _needs_extraction(old, sha, ext, folder):
             for field in ("extraction_status", "extractor", "page_count",
-                          "char_count", "extracted_path", "note"):
+                          "char_count", "extracted_path", "status_note"):
                 if field in old:
                     record[field] = old[field]
             records.append(record)
@@ -458,13 +540,18 @@ def refresh(folder: Path) -> dict:
             # successful extraction of an empty document, and the next reader
             # concludes the RFP said nothing.
             record["extracted_path"] = None
-            record["note"] = (
-                "No text layer — almost certainly a scan. Not OCR'd; v1 reports "
-                "this rather than solving it."
+            # Deliberately not "this is a scan". That was true while .pdf was
+            # the only registered format; a near-empty .docx reaches here too,
+            # and telling the reader it is probably a scan would be a guess
+            # stated as a finding.
+            record["status_note"] = (
+                "An extractor ran and found effectively no text. For a PDF that "
+                "means a scan with no text layer. Not OCR'd — this is reported, "
+                "not solved."
             )
         else:
             extracted_dir.mkdir(parents=True, exist_ok=True)
-            name = _extracted_name(path, claimed)
+            name = _extracted_name(path, claimed, reserved)
             (extracted_dir / name).write_text(
                 result.text, encoding="utf-8", newline="\n"
             )
@@ -472,8 +559,7 @@ def refresh(folder: Path) -> dict:
 
         records.append(record)
 
-    on_disk = {r["filename"] for r in records}
-    removed = sorted(set(previous) - on_disk)
+    removed = sorted(set(previous) - {r["filename"] for r in records})
 
     manifest["files"] = records
     manifest["manifest_updated_at"] = datetime.now().isoformat(timespec="seconds")

@@ -1027,6 +1027,17 @@ def cmd_attach(args) -> dict:
                      f"parked/ or archived/. Promote it first."
         }
 
+    # Validated here, not only in the parser. argparse enforces `choices` on the
+    # CLI, but the MCP tool builds its own namespace and never touches it — so
+    # without this an unrecognised platform would be written into the manifest
+    # as provenance and read back later as though someone had recorded it.
+    platform = getattr(args, "platform", None)
+    if platform not in attachments.SOURCE_PLATFORMS:
+        return {
+            "error": f"Unknown source platform {platform!r}. "
+                     f"Expected one of: {', '.join(attachments.SOURCE_PLATFORMS)}."
+        }
+
     folder = _attachment_dir(note)
     created = not folder.exists()
     folder.mkdir(parents=True, exist_ok=True)
@@ -1037,7 +1048,7 @@ def cmd_attach(args) -> dict:
         manifest = attachments.new_manifest(
             tender_id=args.tender_id,
             note_stem=note.stem,
-            source_platform=args.platform,
+            source_platform=platform,
         )
         attachments.write_manifest(folder, manifest)
 
@@ -1130,7 +1141,7 @@ def cmd_read_attachment(args) -> dict:
             "error": f"No extracted text for {args.filename} "
                      f"(extraction_status: {status}).",
             "extraction_status": status,
-            "note": record.get("note"),
+            "status_note": record.get("status_note"),
         }
 
     text_path = folder / record["extracted_path"]
