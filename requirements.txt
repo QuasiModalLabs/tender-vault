@@ -12,3 +12,10 @@ mcp>=2.0.0,<3
 # LLM value extraction — optional, only used by `ingest.py --extract-values`
 # (requires ANTHROPIC_API_KEY; default ingest path needs no credentials)
 anthropic>=0.40.0,<1
+
+# PDF text extraction for tender documents the user drops in by hand.
+# Optional in the same sense as mcp/anthropic: scripts/attachments.py imports
+# and runs without it, and reports the miss per-file rather than failing. It is
+# listed here because CI installs from this file and nothing else, so this line
+# is what gives the extractor a runtime at all.
+pdfplumber>=0.11,<1

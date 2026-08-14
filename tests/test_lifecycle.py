@@ -215,6 +215,46 @@ def test_archive_from_watching():
     assert result.get("from") == "watching", f"expected source 'watching': {result}"
 
 
+def test_archive_moves_attachments():
+    """
+    A tender with dropped documents: watching -> archived moves BOTH.
+
+    The failure this guards against is silent. If the note moves and the folder
+    doesn't, nothing errors and nothing looks wrong — there is just a directory
+    under watching/ that no note references and no command will ever list
+    again, holding the RFP package for a tender someone spent real effort on.
+    """
+    tt.cmd_promote(SimpleNamespace(tender_id=FAKE_ID))
+    filename = next(tt.WATCHING.glob("*.md")).name
+    stem = Path(filename).stem
+
+    attached = tt.cmd_attach(SimpleNamespace(
+        tender_id=FAKE_ID, platform="merx", no_reveal=True,
+    ))
+    assert "error" not in attached, f"attach failed: {attached}"
+
+    folder = tt.WATCHING / stem
+    (folder / "RFP-W2187-SPO.pdf").write_bytes(b"%PDF-1.4 stand-in, never parsed")
+    assert folder.is_dir(), "attachment folder was not created in watching/"
+
+    result = tt.cmd_archive(SimpleNamespace(
+        filename=filename, reason="archived with documents attached",
+    ))
+    assert "archived" in result, f"archive failed: {result}"
+    assert result.get("attachments_moved"), (
+        f"archive moved the folder but didn't report it: {result}"
+    )
+
+    assert not folder.exists(), "attachment folder left behind in watching/"
+    assert not (tt.WATCHING / filename).exists(), "note left behind in watching/"
+
+    moved = tt.ARCHIVED / stem
+    assert moved.is_dir(), "attachment folder did not follow the note to archived/"
+    assert (moved / "RFP-W2187-SPO.pdf").exists(), "dropped document lost in the move"
+    assert (moved / "_index.md").exists(), "manifest lost in the move"
+    assert (tt.ARCHIVED / filename).exists(), "note not in archived/"
+
+
 def main():
     setup_temp_vault()
     filename = test_promote()
@@ -228,6 +268,7 @@ def main():
     test_archive_from_parked(filename)
     # Re-promote is possible after archive (file no longer in watching)
     test_archive_from_watching()
+    test_archive_moves_attachments()
     print("All lifecycle tests passed.")
 
 

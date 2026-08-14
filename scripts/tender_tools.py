@@ -19,20 +19,26 @@ Usage:
     python scripts/tender_tools.py promote W1234-567890
     python scripts/tender_tools.py park some-file.md "no clearance" "after hiring cleared architect"
     python scripts/tender_tools.py archive some-file.md "lost to competitor"
+    python scripts/tender_tools.py attach cb-342-92719341 --platform merx
+    python scripts/tender_tools.py list-attachments cb-342-92719341
+    python scripts/tender_tools.py read-attachment cb-342-92719341 RFP-W2187-SPO.pdf --limit 40
 """
 from __future__ import annotations
 
 import argparse
 import json
 import math
+import os
 import re
 import shutil
+import subprocess
 import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import attachments  # noqa: E402
 import org_resolve  # noqa: E402
 
 # The single definition of what kind of thing a notice is, shared with the
@@ -856,6 +862,11 @@ def cmd_archive(args) -> dict:
     ARCHIVED.mkdir(parents=True, exist_ok=True)
     target = ARCHIVED / args.filename
 
+    # Documents move BEFORE the note does. See _move_attachment_dir.
+    moved, error = _move_attachment_dir(source, target)
+    if error:
+        return error
+
     # Append the archive reason to the file before moving
     content = source.read_text(encoding="utf-8")
     stamp = datetime.now().strftime("%Y-%m-%d")
@@ -863,11 +874,14 @@ def cmd_archive(args) -> dict:
     content += f"\n\n## Archived {stamp} (from {from_dir})\n\n{args.reason}\n"
     target.write_text(content, encoding="utf-8", newline="\n")
     source.unlink()
-    return {
+    result = {
         "archived": str(target.relative_to(PROJECT_ROOT)),
         "from": from_dir,
         "reason": args.reason,
     }
+    if moved:
+        result["attachments_moved"] = moved
+    return result
 
 
 def cmd_park(args) -> dict:
@@ -886,6 +900,11 @@ def cmd_park(args) -> dict:
     PARKED.mkdir(parents=True, exist_ok=True)
     target = PARKED / args.filename
 
+    # Documents move BEFORE the note does. See _move_attachment_dir.
+    moved, error = _move_attachment_dir(source, target)
+    if error:
+        return error
+
     content = source.read_text(encoding="utf-8")
     stamp = datetime.now().strftime("%Y-%m-%d")
     content += (
@@ -895,10 +914,245 @@ def cmd_park(args) -> dict:
     )
     target.write_text(content, encoding="utf-8", newline="\n")
     source.unlink()
-    return {
+    result = {
         "parked": str(target.relative_to(PROJECT_ROOT)),
         "reason": args.reason,
         "revisit_when": args.revisit_when,
+    }
+    if moved:
+        result["attachments_moved"] = moved
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Attached documents — manually dropped, never fetched
+# ---------------------------------------------------------------------------
+# The RFP package lives on MERX or Ariba behind an account wall and this
+# project deliberately does not scrape those platforms. A human pulls the
+# files in a browser and drops them into the folder these commands manage.
+# scripts/attachments.py holds the extraction and manifest logic; everything
+# here is path resolution and the CLI/MCP shape.
+#
+# The folder is created on demand rather than on promote, and its existence is
+# itself a signal: it marks the tenders that got real effort, which watching /
+# parked / archived do not distinguish.
+
+
+def _note_for_tender(tender_id: str) -> Path | None:
+    """
+    The note for a tender_id, wherever it currently lives.
+
+    Deliberately searches all three lifecycle states, unlike the four inline
+    `WATCHING / f"{_slugify(id)}.md"` checks elsewhere in this file — those
+    answer `in_watching`, which is a narrower question, and widening them would
+    change what the corpus commands report. Attachments have to keep working
+    after a tender is parked or archived, so they need this one instead.
+    """
+    name = f"{_slugify(tender_id)}.md"
+    for directory in (WATCHING, PARKED, ARCHIVED):
+        candidate = directory / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _attachment_dir(note: Path) -> Path:
+    """Beside the note, named for it: cb-342-92719341.md -> cb-342-92719341/."""
+    return note.parent / note.stem
+
+
+def _move_attachment_dir(source: Path, target: Path) -> tuple[str | None, dict | None]:
+    """
+    Move a tender's document folder to follow its note. Returns (moved, error).
+
+    ORDER IS THE POINT, and the caller must run this BEFORE writing the note.
+    A crash between the two leaves a note pointing at a folder that isn't there
+    — wrong, but detectable by anyone who looks. The other order leaves a folder
+    that no note references, which nothing will ever surface again.
+    """
+    src_dir = _attachment_dir(source)
+    if not src_dir.is_dir():
+        return None, None
+
+    dst_dir = _attachment_dir(target)
+    if dst_dir.exists():
+        return None, {
+            "error": f"Attachment folder already exists at the destination: "
+                     f"{dst_dir}. Resolve it by hand; nothing was moved."
+        }
+    try:
+        shutil.move(str(src_dir), str(dst_dir))
+    except OSError as exc:
+        # Report and stop. Moving the note anyway would produce exactly the
+        # invisible orphan this ordering exists to prevent.
+        return None, {"error": f"Could not move attachment folder: {exc}"}
+    return str(dst_dir.relative_to(PROJECT_ROOT)), None
+
+
+def _reveal_in_file_manager(path: Path) -> None:
+    """
+    Best effort, and nothing more. Never raises, never blocks for long.
+
+    Skipped entirely when stdout is not a terminal: over SSH, in CI, and on the
+    MCP server — where stdout is the protocol channel and a file manager is
+    meaningless — these calls variously fail, hang, or open something on the
+    wrong machine. The absolute path printed by the caller is the actual
+    contract with the user; this is a convenience on top of it.
+    """
+    if not sys.stdout.isatty():
+        return
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(path))  # noqa: S606
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(path)], timeout=5, check=False)
+        else:
+            subprocess.run(["xdg-open", str(path)], timeout=5, check=False)
+    except Exception:
+        # Including timeouts: xdg-open under WSL can block until it is killed.
+        pass
+
+
+def cmd_attach(args) -> dict:
+    """
+    Create the document folder for a tender and print its absolute path.
+
+    Nothing is downloaded. The user opens MERX or Ariba in a browser, gets past
+    the account wall by hand, and drops the RFP package into this folder.
+    """
+    note = _note_for_tender(args.tender_id)
+    if note is None:
+        return {
+            "error": f"No tender note for {args.tender_id} in watching/, "
+                     f"parked/ or archived/. Promote it first."
+        }
+
+    folder = _attachment_dir(note)
+    created = not folder.exists()
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / attachments.EXTRACTED_DIRNAME).mkdir(exist_ok=True)
+
+    manifest = attachments.read_manifest(folder)
+    if not manifest:
+        manifest = attachments.new_manifest(
+            tender_id=args.tender_id,
+            note_stem=note.stem,
+            source_platform=args.platform,
+        )
+        attachments.write_manifest(folder, manifest)
+
+    if not getattr(args, "no_reveal", False):
+        _reveal_in_file_manager(folder)
+
+    return {
+        # ABSOLUTE, unlike promote's relative_to(PROJECT_ROOT). This path exists
+        # to be pasted into a file manager or a shell, so it has to stand alone.
+        "attachment_folder": str(folder.resolve()),
+        "created": created,
+        "tender_id": args.tender_id,
+        "note": str(note.relative_to(PROJECT_ROOT)),
+        "source_platform": manifest.get("source_platform"),
+        "next": "Drop the files from MERX/Ariba into that folder, then run "
+                "list-attachments to extract them.",
+    }
+
+
+def cmd_list_attachments(args) -> dict:
+    """
+    List a tender's documents, extracting anything new or changed first.
+
+    This is where the directory is diffed against the manifest — there is no
+    watcher and no daemon, so detection happens on the next call.
+    """
+    note = _note_for_tender(args.tender_id)
+    if note is None:
+        return {"error": f"No tender note for {args.tender_id}."}
+
+    folder = _attachment_dir(note)
+    if not folder.is_dir():
+        return {
+            "error": f"No attachment folder for {args.tender_id}. Create one "
+                     f"with: attach {args.tender_id} --platform merx"
+        }
+
+    outcome = attachments.refresh(folder)
+    manifest = outcome["manifest"]
+    return {
+        "tender_id": args.tender_id,
+        "attachment_folder": str(folder.resolve()),
+        "source_platform": manifest.get("source_platform"),
+        "retrieved_at": manifest.get("retrieved_at"),
+        "files": manifest.get("files", []),
+        "added": outcome["added"],
+        # An amended document re-dropped under the same name. Surfaced at the
+        # top level because stale text that looks current is the failure mode
+        # the hashes exist to catch.
+        "changed": outcome["changed"],
+        "removed": outcome["removed"],
+        "warnings": outcome["warnings"],
+    }
+
+
+def cmd_read_attachment(args) -> dict:
+    """
+    Read a window of one document's extracted text.
+
+    Paginated, never one blob: a 40-page RFP must not arrive as a single return
+    value. Offsets and limits are in LINES of the extracted text.
+    """
+    note = _note_for_tender(args.tender_id)
+    if note is None:
+        return {"error": f"No tender note for {args.tender_id}."}
+
+    folder = _attachment_dir(note)
+    if not folder.is_dir():
+        return {"error": f"No attachment folder for {args.tender_id}."}
+
+    source = folder / args.filename
+    if not source.is_file():
+        return {"error": f"No such document: {args.filename}"}
+
+    # Re-hash only the file being served. A full rescan is what
+    # list-attachments is for; this is the narrow guarantee that a read never
+    # returns text that no longer matches the document on disk.
+    manifest = attachments.read_manifest(folder)
+    record = attachments.find_record(manifest, args.filename)
+    if record is None or record.get("sha256") != attachments.sha256_file(source):
+        manifest = attachments.refresh(folder)["manifest"]
+        record = attachments.find_record(manifest, args.filename)
+
+    if record is None:
+        return {"error": f"{args.filename} is not in the manifest."}
+
+    status = record.get("extraction_status")
+    if status != attachments.STATUS_EXTRACTED:
+        return {
+            "error": f"No extracted text for {args.filename} "
+                     f"(extraction_status: {status}).",
+            "extraction_status": status,
+            "note": record.get("note"),
+        }
+
+    text_path = folder / record["extracted_path"]
+    if not text_path.exists():
+        return {"error": f"Extracted text missing for {args.filename}."}
+
+    lines = text_path.read_text(encoding="utf-8").splitlines()
+    offset = max(int(getattr(args, "offset", 0) or 0), 0)
+    limit = min(max(int(getattr(args, "limit", 400) or 400), 1), 2000)
+    window = lines[offset:offset + limit]
+
+    return {
+        "tender_id": args.tender_id,
+        "filename": args.filename,
+        "offset": offset,
+        "limit": limit,
+        "total_lines": len(lines),
+        "lines_returned": len(window),
+        "eof": offset + len(window) >= len(lines),
+        "page_count": record.get("page_count"),
+        "sha256": record.get("sha256"),
+        "text": "\n".join(window),
     }
 
 
@@ -2553,6 +2807,41 @@ def build_parser() -> argparse.ArgumentParser:
     ar.add_argument("filename")
     ar.add_argument("reason")
     ar.set_defaults(func=cmd_archive)
+
+    at = sub.add_parser(
+        "attach",
+        help="Create the document folder for a tender (you drop the files in)",
+    )
+    at.add_argument("tender_id")
+    at.add_argument(
+        "--platform",
+        choices=attachments.SOURCE_PLATFORMS,
+        required=True,
+        help="Where you pulled the package from, recorded as provenance",
+    )
+    at.add_argument(
+        "--no-reveal",
+        action="store_true",
+        help="Don't try to open a file manager",
+    )
+    at.set_defaults(func=cmd_attach)
+
+    la = sub.add_parser(
+        "list-attachments",
+        help="List a tender's dropped documents, extracting new/changed ones",
+    )
+    la.add_argument("tender_id")
+    la.set_defaults(func=cmd_list_attachments)
+
+    ra = sub.add_parser(
+        "read-attachment",
+        help="Read a window of one document's extracted text",
+    )
+    ra.add_argument("tender_id")
+    ra.add_argument("filename", help="The dropped filename, e.g. RFP-W2187-SPO.pdf")
+    ra.add_argument("--offset", type=int, default=0, help="First line (0-based)")
+    ra.add_argument("--limit", type=int, default=400, help="Lines to return (max 2000)")
+    ra.set_defaults(func=cmd_read_attachment)
 
     return p
 

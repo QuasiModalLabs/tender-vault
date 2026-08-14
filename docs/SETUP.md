@@ -247,6 +247,7 @@ Plain Python, no pytest. Exit code 0 means passed.
 
 ```bash
 python tests/test_lifecycle.py
+python tests/test_attachments.py
 python tests/test_notice_classification.py
 python tests/test_dossier.py
 python tests/test_crosswalk.py

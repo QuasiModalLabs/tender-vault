@@ -84,7 +84,7 @@ jobs:
           mod = u.module_from_spec(spec)
           spec.loader.exec_module(mod)
           tools = asyncio.run(mod.mcp.list_tools())
-          assert len(tools) >= 14, f"expected >=14 tools, got {len(tools)}"
+          assert len(tools) >= 17, f"expected >=17 tools, got {len(tools)}"
           print(f"MCP server imports cleanly: {len(tools)} tools registered")
           PY
 
