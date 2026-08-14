@@ -21,8 +21,10 @@ anthropic>=0.40.0,<1
 # They are listed here because CI installs from this file and nothing else, so
 # these lines are what give the extractors a runtime at all.
 #
-# There is deliberately no spreadsheet reader. See the module docstring: a
-# flattened evaluation grid reads as confident prose that is wrong about which
-# figure belongs to which line item.
+# openpyxl reads workbooks WITHOUT flattening them — every value keeps its
+# sheet, column letter and row number. See the _extract_xlsx docstring for what
+# it still cannot represent, particularly the cached-value trap that makes an
+# uncalculated pricing column read as blank.
 pdfplumber>=0.11,<1
 python-docx>=1.1,<2
+openpyxl>=3.1,<4
