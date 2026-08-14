@@ -187,7 +187,7 @@ def test_no_text_layer_writes_no_file():
     assert not (_folder() / at.EXTRACTED_DIRNAME / "scanned.txt").exists(), (
         "a zero-byte .txt was written for a document with no text layer"
     )
-    assert "scan" in (rec.get("note") or "").lower(), (
+    assert "scan" in (rec.get("status_note") or "").lower(), (
         "no_text_layer should say what the condition is"
     )
 
@@ -334,6 +334,188 @@ def test_read_picks_up_a_change_without_a_list_call():
     assert result["total_lines"] == 20, result
 
 
+def test_same_stem_different_extension_keeps_separate_text():
+    """
+    REGRESSION. Two documents whose names differ only by extension must not
+    share one .txt.
+
+    The subtle half is that the collision only appeared ACROSS runs: a file
+    skipped as unchanged never asks for an extracted name, so its .txt looked
+    unclaimed and the next document dropped with the same stem was handed it.
+    The result was two manifest records pointing at one file holding one
+    document's text — a read returning the wrong document while reporting
+    extraction_status: extracted, which is exactly the kind of confidently
+    wrong answer the rest of this module is built to avoid.
+    """
+    _register_text_extractor(".docm")
+    try:
+        _drop("Annex-Z.txt", "ORIGINAL TXT CONTENT " * 8)
+        first = _record(_list(), "Annex-Z.txt")["extracted_path"]
+
+        # Second run, second document, same stem. The first is untouched.
+        _drop("Annex-Z.docm", "DIFFERENT DOCM CONTENT " * 8)
+        result = _list()
+        txt = _record(result, "Annex-Z.txt")
+        docm = _record(result, "Annex-Z.docm")
+
+        assert txt["extracted_path"] != docm["extracted_path"], (
+            f"two documents share one extracted file: {txt['extracted_path']}"
+        )
+        assert txt["extracted_path"] == first, (
+            "an untouched document's extracted path moved under it"
+        )
+        assert "ORIGINAL TXT" in (_folder() / txt["extracted_path"]).read_text(
+            encoding="utf-8"), "the first document's text was overwritten"
+        assert "DIFFERENT DOCM" in (_folder() / docm["extracted_path"]).read_text(
+            encoding="utf-8"), "the second document's text is wrong"
+    finally:
+        at.EXTRACTORS.pop(".docm", None)
+
+
+def test_extracted_path_is_stable_across_amendments():
+    """An amendment must reuse the same .txt, not orphan the old one."""
+    before = _record(_list(), "Annex-Z.txt")["extracted_path"]
+    _drop("Annex-Z.txt", "AMENDED TXT CONTENT " * 8)
+    after = _record(_list(), "Annex-Z.txt")["extracted_path"]
+    assert before == after, f"extracted path churned: {before} -> {after}"
+    assert "AMENDED TXT" in (_folder() / after).read_text(encoding="utf-8")
+
+
+def test_unknown_platform_rejected():
+    """
+    argparse enforces --platform choices on the CLI, but the MCP tool builds
+    its own namespace and bypasses the parser entirely. Provenance that nobody
+    validated is provenance nobody should trust.
+    """
+    result = tt.cmd_attach(SimpleNamespace(
+        tender_id=TENDER_ID, platform="sharepoint", no_reveal=True,
+    ))
+    assert "error" in result, "an unrecognised platform should be rejected"
+    assert "merx" in result["error"], "the error should name the valid options"
+
+
+def test_missing_library_is_reported_not_fatal():
+    """
+    A registered format whose library isn't installed must not take down the
+    whole listing — every other file still gets read, and the miss is a
+    warning rather than a silent fact about the document.
+
+    It also has to self-heal: the file goes to unsupported_type, which is the
+    state the refresh rule already retries once an extractor works.
+    """
+    def _broken(path: Path) -> at.ExtractResult:
+        raise ImportError("No module named 'nothinghere'")
+
+    at.EXTRACTORS[".needslib"] = _broken
+    try:
+        _drop("annex-d.needslib", "content nobody can read yet " * 5)
+        result = _list()
+
+        rec = _record(result, "annex-d.needslib")
+        assert rec["extraction_status"] == at.STATUS_UNSUPPORTED, rec
+        assert rec["extracted_path"] is None, rec
+        assert any("annex-d.needslib" in w for w in result["warnings"]), (
+            f"a missing library must be surfaced as a warning: {result['warnings']}"
+        )
+        # The rest of the folder is unaffected.
+        assert _record(result, "sow.txt")["extraction_status"] == at.STATUS_EXTRACTED
+
+        at.EXTRACTORS[".needslib"] = lambda p: at.ExtractResult(
+            text=p.read_text(encoding="utf-8"), page_count=None, extractor="fixed 1.0",
+        )
+        healed = _record(_list(), "annex-d.needslib")
+        assert healed["extraction_status"] == at.STATUS_EXTRACTED, (
+            f"installing the library did not pick the file back up: {healed}"
+        )
+    finally:
+        at.EXTRACTORS.pop(".needslib", None)
+
+
+def test_real_docx_extraction():
+    """
+    The one test here that uses a real library and a real document.
+
+    Skips cleanly when python-docx isn't installed, matching how the suites
+    that need a built database behave. Everything else in this file runs on
+    fake extractors on purpose; this exists because the .docx extractor makes
+    two claims a fake cannot check — that a table survives as rows, and that
+    prose and tables come back in document order rather than in two batches.
+    """
+    try:
+        import docx
+    except ImportError:
+        print("  SKIP test_real_docx_extraction (python-docx not installed)")
+        return
+
+    document = docx.Document()
+    document.add_paragraph("1. Statement of work. The contractor shall deliver.")
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "M1"
+    table.cell(0, 1).text = "Bilingual documentation"
+    table.cell(1, 0).text = "M2"
+    table.cell(1, 1).text = "Protected A hosting in Canada"
+    document.add_paragraph("2. Evaluation. Mandatory criteria above are pass/fail.")
+    document.save(str(_folder() / "SOW.docx"))
+
+    rec = _record(_list(), "SOW.docx")
+    assert rec["extraction_status"] == at.STATUS_EXTRACTED, rec
+    assert rec["extractor"].startswith("python-docx "), rec
+    # A .docx has no pages until something renders it. Inventing a number here
+    # is exactly what the nullable field exists to avoid.
+    assert rec["page_count"] is None, f"page_count should be null for .docx: {rec}"
+
+    text = (_folder() / rec["extracted_path"]).read_text(encoding="utf-8")
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+
+    assert "M1 | Bilingual documentation" in lines, (
+        f"table row was not kept row-shaped: {lines}"
+    )
+    assert "M2 | Protected A hosting in Canada" in lines, lines
+    # Document order: the table sits BETWEEN the two clauses, not after both.
+    sow = next(i for i, ln in enumerate(lines) if ln.startswith("1. Statement"))
+    row = next(i for i, ln in enumerate(lines) if ln.startswith("M1 |"))
+    evaluation = next(i for i, ln in enumerate(lines) if ln.startswith("2. Evaluation"))
+    assert sow < row < evaluation, (
+        f"prose and tables came back out of document order: {lines}"
+    )
+
+
+def test_docx_dropped_before_support_existed():
+    """
+    THE UPGRADE PATH, with the real extractor.
+
+    A .docx sitting in the folder from before .docx was registered must be
+    picked up on the next call. The user does not re-drop it and the manifest
+    is not migrated — the file's own hash is unchanged throughout.
+    """
+    try:
+        import docx
+    except ImportError:
+        print("  SKIP test_docx_dropped_before_support_existed (no python-docx)")
+        return
+
+    document = docx.Document()
+    document.add_paragraph("Annex C. " + "Deliverables and acceptance. " * 6)
+    document.save(str(_folder() / "Annex-C.docx"))
+
+    real = at.EXTRACTORS.pop(".docx")          # pretend v1: no .docx support
+    try:
+        before = _record(_list(), "Annex-C.docx")
+        assert before["extraction_status"] == at.STATUS_UNSUPPORTED, before
+        assert before["extracted_path"] is None, before
+    finally:
+        at.EXTRACTORS[".docx"] = real          # the entire "upgrade"
+
+    after = _record(_list(), "Annex-C.docx")
+    assert after["extraction_status"] == at.STATUS_EXTRACTED, (
+        f"registering .docx did not pick up the already-dropped file: {after}"
+    )
+    assert after["sha256"] == before["sha256"], "the file itself was touched"
+    assert "Deliverables and acceptance" in (
+        (_folder() / after["extracted_path"]).read_text(encoding="utf-8")
+    )
+
+
 def test_list_before_attach_errors():
     result = tt.cmd_list_attachments(SimpleNamespace(tender_id="NO-SUCH-TENDER"))
     assert "error" in result, "listing a nonexistent tender should error"
@@ -359,6 +541,12 @@ def main():
     test_read_limit_is_clamped()
     test_read_rejects_a_file_with_no_text()
     test_read_picks_up_a_change_without_a_list_call()
+    test_same_stem_different_extension_keeps_separate_text()
+    test_extracted_path_is_stable_across_amendments()
+    test_unknown_platform_rejected()
+    test_missing_library_is_reported_not_fatal()
+    test_real_docx_extraction()
+    test_docx_dropped_before_support_existed()
     test_list_before_attach_errors()
     print("All attachment tests passed.")
 
