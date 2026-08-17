@@ -94,6 +94,22 @@ OAG_PACKAGE_FIELDS = {
     # parliament_committee_deputy (briefing packages), parliament_report and
     # publication (the reports and OAG's own admin documents).
     "collection": ["collection"],
+    # When this record became public, as a real date rather than the year
+    # scraped out of the title. `year` is what the title says and is enough to
+    # sort by; it is not enough to answer "was this knowable on 2022-04-01",
+    # which is the question an as-of gate asks, and answering it by assuming
+    # January 1 credits an audit tabled in November with ten months it did not
+    # have.
+    #
+    # NOT a required field, and not the tabling date. An OAG report is tabled in
+    # Parliament and public before it reaches open.canada.ca, so this stamp runs
+    # LATE. That is the safe direction — a late date can only withhold a signal
+    # from a backtest, never leak one — and it is a real lag, not a rounding:
+    # checked across all 374 records, date_published tracks the report year
+    # closely at the low end (2023 reports first appear 2023-03-27) with a long
+    # tail from the briefing packages, which are prepared for hearings held
+    # months or years after the report they are about.
+    "date_published": ["date_published", "portal_release_date"],
 }
 # Sub-fields read off each entry in `resources` when picking HTML/PDF links.
 OAG_RESOURCE_FIELDS = {
@@ -516,6 +532,26 @@ def attribute(records: list[dict], cols: dict, res_cols: dict,
     return classes, statuses, edges
 
 
+def _published_date(pkg: dict, cols: dict) -> str:
+    """
+    The record's portal publication date as a bare ISO date, or "".
+
+    CKAN returns `2026-08-11 00:00:00`; the midnight is not a time the record
+    was published, it is the absence of one. Truncating to ten characters keeps
+    the column comparable by string inequality and stops that fake precision
+    reading as real. "" means the field was missing — which is a third answer,
+    distinct from an early date and a late one, and callers must not read it as
+    either.
+    """
+    col = cols.get("date_published")
+    if not col:
+        return ""
+    raw = str(pkg.get(col) or "").strip()
+    if len(raw) >= 10 and raw[:4].isdigit() and raw[4] == "-":
+        return raw[:10]
+    return ""
+
+
 def build_db(records: list[dict], scores: list, source_note: str,
              cols: dict, res_cols: dict, resolver, db_path: Path = DB_PATH) -> dict:
     # Staged write: a failure part-way through leaves the previous database
@@ -530,6 +566,7 @@ def build_db(records: list[dict], scores: list, source_note: str,
         rows.append((
             pkg.get(cols["oag_id"], ""),
             year_from_title(title),
+            _published_date(pkg, cols),
             classify_doc(title, notes),
             cls, status,
             title, notes,
@@ -540,7 +577,11 @@ def build_db(records: list[dict], scores: list, source_note: str,
     with staged_db(db_path) as con:
         con.execute("""
             CREATE TABLE audits (
-                oag_id TEXT PRIMARY KEY, year INTEGER, doc_type TEXT,
+                oag_id TEXT PRIMARY KEY, year INTEGER,
+                -- Portal publication date. Runs late relative to tabling; see
+                -- OAG_PACKAGE_FIELDS. "" where the API filed none.
+                date_published TEXT,
+                doc_type TEXT,
                 record_class TEXT, attribution_status TEXT,
                 title TEXT, description TEXT, vendor_focus TEXT,
                 it_score REAL, html_url TEXT, pdf_url TEXT
@@ -561,12 +602,13 @@ def build_db(records: list[dict], scores: list, source_note: str,
             )
         """)
         con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-        con.executemany("INSERT INTO audits VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+        con.executemany("INSERT INTO audits VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
         con.executemany(
             "INSERT OR IGNORE INTO audit_departments VALUES "
             "(:oag_id,:dept_key,:method,:evidence,:source_oag_id,:n_parent_reports)",
             edges)
         con.execute("CREATE INDEX idx_itscore ON audits(it_score)")
+        con.execute("CREATE INDEX idx_published ON audits(date_published)")
         con.execute("CREATE INDEX idx_type ON audits(doc_type)")
         con.execute("CREATE INDEX idx_class ON audits(record_class)")
         con.execute("CREATE INDEX idx_status ON audits(attribution_status)")
