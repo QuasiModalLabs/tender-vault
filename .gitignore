@@ -31,6 +31,34 @@ data/plans.db
 data/oag.db
 vault/intel/agencies/
 
+# data/notices.db is ignored for a DIFFERENT reason, and the difference is
+# worth keeping straight. It is not profile-filtered — notices_ingest stores
+# every federal notice with the publisher's own classification, so it would be
+# portable. It's 120MB, which is the whole reason: five fiscal years of tender
+# and award archives at ~45MB of CSV each. Rebuild it with
+# `python scripts/notices_ingest.py`; the archives are static for closed fiscal
+# years, so a rebuild returns the same rows rather than a re-scoring.
+data/notices.db
+
+# The evidence experiment's derived data. contracts_full.db is the SAME source
+# as contracts.db with the profile's IT term filter turned off — 962k rows and
+# 383MB, because a capability set spanning the corpus cannot be evidenced from
+# a corpus filtered to one firm's categories. casebook.db is its disclosure-date
+# derivation. Both rebuild from .cache/contracts.csv:
+#   python scripts/contracts_ingest.py --no-term-filter --db data/contracts_full.db \
+#          --window-years 12 --no-intel
+#   python scripts/casebook.py build-db
+data/contracts_full.db
+data/casebook.db
+
+# The cases themselves are ignored for a reason that is not size. truth.json
+# holds the sealed labels and predictions.jsonl holds what the evaluator said;
+# committing them would put the answer key in the repository, and the whole
+# protocol depends on the order in which those two files come into existence.
+# vault/reference/capabilities.yaml IS committed — the frozen registry is the
+# part that has to be public for the run to be reproducible.
+data/cases/
+
 # Working state — private. The reference material in vault/reference/ is
 # committed because it's how the system works. What we're actually bidding
 # on is not.

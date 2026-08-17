@@ -1,0 +1,70 @@
+# Capability registry for the analyst-blind evidence experiment.
+#
+# FROZEN. Selected by a deterministic rule (casebook.py
+# select_capabilities) reading only notices published before
+# 2023-04-01, the first evaluation date, so no case's outcome
+# window could influence which capabilities exist. Editing this file
+# changes matcher_hash and invalidates every case built against it.
+#
+# Each source keeps its own vocabulary and they are allowed to
+# disagree, the same way the profile keeps unspsc_families and
+# contracts_categories apart.
+
+frame_version: 1
+selection_cutoff: '2023-04-01'
+generated: '2026-08-16'
+capabilities:
+  - id: unspsc-25
+    label: "Commercial and Military and Private Vehicles and their Accessories and Components"
+    segment: '25'
+    notices:            # observed - the publisher's own classification
+      unspsc_families: ['25']
+    contracts:          # observed, but only the 8-digit UNSPSC minority
+      unspsc_families: ['25']
+      gsin_bridge: none   # measured: 0 notices carry both code systems
+
+  - id: unspsc-43
+    label: "Information Technology Broadcasting and Telecommunications"
+    segment: '43'
+    notices:            # observed - the publisher's own classification
+      unspsc_families: ['43']
+    contracts:          # observed, but only the 8-digit UNSPSC minority
+      unspsc_families: ['43']
+      gsin_bridge: none   # measured: 0 notices carry both code systems
+
+  - id: unspsc-56
+    label: "Furniture and Furnishings"
+    segment: '56'
+    notices:            # observed - the publisher's own classification
+      unspsc_families: ['56']
+    contracts:          # observed, but only the 8-digit UNSPSC minority
+      unspsc_families: ['56']
+      gsin_bridge: none   # measured: 0 notices carry both code systems
+
+  - id: unspsc-72
+    label: "Building and Facility Construction and Maintenance Services"
+    segment: '72'
+    notices:            # observed - the publisher's own classification
+      unspsc_families: ['72']
+    contracts:          # observed, but only the 8-digit UNSPSC minority
+      unspsc_families: ['72']
+      gsin_bridge: none   # measured: 0 notices carry both code systems
+
+  - id: unspsc-80
+    label: "Management and Business Professionals and Administrative Services"
+    segment: '80'
+    notices:            # observed - the publisher's own classification
+      unspsc_families: ['80']
+    contracts:          # observed, but only the 8-digit UNSPSC minority
+      unspsc_families: ['80']
+      gsin_bridge: none   # measured: 0 notices carry both code systems
+
+  - id: unspsc-81
+    label: "Engineering and Research and Technology Based Services"
+    segment: '81'
+    notices:            # observed - the publisher's own classification
+      unspsc_families: ['81']
+    contracts:          # observed, but only the 8-digit UNSPSC minority
+      unspsc_families: ['81']
+      gsin_bridge: none   # measured: 0 notices carry both code systems
+

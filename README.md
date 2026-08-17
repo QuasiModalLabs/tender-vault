@@ -166,6 +166,32 @@ The answer to the heading is more qualified than I expected. `planning_explanati
 
 The audit layer holds up better. Its top-ranked results are recognizable: *Modernizing Information Technology Systems*, *Combatting Cybercrime*, *Cybersecurity in the Cloud*. Shared Services Canada, the federal government's IT department, recurs throughout.
 
+## Then I measured it, and it didn't hold
+
+Everything above this line is the case for convergence made from examples. One chain that held, a top-ranked list that looks right. That is how you convince yourself of something, not how you check it, so I built the backtest before building anything else on top: `python scripts/backtest.py`.
+
+The setup. For each federal department and each fiscal year, take only what was public six months before the year opened — audits, stated plans, incumbent contracts running down — and ask whether it predicts that the department published a relevant IT tender during that year. The target is written into [`scripts/backtest.py`](scripts/backtest.py)'s docstring and frozen before any feature exists, `as_of(T)` is the only way feature code touches data, and the leak tests in `tests/test_backtest.py` assert nothing dated after T ever comes back through it.
+
+This needed history the repo didn't have, and it turned out to be sitting in plain sight: CanadaBuys publishes **per-fiscal-year archives of every notice back to 2009**, on the same host and with the same 67 columns as the live feed, plus award notices that link to them on `solicitationNumber` — 60% of them match, against 4 in 1.3 million for the route through the contracts CSV. `scripts/notices_ingest.py` reads them into an append-only table. That is the first thing in this project with a real past tense.
+
+**The base rate is the whole story, and I nearly missed it.** 88% of department-years already contain an IT award. Asked as *will this department buy IT next year*, the answer is yes and no evidence is required. Even on the tightened target the pooled base rate is 68.6%, and in the largest third of departments it is 94% — there is almost no room left to be right in a way that counts. The unit had to be checked too: department × calendar half-year swings 27.7%–68.1% across eight years, which is unusable, and department × *fiscal* year holds inside 12pp. Fiscal-year-end concentration and a quarter of reporting lag, not noise.
+
+And then the finding, which is a null:
+
+| | uncontrolled | inside a size stratum |
+|---|---|---|
+| `audit_it` | 1.46× | 1.06× (large), 1.41× on n=6 (medium) |
+| `expiring_awards` | 1.37× | 0.98× (large), 1.00× (medium) |
+| `plan_intent` | 1.19× | 1.06× (large), 1.26× on n=10 (medium) |
+
+**Zero of fifteen feature-by-stratum comparisons survive.** Not one lift above 1.0 whose interval excludes its own stratum's base rate. The Auditor General audits large departments; large departments tender constantly; `audit_it` was reading the second fact through the first. Control for how much a department buys and every signal collapses.
+
+The fitted score does beat chance at a ten-department alert budget — 27 of 30 across three held-out years against 20.7 expected. It should. Ranking organizations by how much IT they buy predicts whether they will buy IT again, and 5 to 8 of each top ten are simply the biggest buyers. That is worth knowing and it is not the pre-RFP thesis.
+
+What it doesn't establish, and I want to be precise here rather than generous to myself: this tested *whether a department tenders anything relevant at all in a year*. That is a coarse question with a 68.6% base rate, and the dossier's actual use has always been *what* is coming and *why now* — a specific system, a named incumbent, a date. Nothing here speaks to that, because three fiscal years of department-years cannot. So the honest reading is not "the evidence is worthless"; it is **"convergence at the department level is not a prediction, and I was one graph away from building as though it were."** The next experiment needs a finer target, and it needs more years than CanadaBuys has published since 2022.
+
+The one design rule I held to throughout: the score lives in the backtest module and nowhere else. `vault/CLAUDE.md`, the dossier and the briefing skill are untouched, and no MCP tool returns a number. A score is allowed there because it is the hypothesis under test — the thing being measured — and every weight in it is fitted out of fold. A weight I chose by hand would be the formula I deleted at the start of this project, wearing a lab coat.
+
 ## The failure worth recording
 
 I also tried to mine the contracts data for two things that would have been genuinely valuable, and both failed on the same wall.
@@ -349,6 +375,16 @@ python scripts/plans_ingest.py         # departmental-plan signal, ~1 min
 python scripts/oag_ingest.py           # Auditor General signal, ~1 min
 ```
 
+To re-run the backtest rather than take my word for the null, add the notice
+history and point it at them. The archives are static for closed fiscal years,
+so this is a download rather than a re-scoring:
+
+```bash
+python scripts/notices_ingest.py       # ~340MB of archives -> data/notices.db
+python scripts/backtest.py --write     # report to vault/reference/
+python tests/test_backtest.py          # the leak tests, which are the point
+```
+
 Then either open Claude Code in the repo root and ask *"any good federal IT tenders for us this week?"*, or wire it into Claude Desktop as an MCP server.
 
 **Nothing derived is committed.** Every layer is filtered and scored against your profile, so the same source data produces different results for different firms — which makes a shipped database actively misleading rather than a convenience. Only `data/crosswalk.db` ships, because it derives from `org_aliases.yaml` and is a fact about the Government of Canada rather than about any one firm. The venv is optional for the commands above but required for the MCP path.
@@ -374,7 +410,8 @@ The contracts and plans refresh workflows are manual-dispatch only. They rebuilt
 9. [`scripts/plans_ingest.py`](scripts/plans_ingest.py) — the two-pole scoring technique, with the docstring explaining why the forward-looking field beats the retrospective one.
 10. [`scripts/contracts_ingest.py`](scripts/contracts_ingest.py) — streaming filter over millions of rows into SQLite; the design notes are in the module docstring.
 11. [`scripts/oag_ingest.py`](scripts/oag_ingest.py) — the audit pull, relevance scoring, and department attribution.
-12. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how data stays fresh without me remembering.
+12. [`scripts/backtest.py`](scripts/backtest.py) — the experiment that checked the premise, and the module docstring is most of why it's here: the frozen target predicate, a per-feature table of why each input was knowable at the date it's read as of, and the argument for why a score is permitted in that one file and nowhere else. It also carries the record of the one time the predicate changed, before any result existed, and why that run was discarded rather than patched.
+13. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how data stays fresh without me remembering.
 
 ## What comes next
 
@@ -392,6 +429,7 @@ None of these need new infrastructure. That's mostly what the markdown-first des
 ## Sources and licence
 
 - [CanadaBuys tender notices](https://canadabuys.canada.ca/en/tender-opportunities) — active federal opportunities
+- [CanadaBuys tender notice archives](https://open.canada.ca/data/en/dataset/6abd20d4-7a1c-4b38-baa2-9525d0bb2fd2) and [award notices](https://open.canada.ca/data/en/dataset/a1acb126-9ce8-40a9-b889-5da2b1dd20cb) — per-fiscal-year history back to 2009, publication-dated; what the backtest runs on
 - [Proactive Publication of Contracts](https://open.canada.ca/data/en/dataset/d8f85d91-7dec-4fd1-8055-483b77225d8b) — awarded federal contracts over $10K
 - [GC InfoBase Departmental Plans / Results](https://open.canada.ca/data/en/dataset/b15ee8d7-2ac0-4656-8330-6c60d085cda8) — planned spending and forward-looking planning prose
 - [Office of the Auditor General](https://open.canada.ca/data/en/organization/oag-bvg) — performance audits, via the open.canada.ca CKAN API
