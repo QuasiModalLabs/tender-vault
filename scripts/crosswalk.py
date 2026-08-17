@@ -395,6 +395,12 @@ ATTESTATION_HEADER = """\
 # `last_seen` not advancing on a run means the name was not observed that day.
 # Only a name that has NEVER been observed, and so has no record here at all, is
 # an error — see tests/test_crosswalk.py.
+#
+# The daily ingest workflow runs --attest after every ingest that found a
+# changed feed, so `last_seen` reads as "the most recent day a published feed
+# carried this name". Before that it was whenever someone remembered, against a
+# feed sampled once a week — which is how the two bootstrap records below came
+# to exist at all.
 """
 
 

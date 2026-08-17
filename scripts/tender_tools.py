@@ -232,11 +232,23 @@ def _yaml_list(raw: str) -> list[str]:
 # A rebuild off an unchanged cache moves the second and not the first, and that
 # is a filter or profile change rather than new notices.
 #
+# Plus `feed_sha256`, which answers a third question neither date can: WHICH
+# feed, as opposed to when it arrived here. Dates are per-machine and a hash is
+# not, so the hash is what makes two machines comparable at all. Both are kept
+# — a hash cannot say how old anything is — and `_corpus_provenance` records
+# which of the two it compared on rather than leaving the reader to guess.
+#
 # NO THRESHOLD, and deliberately no "stale" field. How old is too old is not
-# stateable — the ingest cron is weekly, so two days is normal — and a boolean
-# verdict in a data field is the kind of judgement this project keeps out of
-# its tools. Report the stamps beside the newest digest's and let the reader
-# compare two observed dates.
+# stateable — the ingest cron runs daily but only rebuilds when the published
+# feed moved, so a corpus several days old can be perfectly current — and a
+# boolean verdict in a data field is the kind of judgement this project keeps
+# out of its tools. Report the stamps beside the newest digest's and let the
+# reader compare two observed facts.
+#
+# Note that the daily cadence made the threshold LESS stateable, not more. An
+# age in days now measures the publisher's release schedule as much as this
+# machine's, and the hash answers the question an age was being used to
+# approximate anyway.
 
 def _digest_frontmatter(path: Path) -> dict[str, str]:
     """
@@ -359,10 +371,52 @@ def _corpus_provenance() -> dict:
     else:
         out["newest_digest_state"] = "stamped"
 
-    # The comparison, and it reads BOTH stamps. "The digest is newer so I am
-    # behind" only holds if the FEED moved; an equal feed stamp with a later
-    # build is a rebuild of the same data.
-    if local_state == "stamped" and d_feed is not None:
+    # The comparison. It prefers the feed HASH over the feed timestamp, and the
+    # difference is not cosmetic: `feed_downloaded_at` records when a machine
+    # downloaded, so two machines that fetched the same bytes at different
+    # moments disagree on it while holding identical data. At one ingest a week
+    # that mismatch was rare enough to live with. At one a day it is the common
+    # case, and it would tell a reader to re-ingest every morning to acquire a
+    # feed they already have.
+    #
+    # `basis` names which comparison actually ran, because "the hashes differ"
+    # and "there was no hash to compare" are different findings and the reader
+    # cannot tell them apart from the reading alone. Same rule that keeps
+    # `unstamped` and `no_feed_at_build` separate, one level down.
+    #
+    # Still no threshold and still no boolean anywhere — see the note above the
+    # digest helpers, and test_provenance.test_no_verdict_field, which fails if
+    # a verdict is ever added here.
+    local_hash, digest_hash = meta.get("feed_sha256"), fm.get("feed_sha256") or None
+    if local_hash and digest_hash:
+        out["feed_sha256"] = local_hash
+        out["newest_digest_feed_sha256"] = digest_hash
+        out["basis"] = "feed_sha256"
+        if local_hash == digest_hash:
+            if built_at == d_built:
+                out["reading"] = "this corpus produced the newest digest"
+            else:
+                out["reading"] = (
+                    "same feed, different build — a membership difference is a "
+                    "filter or profile effect, not new notices")
+        else:
+            # Hashes are not ordered, so which side is newer is a question the
+            # hash cannot answer. The timestamps can, and are read ONLY here,
+            # where the data is already known to differ.
+            if feed_at is not None and d_feed is not None and feed_at < d_feed:
+                out["reading"] = (
+                    "behind on data — the newest digest was built from a "
+                    "different feed, downloaded later than this one. "
+                    "Run: python scripts/ingest.py")
+            elif feed_at is not None and d_feed is not None:
+                out["reading"] = (
+                    "this machine has a feed the newest digest has not seen")
+            else:
+                out["reading"] = (
+                    "different feeds, and no pair of download dates to order "
+                    "them by. Re-ingest if this machine's corpus matters.")
+    elif local_state == "stamped" and d_feed is not None:
+        out["basis"] = "feed_downloaded_at"
         if feed_at == d_feed:
             if built_at == d_built:
                 out["reading"] = "this corpus produced the newest digest"
@@ -377,6 +431,15 @@ def _corpus_provenance() -> dict:
         else:
             out["reading"] = (
                 "this machine has a feed the newest digest has not seen")
+        # Said out loud rather than left to be inferred: a download date is a
+        # weaker instrument than a hash, and one side of this comparison
+        # predates hashing. Equal dates here are not proof of equal data.
+        out["basis_note"] = (
+            "Compared on download dates because "
+            + ("the newest digest carries no feed_sha256"
+               if local_hash else "this corpus carries no feed_sha256")
+            + ". Dates are per-machine, so this cannot distinguish the same "
+              "feed fetched twice from two different feeds.")
     return out
 
 
@@ -1861,7 +1924,7 @@ def _window_fields(meta: dict) -> dict:
     `closing_window` and `days_until_close` for a corpus notice, computed now.
 
     Deliberately not stored in ChromaDB. Both values depend on today's date, and
-    a corpus is read for up to a week after it is built — a stored `imminent`
+    a corpus is read for days after it is built — a stored `imminent`
     would still say `imminent` after the notice had closed. Computing here means
     a briefing written three days after an ingest sees the truth on the day it
     is written, including notices that expired in between.

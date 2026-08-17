@@ -455,10 +455,12 @@ def test_no_verdict_field(tmp: Path) -> None:
     """
     There is deliberately no `stale` field, and no threshold anywhere.
 
-    How old is too old is not stateable — the ingest cron is weekly, so two
-    days old is normal — and a boolean verdict in a data field is exactly the
+    How old is too old is not stateable — the ingest cron runs daily but only
+    rebuilds when the published feed moved, so a corpus several days old can be
+    perfectly current — and a boolean verdict in a data field is exactly the
     judgement `vault/CLAUDE.md` keeps out of these tools. Asserted rather than
-    trusted, because "a boolean would be convenient here" is how it comes back.
+    trusted, because "a boolean would be convenient here" is how it comes back,
+    and a daily cadence is precisely the situation that makes it tempting.
     """
     print("\nNo verdict field")
     digests = tmp / "digests-verdict"

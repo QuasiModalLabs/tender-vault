@@ -36,7 +36,7 @@ Memory is now literal. Tenders I care about get promoted out of the search corpu
 
 That last part turned out to matter more than expected. Because every decision is a readable file, a year from now I can search the vault for "lost to incumbent" and find the pattern. That's a hard question to ask a database.
 
-The split is deliberate: the search corpus is rebuilt from scratch every week and holds everything; the vault holds only the handful worth attention and never gets overwritten. Most tenders are noise. A few deserve persistent context. The storage matches the reality.
+The split is deliberate: the search corpus is rebuilt from scratch on every ingest and holds everything; the vault holds only the handful worth attention and never gets overwritten. Most tenders are noise. A few deserve persistent context. The storage matches the reality.
 
 ### Then the files started linking to each other
 
@@ -146,7 +146,7 @@ Plans and audits sit in between: prose with structure. Their text gets scored on
 
 Research that spans weeks needs to know how old its evidence is, so every `list-corpus` and `get` carries a `provenance` block rather than leaving that to inference.
 
-There are **two stamps, because they answer different questions.** `feed_downloaded_at` is how old the data is; `corpus_built_at` is when it was last processed. A rebuild off an unchanged feed moves the second and not the first — so if corpus membership changes across that, it's a filter or profile effect rather than new notices. The block also carries the same two stamps from the newest committed digest, which makes a local corpus running behind the weekly CI run say so out loud, with the fix (`git pull`, then re-ingest).
+There are **two stamps, because they answer different questions.** `feed_downloaded_at` is how old the data is; `corpus_built_at` is when it was last processed. A rebuild off an unchanged feed moves the second and not the first — so if corpus membership changes across that, it's a filter or profile effect rather than new notices. A third stamp, `feed_sha256`, answers the question neither date can: *which* feed, by content. That one is comparable across machines — download dates are not, since two machines holding identical bytes disagree on when they fetched them — so the block reports which of the two it compared on. It carries the same stamps from the newest committed digest, which makes a local corpus running behind the daily CI run say so out loud, with the fix (`git pull`, then re-ingest).
 
 Stamps rather than file timestamps, because ChromaDB rewrites its segment files whenever anything *loads* the collection: `chroma_db/` mtimes report when the corpus was last queried, not when it was built. Read them and you're describing your own read.
 
@@ -259,9 +259,9 @@ Two findings about the audits cost me a day. An audit rarely has one department:
 
 The second is that most of the OAG corpus audits nobody. Of 364 records, about 110 examine a federal department. The rest are committee briefing packages, the Auditor General's own quarterly financials, Crown corporation examinations and territorial audits. Counting those as unattributed invented a 62% coverage gap that was never real. The figure worth quoting is 91% of the federal audits.
 
-## What four weeks of counting produced
+## What four independent ingests produced
 
-The first thing this thing told me that I didn't already believe came out of counting the same number four weeks running.
+The first thing this thing told me that I didn't already believe came out of counting the same number four ingests running.
 
 Two federal IT supply arrangements matter here. **SBIPS** sells outcomes — solution delivery priced as a result, the structural opposite of the body-shop work the profile excludes. **TBIPS** sells resource categories and levels, which is precisely the work we'd rather not do. On fit, it isn't close: SBIPS is the one to want.
 
@@ -274,7 +274,7 @@ Every weekly briefing records how many notices each vehicle *gated* — listings
 | 2026-08-09 | 53 | 0 | 9 | 7 |
 | 2026-08-11 | 71 | 0 | 15 | 13 |
 
-Four independent ingests. The vehicle that fits the profile best produces no observable call-up traffic at all; the vehicle that fits worst gates everything, and its share is growing. That's the argument for qualifying on TBIPS *despite* preferring SBIPS, and no single week could have made it — one reading is an anecdote, four is a series. The denominators move with the corpus and with one filter change partway through; the SBIPS zero is unaffected by both, since a filter that hid near-close notices could only ever have hidden traffic, not invented it.
+Four independent ingests — note the dates, which are two and three days apart, not seven. What makes them independent is that the published feed moved between them, and since the switch to a daily cadence that is recorded rather than assumed: each ingest stamps the feed's content hash, and two readings sharing a hash are one reading counted twice. The vehicle that fits the profile best produces no observable call-up traffic at all; the vehicle that fits worst gates everything, and its share is growing. That's the argument for qualifying on TBIPS *despite* preferring SBIPS, and no single reading could have made it — one is an anecdote, four is a series. The denominators move with the corpus and with one filter change partway through; the SBIPS zero is unaffected by both, since a filter that hid near-close notices could only ever have hidden traffic, not invented it.
 
 Two refinements came out of the counting, and both cut the headline number down.
 
@@ -335,7 +335,7 @@ The presentation rules turned out to carry design weight, because a template is 
 
 **The tender documents themselves are off-limits to the code.** The notice is public; the RFP package it points at is not. Those live on commercial platforms — Ariba, MERX — behind account walls that exist to know who took the document, and getting past one programmatically means holding a credential and behaving like a browser. This project deliberately doesn't scrape them, and there's no fetcher anywhere in it to quietly grow into one. This paragraph is the whole record of that decision; the diagnostic that established it was a throwaway and wasn't kept.
 
-**Attachments are a manual drop, and that is the same decision rather than a reversal of it.** `attach <tender_id>` creates a folder beside the tender note and prints its path. A human opens MERX or Ariba in a browser, signs in, downloads the package, and drops the files there; `list-attachments` extracts the text and `read-attachment` pages through it. Nothing in that path touches the platform — the code reads a directory. The extracted text stays out of git and out of the ChromaDB corpus, because it's third-party content from a commercial platform and the extraction is that same content in another encoding. The corpus exclusion is also structural: it's rebuilt from scratch weekly with no survival exemptions, and a document that outlived a rebuild would be the first thing to break that.
+**Attachments are a manual drop, and that is the same decision rather than a reversal of it.** `attach <tender_id>` creates a folder beside the tender note and prints its path. A human opens MERX or Ariba in a browser, signs in, downloads the package, and drops the files there; `list-attachments` extracts the text and `read-attachment` pages through it. Nothing in that path touches the platform — the code reads a directory. The extracted text stays out of git and out of the ChromaDB corpus, because it's third-party content from a commercial platform and the extraction is that same content in another encoding. The corpus exclusion is also structural: it's rebuilt from scratch on every ingest with no survival exemptions, and a document that outlived a rebuild would be the first thing to break that.
 
 ## The profile
 
@@ -393,7 +393,7 @@ The contracts layer is a further ~630MB download (`python scripts/contracts_inge
 
 **Full install, MCP configuration, and troubleshooting: [`docs/SETUP.md`](docs/SETUP.md).**
 
-Fresh tender data arrives on its own — a GitHub Action re-runs the tender ingest every Monday and commits a markdown digest with a *new this week* section diffed against the previous run. A month of digests is its own artifact: you can see the corpus shift.
+Fresh tender data arrives on its own — a GitHub Action re-runs the tender ingest every morning and commits a markdown digest with a *new since* section diffed against the previous run. It only rebuilds when the published feed actually moved, which it checks with a conditional request rather than a clock — so outside the unconditional Monday rebuild, a digest existing for a date means the feed moved that day. A month of digests is its own artifact: you can see the corpus shift.
 
 The contracts and plans refresh workflows are manual-dispatch only. They rebuilt databases that are no longer committed, so on a schedule they would run and commit nothing — rebuild those locally when you want fresh data.
 
@@ -411,14 +411,14 @@ The contracts and plans refresh workflows are manual-dispatch only. They rebuilt
 10. [`scripts/contracts_ingest.py`](scripts/contracts_ingest.py) — streaming filter over millions of rows into SQLite; the design notes are in the module docstring.
 11. [`scripts/oag_ingest.py`](scripts/oag_ingest.py) — the audit pull, relevance scoring, and department attribution.
 12. [`scripts/backtest.py`](scripts/backtest.py) — the experiment that checked the premise, and the module docstring is most of why it's here: the frozen target predicate, a per-feature table of why each input was knowable at the date it's read as of, and the argument for why a score is permitted in that one file and nowhere else. It also carries the record of the one time the predicate changed, before any result existed, and why that run was discarded rather than patched.
-13. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how data stays fresh without me remembering.
+13. [`.github/workflows/ingest.yml`](.github/workflows/ingest.yml) — how data stays fresh without me remembering.
 
 ## What comes next
 
 - **A department-level tender index.** The dossier reads the open-notice feed directly and resolves entity names per query, which is fine at the ~900 notices the feed carried in August 2026 and won't be at ten thousand. The attribution belongs at ingest, next to where the audits already write theirs.
 - **A pre-mortem command.** For any tender under serious consideration: *assume we bid and lost, or won and regretted it — walk backwards and tell me why.* One adversarial pass against my own enthusiasm before committing. This is the surviving core of a multi-persona "steering committee" feature I cut mid-build; the personas changed tone without changing reasoning, but the skepticism they were reaching for is real.
 - **A profile refinement loop.** Quarterly, read across everything watched, parked, and archived, and propose profile edits based on revealed preference. One structural catch to design around: the vault only knows about tenders that survived the filter, so it can improve precision but is blind to recall. It has to be paired with an audit that samples what the filter *rejected*.
-- **The tier decision, and the count that follows it.** The gating series says qualify on TBIPS; it doesn't yet say at which tier, region and resource categories. Once that's chosen, the reachable count gets re-derived against it — and the series keeps running either way, since the value of a weekly zero is that it accumulates.
+- **The tier decision, and the count that follows it.** The gating series says qualify on TBIPS; it doesn't yet say at which tier, region and resource categories. Once that's chosen, the reachable count gets re-derived against it — and the series keeps running either way, since the value of a verified zero is that it accumulates.
 - **Similarity drift.** Flag a new tender that closely resembles one archived as a loss.
 - **Win/loss pattern mining**, once the archive is deep enough to say things like *we lose every tender that requires active SOC work*.
 
