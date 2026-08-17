@@ -8,10 +8,17 @@ Data:     https://canadabuys.canada.ca/opendata/pub/{FY}-TenderNotice-AvisAppelO
 Licence:  Open Government Licence - Canada.
 
 WHY THIS EXISTS. `ingest.py` reads openTenderNotice — notices open on the day it
-ran. It is a snapshot, it is destroyed and rebuilt weekly, and no row in it
-carries a date saying when it was first seen. So the repo could describe what is
-open today and could not answer a single question about the past: the digests in
-vault/digests/ are the only longitudinal record and they cover four weeks.
+ran. It is a snapshot, it is destroyed and rebuilt on every ingest, and no row in
+it carries a date saying when it was first seen. So the repo could describe what
+is open today and could not answer a single question about the past: the digests
+in vault/digests/ are the only longitudinal record and they cover a few weeks.
+
+Moving that ingest to a daily cadence does not change this. It sharpens the
+digest chain from weekly to daily resolution, which is worth having, but a
+snapshot of what is open still cannot reach back before the day it first ran —
+and `first_seen` here remains a fact about when THIS PROJECT looked, never about
+when the public could see a row. casebook.py suppresses it for that reason and a
+finer-grained stamp does not make it admissible.
 
 The fiscal-year archives fix that, and cheaply. Same host, same WAF (a bare
 python-requests UA gets a 403 — REQUEST_HEADERS is required), and the SAME 67

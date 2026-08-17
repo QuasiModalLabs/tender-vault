@@ -9,12 +9,15 @@ down to ~200-400 that actually match the profile.
 Usage:
     python scripts/ingest.py
     python scripts/ingest.py --profile vault/profiles/my-company.md
-    python scripts/ingest.py --force  # re-download even if cached
+    python scripts/ingest.py --force            # re-download even if cached
+    python scripts/ingest.py --skip-unchanged   # no-op when the feed hasn't moved
 """
 from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
+import json
 import re
 import shutil
 import sqlite3
@@ -714,23 +717,154 @@ def parse_profile(profile_path: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Data download — cache aggressively
+# Data download — revalidate rather than guess from a clock
 # ---------------------------------------------------------------------------
 
-def download_tenders(cache_path: Path, force: bool = False) -> pd.DataFrame:
-    """Download tender CSV, cached to disk for 12 hours."""
-    if not force and cache_path.exists():
-        age = datetime.now() - datetime.fromtimestamp(cache_path.stat().st_mtime)
-        if age < timedelta(hours=12):
-            print(f"Using cached CSV ({age.total_seconds() / 3600:.1f}h old)")
-            return pd.read_csv(cache_path, low_memory=False)
+def _validators_path(cache_path: Path) -> Path:
+    """Where the publisher's cache validators for `cache_path` are recorded."""
+    return cache_path.with_name(cache_path.name + ".http.json")
 
-    print("Downloading open tender notices from Canada Buys (may take a minute)...")
-    response = requests.get(TENDER_URL, headers=REQUEST_HEADERS, timeout=180)
+
+def _load_validators(cache_path: Path) -> dict:
+    """ETag / Last-Modified recorded alongside the cached feed. {} when absent."""
+    try:
+        loaded = json.loads(_validators_path(cache_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def download_tenders(cache_path: Path, force: bool = False) -> pd.DataFrame:
+    """
+    Download the tender CSV, revalidating against the PUBLISHER rather than a clock.
+
+    CanadaBuys serves this file from Azure Blob Storage, which sends `ETag` and
+    `Last-Modified`. So "has the feed moved" is a question the publisher will
+    answer directly, for the cost of one conditional request — and the answer is
+    a fact about the data instead of an inference from how long ago we asked.
+    That matters more the more often this runs: on a daily cadence a clock-based
+    cache either re-downloads 6.7MB to learn nothing, or withholds a feed that
+    did move, depending on which side of the TTL the run lands.
+
+    A 304 deliberately leaves the cached file's mtime alone, which is what makes
+    `_feed_mtime_iso` mean "when the data last arrived" rather than "when we last
+    asked". The 12-hour TTL survives as the fallback for a response that carries
+    no validators at all.
+
+    A failed request RAISES rather than falling back to the cache. Serving stale
+    bytes under a fresh build stamp is the one outcome the provenance states
+    downstream cannot represent.
+    """
+    validators = {} if force else _load_validators(cache_path)
+    headers = dict(REQUEST_HEADERS)
+
+    if not force and cache_path.exists():
+        if validators.get("etag"):
+            headers["If-None-Match"] = validators["etag"]
+        elif validators.get("last_modified"):
+            headers["If-Modified-Since"] = validators["last_modified"]
+        else:
+            age = datetime.now() - datetime.fromtimestamp(cache_path.stat().st_mtime)
+            if age < timedelta(hours=12):
+                print(f"Using cached CSV ({age.total_seconds() / 3600:.1f}h old; "
+                      f"no validator recorded, so this is the 12h fallback)")
+                return pd.read_csv(cache_path, low_memory=False)
+
+    conditional = "If-None-Match" in headers or "If-Modified-Since" in headers
+    print("Checking Canada Buys for a newer tender feed..." if conditional
+          else "Downloading open tender notices from Canada Buys (may take a minute)...")
+    response = requests.get(TENDER_URL, headers=headers, timeout=180)
+
+    if response.status_code == 304:
+        print("  304 Not Modified — the published feed is the one already cached.")
+        return pd.read_csv(cache_path, low_memory=False)
+
     response.raise_for_status()
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_bytes(response.content)
+
+    # Recorded only on a body we actually stored, so the validators can never
+    # describe a file other than the one on disk.
+    _validators_path(cache_path).write_text(
+        json.dumps({"etag": response.headers.get("ETag", ""),
+                    "last_modified": response.headers.get("Last-Modified", ""),
+                    "fetched_at": datetime.now().isoformat(timespec="seconds")},
+                   indent=2) + "\n",
+        encoding="utf-8", newline="\n")
+    print(f"  downloaded {len(response.content):,} bytes")
     return pd.read_csv(cache_path, low_memory=False)
+
+
+# ---------------------------------------------------------------------------
+# Corpus identity — what a build was made FROM, by content
+# ---------------------------------------------------------------------------
+
+def _sha256_file(path: Optional[Path]) -> Optional[str]:
+    """Content hash of a file, or None when there is no file to hash."""
+    if path is None or not Path(path).exists():
+        return None
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def corpus_identity(feed_path: Optional[Path],
+                    profile_path: Optional[Path]) -> dict[str, str]:
+    """
+    The inputs this corpus was built from, identified by CONTENT.
+
+    Two hashes, because the two answer different questions and a rebuild that
+    changes one is a different event from a rebuild that changes the other. A
+    new `feed_sha256` is new notices; a new `profile_sha256` is a re-scoring of
+    the same ones. `feed_downloaded_at` cannot separate them — it moves whenever
+    bytes arrive, including when the bytes are identical — which is tolerable at
+    one run a week and is a daily false alarm at one run a day.
+
+    Keys are OMITTED when unknown, never None, for the reason `_write_chroma`
+    documents: Chroma raises on a None metadata value. An absent key means "no
+    hash to compare", which is a different finding from "the hashes differ" and
+    must stay distinguishable downstream.
+
+    Deliberately NOT a hash of this file. A change to the filter code alters the
+    corpus without altering either input, so `--skip-unchanged` would sit on a
+    stale build after a deploy. Run without the flag when the code changes; the
+    flag is for the scheduled case, where the code is fixed and the feed is not.
+    """
+    out: dict[str, str] = {}
+    feed = _sha256_file(feed_path)
+    if feed is not None:
+        out["feed_sha256"] = feed
+    profile = _sha256_file(profile_path)
+    if profile is not None:
+        out["profile_sha256"] = profile
+    return out
+
+
+# The identity of the build that produced a corpus, kept INSIDE the corpus
+# directory. Two reasons it is a file rather than a read of the collection
+# metadata that carries the same values. First, opening a ChromaDB client takes
+# OS-level handles on the directory for the life of the process, and
+# `build_chroma` renames that directory — reading the corpus to decide whether
+# to replace it would break replacing it, on Windows, exactly as the comment
+# there records. Second, it needs no chromadb import and no dependency on
+# Chroma's storage schema.
+#
+# The collection metadata remains the portable record: this file is local and
+# gitignored with the rest of chroma_db/, and only ever an optimisation. When it
+# is missing the answer is "rebuild", which is the safe direction.
+IDENTITY_FILENAME = "corpus-identity.json"
+
+
+def stored_identity(db_path: Path) -> dict[str, str]:
+    """Identity of the corpus already at `db_path`. {} when there isn't one."""
+    try:
+        loaded = json.loads(
+            (db_path / IDENTITY_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 # ---------------------------------------------------------------------------
@@ -845,7 +979,7 @@ def matched_competencies(text: str, competencies: list[str]) -> list[str]:
     # "flaws", "withdrawals", or the French "travaux". The old substring version
     # inflated the corpus with archaeology and bridge tenders that merely
     # contained the letters a-w-s, and surfaced a $3.75M exhibits contract as a
-    # top "AWS" result in the weekly digest. Multi-word competencies like
+    # top "AWS" result in the digest. Multi-word competencies like
     # "it modernization" still match as a phrase with boundaries at each end.
     text_lower = text.lower()
     matched = []
@@ -1152,6 +1286,13 @@ def _feed_mtime_iso(feed_path: Optional[Path]) -> Optional[str]:
     only way to tell "I have newer data" from "I re-ran the ingest" — which
     matters because only the first one changes what is in the corpus.
 
+    Still a LOCAL fact, and that is its limit: two machines that downloaded the
+    same bytes an hour apart carry different values here, so this date orders
+    events on one machine and cannot compare two. `feed_sha256` is what does
+    that — see corpus_identity. Kept because "when did this arrive" is a real
+    question that a hash cannot answer, and because a 304 now leaves it alone,
+    which makes it mean when the data last arrived rather than when we last asked.
+
     Returns None rather than raising: --cache can point anywhere, and a test
     harness that drives build_chroma directly has no feed at all.
     """
@@ -1162,7 +1303,8 @@ def _feed_mtime_iso(feed_path: Optional[Path]) -> Optional[str]:
 
 
 def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
-                 feed_path: Optional[Path] = None) -> None:
+                 feed_path: Optional[Path] = None,
+                 identity: Optional[dict] = None) -> None:
     """
     Embed filtered tenders and write to a persistent ChromaDB collection.
 
@@ -1170,6 +1312,10 @@ def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
     keyword-defaulted because tests drive this directly with no feed on disk;
     absent means the corpus is stamped with a build time and no feed date,
     which is a different fact from an unstamped corpus.
+
+    `identity` is `corpus_identity()` for this build — content hashes of the
+    inputs. Also optional and for the same reason, and an absent hash stays
+    absent rather than becoming a placeholder.
     """
     # Imported here, not at module level: this is the only function that needs
     # ChromaDB, and contracts_ingest.py imports this module purely for its
@@ -1194,7 +1340,7 @@ def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
         db_path.rename(retired)
 
     try:
-        _write_chroma(df, db_path, cols, feed_path)
+        _write_chroma(df, db_path, cols, feed_path, identity)
     except BaseException:
         if retired is not None:
             # Best effort: clear whatever partial exists and put the old corpus
@@ -1217,12 +1363,22 @@ def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
                     f"To restore:  rm -rf {db_path} && mv {retired} {db_path}\n"
                 )
         raise
+
+    # AFTER the build succeeds, never before. This file is what --skip-unchanged
+    # trusts, so it must not be able to describe a corpus that was never
+    # completed — an absent file costs a rebuild, a premature one costs a
+    # silently stale corpus.
+    (db_path / IDENTITY_FILENAME).write_text(
+        json.dumps(identity or {}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8", newline="\n")
+
     if retired is not None:
         shutil.rmtree(retired, ignore_errors=True)
 
 
 def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
-                  feed_path: Optional[Path] = None) -> None:
+                  feed_path: Optional[Path] = None,
+                  identity: Optional[dict] = None) -> None:
     """Embed and write. Split out so build_chroma owns the rollback logic."""
     import chromadb
     from chromadb.utils import embedding_functions
@@ -1248,6 +1404,13 @@ def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
     feed_at = _feed_mtime_iso(feed_path)
     if feed_at is not None:
         provenance["feed_downloaded_at"] = feed_at
+
+    # The content hashes ride alongside the timestamps rather than replacing
+    # them. A timestamp says when something happened here; a hash says which
+    # bytes it happened to, and only the second one is comparable across two
+    # machines that downloaded the same feed at different moments. Already
+    # omit-when-unknown by construction — see corpus_identity.
+    provenance.update(identity or {})
 
     collection = client.create_collection(
         name="tenders",
@@ -1348,7 +1511,22 @@ def main():
              "non-default CSV redirects output to a .sample path unless this is "
              "given, so a spot-check can't replace the real corpus.",
     )
-    parser.add_argument("--force", action="store_true", help="Re-download CSV even if cached")
+    parser.add_argument("--force", action="store_true",
+                        help="Re-download CSV unconditionally, ignoring both the "
+                             "publisher's validators and the cache")
+    parser.add_argument(
+        "--skip-unchanged", action="store_true",
+        help="Exit 0 without rebuilding when the feed and the profile are both "
+             "byte-identical to what the existing corpus was built from. For "
+             "scheduled runs. Does NOT notice a change to this script, so run "
+             "without it after a code change.",
+    )
+    parser.add_argument(
+        "--status-file", type=Path, default=None,
+        help="Write `rebuilt` or `unchanged` here. Lets a scheduled job decide "
+             "whether there is anything to digest without parsing stdout, and "
+             "without this script knowing what a CI runner is.",
+    )
     parser.add_argument(
         "--extract-values",
         action="store_true",
@@ -1382,7 +1560,36 @@ def main():
     if args.extract_values:
         print("  Value extraction: LLM (Anthropic API)")
 
+    def record_status(status: str) -> None:
+        """Report the outcome, if anyone asked to be told."""
+        if args.status_file is not None:
+            args.status_file.parent.mkdir(parents=True, exist_ok=True)
+            args.status_file.write_text(status + "\n", encoding="utf-8", newline="\n")
+
     df = download_tenders(args.cache, force=args.force)
+
+    identity = corpus_identity(args.cache, args.profile)
+    if args.skip_unchanged:
+        previous = stored_identity(db_path)
+        # Both hashes must be present on both sides. A missing hash is "nothing
+        # to compare", and treating that as agreement is how a corpus built
+        # before this flag existed would be declared current forever.
+        keys = ("feed_sha256", "profile_sha256")
+        comparable = all(previous.get(k) and identity.get(k) for k in keys)
+        if comparable and all(previous[k] == identity[k] for k in keys):
+            print(f"\nUnchanged: the feed and profile are byte-identical to the "
+                  f"corpus already at {db_path}.\n"
+                  f"  feed    {identity['feed_sha256'][:12]}\n"
+                  f"  profile {identity['profile_sha256'][:12]}\n"
+                  f"Nothing rebuilt, and no build stamp moved. This is a "
+                  f"successful run.")
+            record_status("unchanged")
+            return
+        if not comparable:
+            print("\n--skip-unchanged: no comparable identity on the existing "
+                  "corpus, so rebuilding. (Expected once, on the first run "
+                  "after this flag was added.)")
+
     cols = resolve_columns(
         list(df.columns), TENDER_COLUMNS, TENDER_REQUIRED, "scripts/ingest.py"
     )
@@ -1392,7 +1599,8 @@ def main():
         print("\nNo tenders passed the filter. Loosen your criteria.", file=sys.stderr)
         sys.exit(1)
 
-    build_chroma(df, db_path, cols, feed_path=args.cache)
+    build_chroma(df, db_path, cols, feed_path=args.cache, identity=identity)
+    record_status("rebuilt")
     print("\nDone. Claude Code can now search this corpus via scripts/tender_tools.py")
 
 

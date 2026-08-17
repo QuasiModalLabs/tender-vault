@@ -210,14 +210,21 @@ looks exactly like a server that failed to load.
 
 ## Automatic refresh
 
-`.github/workflows/weekly-ingest.yml` runs every Monday:
+`.github/workflows/ingest.yml` runs every day at 11:00 UTC:
 
-1. Downloads the latest CanadaBuys CSV
-2. Re-runs the filter pipeline
-3. Writes a digest to `vault/digests/digest-YYYY-MM-DD.md`, including a **New this week** section diffed against the previous run's corpus snapshot (`vault/digests/corpus-latest.txt`)
-4. Commits the digest and the updated snapshot — not `chroma_db/`
+1. Asks CanadaBuys whether the feed has changed, using the `ETag` it recorded last time — a conditional request, not a clock
+2. If it has: re-runs the filter pipeline and rebuilds the corpus
+3. Records crosswalk attestation, capturing which organization names the day's feed happened to carry
+4. Writes a digest to `vault/digests/digest-YYYY-MM-DD.md`, including a **New since** section diffed against the previous run's corpus snapshot (`vault/digests/corpus-latest.txt`)
+5. Commits the digest, the snapshot and the attestation — not `chroma_db/`
 
-Because the digest is generated on the Actions runner, it can reference tenders your local corpus hasn't seen. After pulling a new digest, re-run `python scripts/ingest.py` to sync locally.
+If the feed has *not* changed, steps 2-5 are skipped and the run ends green having committed nothing. So on Tuesday through Sunday, a digest existing for a date means the published feed moved that day and a gap means it didn't. Monday is the exception — it rebuilds unconditionally, so a Monday digest is a heartbeat rather than evidence of a change.
+
+**11:00 UTC and not earlier.** The feed is republished daily at about 10:20 UTC. A run scheduled before that collects the previous day's file — which on a weekly cadence cost one stale day in seven and on a daily one would have made the whole schedule a no-op.
+
+**The Monday run does more.** Building `data/oag.db`, the test suites and the MCP import check run on Mondays and on manual dispatch only. They gate the ingest, and the OAG build depends on the open.canada.ca CKAN API — worth failing one run a week over, not seven. Monday also rebuilds the corpus unconditionally, so the corpus cache the other six days rely on is never more than six days from a build that started from nothing, and there is one digest a week even in a week the feed never moved.
+
+Because the digest is generated on the Actions runner, it can reference tenders your local corpus hasn't seen. After pulling a new digest, re-run `python scripts/ingest.py` to sync locally. On a daily cadence expect to be a day behind most mornings; that is the normal state, not a fault.
 
 The contracts and plans refresh workflows are present but disabled. They rebuilt databases that are no longer committed, so on a schedule they would run and commit nothing. Rebuild those locally when you want fresh data.
 

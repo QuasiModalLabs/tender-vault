@@ -325,7 +325,7 @@ def test_every_observed_name_has_recorded_provenance():
     aliases invented. A committed file was being validated against a mutable
     one, so the verdict changed with the weather.
 
-    And it never ran where it mattered. weekly-ingest.yml runs the suite before
+    And it never ran where it mattered. ingest.yml runs the suite before
     ingest.py has created the CSV, so on a fresh runner the old check hit its own
     "needs both sources" guard and skipped — every Monday, silently.
 

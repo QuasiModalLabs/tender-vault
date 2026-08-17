@@ -6,7 +6,18 @@ Read this when a notice is a `qualification` or a `call_up`. A call-up against a
 
 **Status is the load-bearing field.** The same notice reads completely differently depending on whether we're on the vehicle.
 
-**Record what each vehicle gated.** When a briefing finds notices blocked behind a vehicle we don't hold, add the count and date here. Over a few months that becomes the evidence for whether qualifying was worth it — which is a question no single week can answer.
+**Record what each vehicle gated.** When a briefing finds notices blocked behind a vehicle we don't hold, add the count and date here. Over a few months that becomes the evidence for whether qualifying was worth it — which is a question no single reading can answer.
+
+> [!important] What counts as one observation, now that the ingest is daily
+> Entries below are labelled "week of", written when the ingest ran weekly and the readings were already two and three days apart. The label was never the thing doing the work; **independence was**, and the criterion is whether the published feed moved between two readings.
+>
+> That is now a recorded fact rather than a judgement. Every ingest stamps `feed_sha256` — the content hash of the feed it read — into the corpus and into the digest frontmatter, and the daily job rebuilds *only* when that hash changes. So:
+>
+> - **Label new entries `ingest of YYYY-MM-DD (feed <first 8 of the hash>)`**, not "week of".
+> - **Two readings that share a feed hash are one observation.** Recording the second as an independent zero would manufacture a measurement out of the scheduling, which is the same error as scoring two arms that received identical inputs. Re-reading an unchanged corpus produces `p = 1.000` by arithmetic, not by evidence.
+> - A briefing written against an unchanged corpus may still be useful — dates move, notices close — but it contributes **no new count here**.
+>
+> The existing entries stand. They were four genuinely separate feeds, and the README's series argument rests on that rather than on the calendar.
 
 > **The 48 / 50 / 53 denominators below are directional, and the series breaks after 2026-08-09.** Two things happened to them.
 >

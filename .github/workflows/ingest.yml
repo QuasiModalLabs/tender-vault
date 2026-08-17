@@ -1,0 +1,244 @@
+name: Tender ingest
+
+# Runs every day at 11:00 UTC (07:00 Toronto in summer, 06:00 in winter).
+# Also runs on manual trigger from the Actions tab.
+#
+# 11:00 AND NOT THE 06:00 THIS JOB USED TO RUN AT. The feed is republished daily
+# at about 10:20 UTC — observed twice, `last-modified` of 2026-08-16T10:20:15Z
+# and 2026-08-17T10:20:16Z. A 06:00 run therefore lands before the day's
+# publication and would collect the PREVIOUS day's feed, every day, for ever.
+# Weekly, that cost one stale Monday out of seven days of drift and was invisible.
+# Daily, it would have made the whole change a no-op with a fresh timestamp on it.
+#
+# Two observations are enough to place the cron and not enough to trust the
+# minute, so the run sits 40 minutes after the observed time rather than on it.
+# If the publisher moves, the symptom is visible rather than silent: the ingest
+# reports `304 Not Modified` and the job commits no digest, so a run of no-op
+# days in the Actions list is the signal to re-check `last-modified`.
+#
+# TWO crons for ONE job, and the split is the point. The tender feed is a
+# snapshot of the notices open on the day it is read, so a weekly cadence could
+# not see a notice that opened and closed inside the gap, and sampled a feed
+# whose membership rotates — vault/crosswalk/attestation.yaml carries two
+# hand-written bootstrap records for organizations that fell out of it in a
+# quiet week. Daily fixes both.
+#
+# What does NOT want to be daily is the gate. Building data/oag.db calls the
+# open.canada.ca CKAN API, and an outage there fails the job before the ingest
+# runs. That was a deliberate trade when it cost one red Monday; run seven times
+# a week it turns one signal into six alarms about a service this repo only
+# needs a few times a year. So the gate — OAG, the test suites, the MCP import
+# check — stays on Monday, and Tuesday through Sunday run the ingest alone.
+#
+# Cron day-of-week: 1 is Monday and 7 is Sunday, so `2-7` is Tue..Sun.
+on:
+  schedule:
+    - cron: "0 11 * * 1"    # Monday — full gate, then ingest
+    - cron: "0 11 * * 2-7"  # Tue-Sun — ingest only
+  workflow_dispatch:
+
+# Only one ingest can run at a time. If a new run starts, cancel any pending one.
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+env:
+  # Set once so the gated steps and the digest step cannot drift apart on what
+  # "the full run" means. A manual dispatch is always a full run — it is what
+  # someone reaches for when they want the checks.
+  FULL_RUN: ${{ github.event.schedule == '0 11 * * 1' || github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed to push the digest commit back to the repo
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore the previous run's corpus and feed cache
+        # WITHOUT THIS, --skip-unchanged CANNOT WORK ON A RUNNER, and the claim
+        # that "a digest exists for a date means the feed moved that day" would
+        # be false. A fresh runner has no chroma_db/ to compare a hash against
+        # and no recorded ETag to make the request conditional, so every run
+        # would re-download, re-embed and commit a near-identical digest.
+        #
+        # Keyed on run_id with a prefix restore-key, which is the standard way
+        # to say "always save a new entry, always restore the most recent one".
+        # GitHub evicts caches untouched for 7 days; this one is touched daily.
+        #
+        # A restored corpus is never trusted indefinitely — the Monday run
+        # rebuilds unconditionally, so a corrupt or drifted cache survives at
+        # most six days and cannot become permanent.
+        uses: actions/cache@v4
+        with:
+          path: |
+            chroma_db
+            .cache
+          key: corpus-${{ github.run_id }}
+          restore-keys: corpus-
+
+      - name: Cache HuggingFace model
+        # sentence-transformers downloads ~90MB on first use. Caching it keeps
+        # the daily run fast and stays well within GitHub's free tier.
+        # Cache key is tied to the model name so we re-download only if we
+        # change models (not just because requirements.txt changed).
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2-v1
+
+      - name: Build OAG database
+        if: env.FULL_RUN == 'true'
+        # What makes the test step below worth running. test_oag_attribution.py
+        # gates on data/oag.db and skips all 22 of its checks without it, and
+        # the DB is no longer committed — so on a fresh runner the suite would
+        # go green having tested nothing.
+        #
+        # No sampling flags: --max-audits writes to a *.sample.db that nothing
+        # reads. This adds a dependency on the open.canada.ca CKAN API, so an
+        # upstream outage fails Monday before the ingest runs. That is the trade
+        # we want — a red Monday is the signal — and confining it to Monday is
+        # why the daily runs do not inherit it.
+        run: python scripts/oag_ingest.py
+
+      - name: Run test suites
+        if: env.FULL_RUN == 'true'
+        # The suites are standalone scripts, not pytest: each has a main() and
+        # exits non-zero on failure. Run every one rather than stopping at the
+        # first, so a broken Monday reports all the damage in a single run.
+        #
+        # Placed after the model cache and before ingest deliberately: this is
+        # the step that catches a dependency that changed under us over the
+        # weekend, and it should fail before we spend ten minutes embedding.
+        run: |
+          failed=0
+          for t in tests/test_*.py; do
+            echo "--- $t"
+            python "$t" || { echo "FAILED: $t"; failed=1; }
+          done
+          exit $failed
+
+      - name: Check the MCP server still imports
+        if: env.FULL_RUN == 'true'
+        # No test suite imports mcp_server.py and no workflow runs it, which is
+        # exactly how `from mcp.server.fastmcp import FastMCP` stayed broken
+        # through the mcp 2.0 rename — CI installed the new major every week
+        # and never once loaded the module that used it. Importing the module
+        # executes the @mcp.tool() decorators, so this catches both a moved
+        # import path and a tool that stops registering.
+        run: |
+          python - <<'PY'
+          import asyncio, importlib.util as u
+          spec = u.spec_from_file_location("mcp_server", "scripts/mcp_server.py")
+          mod = u.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          tools = asyncio.run(mod.mcp.list_tools())
+          assert len(tools) >= 17, f"expected >=17 tools, got {len(tools)}"
+          print(f"MCP server imports cleanly: {len(tools)} tools registered")
+          PY
+
+      - name: Run ingest
+        id: ingest
+        # ChromaDB is rebuilt into a gitignored directory — we don't commit it.
+        # What we DO commit (in the later steps) is the digest file: a
+        # human-readable markdown summary of what arrived since the last one.
+        #
+        # Two modes, and the difference is deliberate.
+        #
+        # Tue-Sun: --skip-unchanged. The publisher serves ETag/Last-Modified, so
+        # this revalidates and a 304 costs one request instead of 6.7MB. When
+        # the feed has not moved, nothing is rebuilt and nothing is committed.
+        #
+        # Monday: --force, no skip. An unconditional rebuild once a week is what
+        # stops the restored cache from becoming load-bearing — every corpus
+        # this repo publishes is at most six days from a build that started
+        # from nothing. It also guarantees one digest a week even in a week the
+        # feed never moved, which is a heartbeat: silence then means the job is
+        # broken rather than the market being quiet.
+        run: |
+          if [ "${FULL_RUN}" = "true" ]; then
+            python scripts/ingest.py --force --status-file .cache/ingest-status
+          else
+            python scripts/ingest.py --skip-unchanged --status-file .cache/ingest-status
+          fi
+          echo "status=$(cat .cache/ingest-status)" >> "$GITHUB_OUTPUT"
+
+      - name: Record crosswalk attestation
+        if: steps.ingest.outputs.status == 'rebuilt'
+        # Best-effort on purpose. `--attest` exits 1 when an observed_name has
+        # no live evidence AND no prior record, which is a real error — but it
+        # is an error about the org registry, and it must not stop a good
+        # corpus from being digested and committed. Monday's test suite turns
+        # the same condition into a hard red, so this is a two-tier design
+        # rather than a suppression: capture daily, enforce weekly.
+        continue-on-error: true
+        # Runs AFTER the ingest, because it reads .cache/tenders.csv — the
+        # ordering that the old provenance check got wrong, skipping itself
+        # every Monday because the CSV did not exist yet.
+        #
+        # This is the step daily cadence is worth the most to. The feed holds
+        # only the notices open the day it was downloaded, so an organization
+        # with nothing open right now simply is not in it, and re-deriving the
+        # evidence later DELETES it. Recording it captures whatever the feed
+        # happens to attest that day; seven samples a week instead of one is
+        # seven times the chance of catching a name that rotates in and out.
+        #
+        # Gated on a changed feed so `last_seen` means "the day a feed carrying
+        # this name was published", not "the day a cron fired".
+        #
+        # data/oag.db is DELIBERATELY NOT in the restored cache, so on Tue-Sun
+        # this attests from the live tender feed alone and names seen only in
+        # OAG carry forward with their existing last_seen. That is the honest
+        # result: confirming a name against a week-old OAG snapshot and stamping
+        # it with today's date would be exactly the false freshness this file
+        # exists to prevent. Do not "fix" it by caching the database.
+        run: python scripts/crosswalk.py --attest
+
+      - name: Generate digest
+        if: steps.ingest.outputs.status == 'rebuilt'
+        # Skipped when the feed did not move, and that is a correctness fix as
+        # much as a tidiness one. generate_digest() reads corpus-latest.txt and
+        # main() then overwrites it, so a second run against an unchanged corpus
+        # rewrites the day's file with an empty "New" section — destroying the
+        # listing the first run produced.
+        run: python scripts/digest.py
+
+      - name: Commit digest if changed
+        if: steps.ingest.outputs.status == 'rebuilt'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vault/digests/ vault/crosswalk/attestation.yaml
+          if git diff --cached --quiet; then
+            echo "No new digest to commit"
+          else
+            DATE=$(date -u +%Y-%m-%d)
+            git commit -m "digest: ingest ${DATE}"
+            # Rebase before pushing. The checkout happened at the top of this
+            # job and the push happens minutes later, so anything landing on the
+            # branch in between makes a bare push fail. At one run a week that
+            # was rare; at one a day, on a branch that is actively developed, it
+            # is a matter of time. --autostash is belt-and-braces: the commit
+            # above already cleaned the tree.
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Report a no-op run
+        if: steps.ingest.outputs.status != 'rebuilt'
+        # Said out loud rather than left as four grey skipped steps. A run that
+        # found nothing and a run that broke should not look alike in the
+        # Actions list.
+        run: echo "Feed unchanged since the last ingest. Nothing rebuilt, nothing committed."
