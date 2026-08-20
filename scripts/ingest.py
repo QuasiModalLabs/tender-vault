@@ -1601,7 +1601,7 @@ def main():
 
     build_chroma(df, db_path, cols, feed_path=args.cache, identity=identity)
     record_status("rebuilt")
-    print("\nDone. Claude Code can now search this corpus via scripts/tender_tools.py")
+    print("\nDone. Claude Code can now search this corpus via scripts/tender_tools")
 
 
 if __name__ == "__main__":

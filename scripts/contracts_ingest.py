@@ -793,7 +793,7 @@ def write_agency_intel(
             # real dependency. The dossier pointer is the other case — generic
             # "how to read this" on every file, discriminating nothing. It keeps
             # its links where they mean something: _attribution_note in
-            # tender_tools.py emits [[dossier]] only when attribution is weak.
+            # tender_tools emits [[dossier]] only when attribution is weak.
             f"Filtered to the competencies in [[my-company]]. For how this reads "
             f"against the other three signals on a department, see "
             f"`vault/reference/dossier.md`.",

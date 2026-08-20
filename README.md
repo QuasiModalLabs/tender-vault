@@ -214,11 +214,11 @@ The shape is a department dossier: `dossier ircc` returns everything all four so
 <summary><strong>Running your first dossier</strong></summary>
 
 In Claude Code you just ask — *"give me the full dossier on IRCC"* — and Claude
-calls the tool. `dossier` is a subcommand of `scripts/tender_tools.py`, not
+calls the tool. `dossier` is a subcommand of `scripts/tender_tools/`, not
 something you type into the chat. To see the raw JSON yourself:
 
 ```bash
-python scripts/tender_tools.py dossier ircc
+python scripts/tender_tools dossier ircc
 ```
 
 Each of the four sections needs its own layer built, and the dossier renders
@@ -403,7 +403,7 @@ The contracts and plans refresh workflows are manual-dispatch only. They rebuilt
 2. [`vault/profiles/my-company.md`](vault/profiles/my-company.md) — how user context is stored, and the key-by-key filter spec in its own comments. [`docs/PROFILE.md`](docs/PROFILE.md) is the companion on tuning it.
 3. [`vault/reference/vehicles.md`](vault/reference/vehicles.md) — the gating series above, as it was actually recorded: dated observations, what each count excludes, and an open question left as a question rather than rounded into a number.
 4. [`.claude/skills/tender-briefing/SKILL.md`](.claude/skills/tender-briefing/SKILL.md) — the briefing skill. The presentation layer is where "don't produce a score" has to be enforced concretely, so this is more design document than template.
-5. [`scripts/tender_tools.py`](scripts/tender_tools.py) — the retrieval layer, and the clean line between retrieval and reasoning.
+5. [`scripts/tender_tools/`](scripts/tender_tools) — the retrieval layer, and the clean line between retrieval and reasoning. Start at [`cli.py`](scripts/tender_tools/cli.py) for the command surface; [`paths.py`](scripts/tender_tools/paths.py) and [`corpus.py`](scripts/tender_tools/corpus.py) own the only mutable state in the package, and their headers say why nothing else may copy it.
 6. [`scripts/attachments.py`](scripts/attachments.py) — reading the RFP package a human downloaded by hand, and the module docstring is most of why it's here. A dispatch table rather than a chain of special cases, so a new format is one function; a per-file hash, because MERX posts addenda mid-solicitation and stale text that looks current is worse than no text; and the argument about spreadsheets, which was never that they're unreadable but that flattening a grid detaches a figure from its line item. The extractor that eventually read them keeps every value addressable instead.
 7. [`vault/crosswalk/org_aliases.yaml`](vault/crosswalk/org_aliases.yaml) — the department registry. Ninety-odd hand-checked assertions about what the Government of Canada calls itself. Its `observed_names` are the ones seen in real source data, and `vault/crosswalk/attestation.yaml` records where and when each was seen — written by `python scripts/crosswalk.py --attest`, and committed because the evidence itself expires. The tender feed carries only notices open on the day it was downloaded, so an agency with nothing open drops out of it; without a durable record, a correct alias starts looking invented.
 8. [`scripts/org_resolve.py`](scripts/org_resolve.py) — resolving organizations named in free text against that registry, and the one department identifier every signal tool takes.

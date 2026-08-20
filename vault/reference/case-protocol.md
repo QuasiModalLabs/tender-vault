@@ -241,7 +241,7 @@ methodology check, not a finding.
 **No composite scoring.** No opportunity score, no ranking, no fitted weight, no
 predictive graph edge. The evaluator emits a decision and a stated confidence;
 confidence is an output under test, never an input. Nothing here is imported by
-`tender_tools.py` or `mcp_server.py`, and no MCP tool exposes it.
+`tender_tools` or `mcp_server.py`, and no MCP tool exposes it.
 
 **Contract expiry remains a rejected hypothesis.** Incumbent expiry → same-
 capability recompete tested at 1.00–1.05× against a department × capability

@@ -130,7 +130,7 @@ timeline 0.2, with no way to check. Every weight here is FITTED, out of fold,
 and reported with the interval around it. A weight chosen by judgment would be
 that same deleted formula wearing a lab coat, and there are none in this file.
 
-Nothing in tender_tools.py or mcp_server.py imports from this module, no MCP
+Nothing in tender_tools or mcp_server.py imports from this module, no MCP
 tool returns a score, and moving one into those surfaces is a separate decision
 with its own review — not a follow-on commit to this work.
 
