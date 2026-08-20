@@ -116,13 +116,13 @@ cd tender-vault
 claude
 ```
 
-Claude Code picks up `vault/CLAUDE.md` automatically and calls `scripts/tender_tools.py` as a subprocess. Start with a natural-language request:
+Claude Code picks up `vault/CLAUDE.md` automatically and calls `scripts/tender_tools` as a subprocess. Start with a natural-language request:
 
 > Any good federal IT tenders for us this week?
 
 **You talk in English; the commands are Claude's, not yours.** Names like
 `dossier`, `contracts-intel`, `expiring-contracts` and `oag-signals` are
-subcommands of `scripts/tender_tools.py` that Claude invokes on your behalf —
+subcommands of `scripts/tender_tools` that Claude invokes on your behalf —
 they aren't slash commands and you don't type them into the chat. So when the
 README shows `dossier ircc`, the way you get it is to ask:
 
@@ -132,8 +132,8 @@ You can also run them directly if you want raw JSON, which is useful for
 debugging a layer that seems to be returning nothing:
 
 ```bash
-python scripts/tender_tools.py dossier ircc
-python scripts/tender_tools.py --help
+python scripts/tender_tools dossier ircc
+python scripts/tender_tools --help
 ```
 
 The `tender-briefing` skill in `.claude/skills/` is picked up automatically too. Ask for the weekly briefing and it writes to `vault/briefings/` rather than printing. It's a Claude Code feature — it does not apply to the Claude Desktop path below.

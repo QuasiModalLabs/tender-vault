@@ -26,7 +26,7 @@ When I ask something like *"any good federal IT tenders for us?"*:
 
 Three storage layers and three lifecycle states.
 
-**Cold tier — ChromaDB (`chroma_db/`).** The filtered corpus of active tenders matching my profile, accessed through `scripts/tender_tools.py`. I re-run `scripts/ingest.py` for fresh data. The funnel output from that run is the authority on corpus size; don't quote a number from memory.
+**Cold tier — ChromaDB (`chroma_db/`).** The filtered corpus of active tenders matching my profile, accessed through `scripts/tender_tools`. I re-run `scripts/ingest.py` for fresh data. The funnel output from that run is the authority on corpus size; don't quote a number from memory.
 
 **Never infer corpus age from `chroma_db/` file times.** ChromaDB rewrites its segment files whenever anything *loads* the collection, so those mtimes report when the corpus was last queried, not when it was built — read them and you are describing your own read. Corpus age comes from the `provenance` block on `list-corpus` and `get`, recorded by the ingest that built the corpus.
 
@@ -73,7 +73,7 @@ A tender's `department` field links the **node**, never the intel file. Don't ha
 
 ## Your tools
 
-Python scripts in `scripts/tender_tools.py`, run as `python scripts/tender_tools.py <command> <args>`. Each prints JSON to stdout. `--help` for exact syntax.
+Python scripts in `scripts/tender_tools/`, run as `python scripts/tender_tools <command> <args>`. Each prints JSON to stdout. `--help` for exact syntax.
 
 **Corpus**
 - `list-corpus [--window imminent|open|closed|standing|unknown]` — every notice, ordered by closing window. This is how you survey what's open; `search` ranks against a query and answers a different question. Carries the `provenance` block — how old this corpus is, and whether it's behind the newest digest's. Read it before trusting the survey.

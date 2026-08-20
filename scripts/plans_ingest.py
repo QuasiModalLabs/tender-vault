@@ -45,7 +45,7 @@ the example sentences in the profile reshapes what the theme catches — you tun
 by DESCRIBING the signal, and the model generalizes to phrasings you didn't list.
 
 The scoring runs once, at ingest, entirely locally (no Claude tokens). Queries
-just sort by the stored score. See `program-signals` in tender_tools.py.
+just sort by the stored score. See `program-signals` in tender_tools.
 
 Usage:
     python scripts/plans_ingest.py

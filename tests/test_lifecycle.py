@@ -47,18 +47,18 @@ FAKE_DOC = {
 def setup_temp_vault() -> Path:
     """Seed a fake corpus. The vault redirect itself lives in conftest."""
     root = conftest.redirect_vault()
-    tt.WATCHING.mkdir(parents=True)
+    tt.paths.WATCHING.mkdir(parents=True)
 
     # Short-circuit ChromaDB loading: non-None sentinel + seeded index
-    tt._collection = object()
-    tt.doc_index = [FAKE_DOC]
+    tt.corpus._collection = object()
+    tt.corpus.doc_index = [FAKE_DOC]
     return root
 
 
 def test_promote():
     result = tt.cmd_promote(SimpleNamespace(tender_id=FAKE_ID))
     assert "promoted" in result, f"promote failed: {result}"
-    files = list(tt.WATCHING.glob("*.md"))
+    files = list(tt.paths.WATCHING.glob("*.md"))
     assert len(files) == 1, f"expected 1 watching file, got {len(files)}"
     content = files[0].read_text(encoding="utf-8")
     assert f"tender_id: {FAKE_ID}" in content, "frontmatter missing tender_id"
@@ -77,7 +77,7 @@ def test_promote_writes_department_links(filename: str):
     and keep the unresolved string instead of dropping it. An easy case where
     both fields name the same recognised department would assert none of that.
     """
-    content = (tt.WATCHING / filename).read_text(encoding="utf-8")
+    content = (tt.paths.WATCHING / filename).read_text(encoding="utf-8")
 
     # Quoted, because a bare [[ssc]] is a nested YAML sequence, not a string.
     assert 'department: ["[[ssc]]"]' in content, (
@@ -109,7 +109,7 @@ def test_promote_creates_agency_node():
     question these nodes exist to answer — what else is this department in? —
     cannot be asked until the file is there.
     """
-    node = tt.AGENCIES / "ssc.md"
+    node = tt.paths.AGENCIES / "ssc.md"
     assert node.exists(), "promote linked [[ssc]] but created no node for it"
     content = node.read_text(encoding="utf-8")
     assert "canonical_key: ssc" in content, "node is not keyed"
@@ -118,7 +118,7 @@ def test_promote_creates_agency_node():
     assert "[[ssc-contracts]]" in content, (
         "node must point at its generated intel file under the split name"
     )
-    assert not (tt.AGENCIES / "Test Agency.md").exists(), (
+    assert not (tt.paths.AGENCIES / "Test Agency.md").exists(), (
         "an unresolved entity string must not become a department node"
     )
 
@@ -132,13 +132,13 @@ def test_agency_node_never_overwritten():
     that rewrote it would destroy work in proportion to how useful the file had
     become.
     """
-    node = tt.AGENCIES / "ssc.md"
+    node = tt.paths.AGENCIES / "ssc.md"
     node.write_text("hand-written, do not touch\n", encoding="utf-8")
 
     second = dict(FAKE_DOC)
     second["id"] = f"{FAKE_ID}-B"
     second["metadata"] = dict(FAKE_DOC["metadata"], tender_id=f"{FAKE_ID}-B")
-    tt.doc_index = [FAKE_DOC, second]
+    tt.corpus.doc_index = [FAKE_DOC, second]
     result = tt.cmd_promote(SimpleNamespace(tender_id=f"{FAKE_ID}-B"))
     assert "promoted" in result, f"second promote failed: {result}"
 
@@ -148,7 +148,7 @@ def test_agency_node_never_overwritten():
     assert "agency_nodes_created" not in result, (
         "promote reported creating a node it did not create"
     )
-    tt.doc_index = [FAKE_DOC]
+    tt.corpus.doc_index = [FAKE_DOC]
 
 
 def test_promote_duplicate_rejected():
@@ -163,8 +163,8 @@ def test_park(filename: str):
         revisit_when="after test trigger",
     ))
     assert "parked" in result, f"park failed: {result}"
-    assert not (tt.WATCHING / filename).exists(), "file still in watching after park"
-    parked_file = tt.PARKED / filename
+    assert not (tt.paths.WATCHING / filename).exists(), "file still in watching after park"
+    parked_file = tt.paths.PARKED / filename
     assert parked_file.exists(), "file not in parked after park"
     content = parked_file.read_text(encoding="utf-8")
     assert "**Reason:** test reason" in content, "park reason not appended"
@@ -195,8 +195,8 @@ def test_archive_from_parked(filename: str):
     ))
     assert "archived" in result, f"archive failed: {result}"
     assert result["from"] == "parked", f"expected source 'parked', got {result}"
-    assert not (tt.PARKED / filename).exists(), "file still in parked after archive"
-    archived_file = tt.ARCHIVED / filename
+    assert not (tt.paths.PARKED / filename).exists(), "file still in parked after archive"
+    archived_file = tt.paths.ARCHIVED / filename
     assert archived_file.exists(), "file not in archived"
     content = archived_file.read_text(encoding="utf-8")
     assert "test close-out" in content, "archive reason not appended"
@@ -210,7 +210,7 @@ def test_archive_from_parked(filename: str):
 def test_archive_from_watching():
     """Separate path: archive directly from watching without parking first."""
     tt.cmd_promote(SimpleNamespace(tender_id=FAKE_ID))
-    filename = next(tt.WATCHING.glob("*.md")).name
+    filename = next(tt.paths.WATCHING.glob("*.md")).name
     result = tt.cmd_archive(SimpleNamespace(filename=filename, reason="direct kill"))
     assert result.get("from") == "watching", f"expected source 'watching': {result}"
 
@@ -225,7 +225,7 @@ def test_archive_moves_attachments():
     again, holding the RFP package for a tender someone spent real effort on.
     """
     tt.cmd_promote(SimpleNamespace(tender_id=FAKE_ID))
-    filename = next(tt.WATCHING.glob("*.md")).name
+    filename = next(tt.paths.WATCHING.glob("*.md")).name
     stem = Path(filename).stem
 
     attached = tt.cmd_attach(SimpleNamespace(
@@ -233,7 +233,7 @@ def test_archive_moves_attachments():
     ))
     assert "error" not in attached, f"attach failed: {attached}"
 
-    folder = tt.WATCHING / stem
+    folder = tt.paths.WATCHING / stem
     (folder / "RFP-W2187-SPO.pdf").write_bytes(b"%PDF-1.4 stand-in, never parsed")
     assert folder.is_dir(), "attachment folder was not created in watching/"
 
@@ -246,13 +246,13 @@ def test_archive_moves_attachments():
     )
 
     assert not folder.exists(), "attachment folder left behind in watching/"
-    assert not (tt.WATCHING / filename).exists(), "note left behind in watching/"
+    assert not (tt.paths.WATCHING / filename).exists(), "note left behind in watching/"
 
-    moved = tt.ARCHIVED / stem
+    moved = tt.paths.ARCHIVED / stem
     assert moved.is_dir(), "attachment folder did not follow the note to archived/"
     assert (moved / "RFP-W2187-SPO.pdf").exists(), "dropped document lost in the move"
     assert (moved / "_index.md").exists(), "manifest lost in the move"
-    assert (tt.ARCHIVED / filename).exists(), "note not in archived/"
+    assert (tt.paths.ARCHIVED / filename).exists(), "note not in archived/"
 
 
 def main():

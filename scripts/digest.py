@@ -142,7 +142,7 @@ def _summarize_parked() -> str:
 def generate_digest() -> str:
     """Build the digest markdown. Returns the file contents as a string."""
     tender_tools.load_collection()
-    docs = tender_tools.doc_index
+    docs = tender_tools.corpus.doc_index
 
     if not docs:
         return "# Digest\n\nNo tenders in corpus.\n"
@@ -210,7 +210,7 @@ def generate_digest() -> str:
     # conflation the provenance states exist to prevent, one level up.
     # load_collection() above makes None unreachable, so assert it rather than
     # coercing it and hoping.
-    collection = tender_tools._collection
+    collection = tender_tools.corpus._collection
     if collection is None:
         raise RuntimeError(
             "generate_digest: collection is not loaded, so corpus provenance "
@@ -351,7 +351,7 @@ def main():
     today = datetime.now().strftime("%Y-%m-%d")
     output_path = DIGEST_DIR / f"digest-{today}.md"
     content = generate_digest()
-    ids = sorted(d["id"] for d in tender_tools.doc_index)
+    ids = sorted(d["id"] for d in tender_tools.corpus.doc_index)
 
     # A SECOND RUN AGAINST AN UNCHANGED CORPUS MUST NOT REWRITE THE FIRST ONE'S
     # FILE. The diff is computed against the snapshot, and the snapshot is

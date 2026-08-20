@@ -12,7 +12,7 @@ the target was "does this department tender anything relevant this year", at a
 WHAT THIS MODULE IS NOT. It computes no score, fits no weight, ranks nothing and
 writes no graph edge. The evaluator emits a decision and a stated confidence;
 confidence is an OUTPUT under test, never an input to anything here. Nothing in
-tender_tools.py or mcp_server.py imports this module and no MCP tool exposes it.
+tender_tools or mcp_server.py imports this module and no MCP tool exposes it.
 
 THE GATE IS THE WHOLE PRODUCT. Everything else is bookkeeping around one
 promise: no row reaches a bundle whose public availability at T0 cannot be

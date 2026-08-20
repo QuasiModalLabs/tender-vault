@@ -437,7 +437,7 @@ def read_manifest(folder: Path) -> dict:
     for tender notes and digests.
 
     Those readers avoid safe_load for a specific reason (`_digest_frontmatter`
-    in tender_tools.py): an unquoted `2026-08-09T14:27:11` loads as a datetime
+    in tender_tools): an unquoted `2026-08-09T14:27:11` loads as a datetime
     and then silently compares unequal to the string stamp it is checked
     against. That hazard is absent here because `_scalar` quotes every string it
     writes, so timestamps and hashes come back as `str`. And the regex reader
