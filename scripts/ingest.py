@@ -113,9 +113,36 @@ _NOTICE_KINDS = {
     # Work competed among suppliers already on a vehicle.
     "rfp against supply arrangement": "call_up",
     # Not biddable. Market research, or an award already intended for a named
-    # supplier with a challenge window.
+    # supplier with a challenge window. "Directed Contract" is the same shape as
+    # an ACAN — a sole-source already decided — and was landing in the
+    # `solicitation` residual, which reads as open work.
     "request for information": "information",
     "advance contract award notice": "pre_awarded",
+    "directed contract": "pre_awarded",
+}
+
+# All three qualification instruments put a supplier through a gate before any
+# work is competed, but they do not open the same door, and one note for all
+# three asserted a vehicle that a stage-1 ITQ does not have. Keyed on the same
+# controlled-vocabulary literals as _NOTICE_KINDS, so this is a second lookup on
+# a string the publisher filed — NOT a prose rule, and it adds no new way to be
+# wrong that the notice type is not already wrong about.
+_QUALIFICATION_NOTES = {
+    "request for supply arrangement": (
+        "A supply arrangement puts a supplier on a vehicle; it is not itself "
+        "work. Work is competed later as call-ups against it, often with no "
+        "public notice. Cross-reference vehicles.md."),
+    "request for standing offer": (
+        "A standing offer puts a supplier on a vehicle; it is not itself work. "
+        "Work is drawn down later as call-ups against it, often with no public "
+        "notice. Cross-reference vehicles.md."),
+    "invitation to qualify": (
+        "Qualifies a supplier through a gate; not itself work. Which gate is "
+        "not in any structured field, and the two differ: an ITQ onto a vehicle "
+        "or source list leads to call-ups over its life, while a stage-1 or "
+        "phase-1 ITQ qualifies only for ONE named project's later stage — no "
+        "vehicle, no call-ups, and nothing in vehicles.md to cross-reference. "
+        "Read the notice to tell which."),
 }
 
 # procurementCategory is the only classification field populated on 100% of
@@ -408,11 +435,11 @@ def classify_notice(notice_type, procurement_category, text=None) -> dict:
     if kind:
         result = {"opportunity_kind": kind, "kind_basis": "notice_type"}
         if kind == "qualification":
-            result["kind_note"] = (
+            result["kind_note"] = _QUALIFICATION_NOTES.get(nt, (
                 "A supply arrangement, standing offer or invitation to qualify "
                 "puts a supplier on a vehicle; it is not itself work. Work is "
                 "competed later as call-ups against it, often with no public "
-                "notice.")
+                "notice."))
         elif kind == "call_up":
             result["kind_note"] = (
                 "A call-up competed among suppliers already on a vehicle. This "

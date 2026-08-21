@@ -65,12 +65,30 @@ def test_the_two_inversions() -> None:
 
 def test_qualification_family() -> None:
     print("\nQualification instruments:")
+    notes = {}
     for nt in ("Request for Supply Arrangement", "Request for Standing Offer",
                "Invitation to Qualify"):
         r = classify_notice(nt, "*SRV")
         check(f"{nt!r} -> qualification", r["opportunity_kind"], "qualification")
         if not r.get("kind_note"):
             FAILURES.append(f"{nt!r} carries no kind_note explaining the consequence")
+        notes[nt] = r.get("kind_note", "")
+
+    # One note for all three asserted a vehicle that a stage-1 ITQ does not
+    # have — it qualifies for ONE project's later stage, with no call-ups and
+    # nothing in vehicles.md to cross-reference. The ITQ note must not promise
+    # one, and must say the notice has to be read to tell the two apart.
+    check("the ITQ note is not the supply-arrangement note",
+          notes["Invitation to Qualify"] != notes["Request for Supply Arrangement"],
+          True)
+    itq_note = notes["Invitation to Qualify"].lower()
+    check("the ITQ note names the single-project case",
+          "one named project" in itq_note, True)
+    check("the ITQ note sends the reader to the notice, not to vehicles.md",
+          "read the notice" in itq_note, True)
+    for nt in ("Request for Supply Arrangement", "Request for Standing Offer"):
+        check(f"{nt!r} still points at vehicles.md",
+              "vehicles.md" in notes[nt].lower(), True)
 
 
 def test_matching_is_exact_not_substring() -> None:
@@ -111,6 +129,21 @@ def test_category_fallback() -> None:
           r["kind_basis"], "procurement_category_residual")
 
 
+def test_pre_awarded_family() -> None:
+    """Both sole-source notice types, and neither may read as open work."""
+    print("\nAlready-decided awards:")
+    for nt in ("Advance Contract Award Notice", "Directed Contract"):
+        r = classify_notice(nt, "*SRV")
+        check(f"{nt!r} -> pre_awarded", r["opportunity_kind"], "pre_awarded")
+        check(f"...and says the notice type decided it ({nt!r})",
+              r["kind_basis"], "notice_type")
+        if r["opportunity_kind"] == "solicitation":
+            FAILURES.append(
+                f"REGRESSION: {nt!r} fell into the `solicitation` residual, "
+                f"which notice-kinds.md defines as an open competition. A "
+                f"sole-source already intended for a named supplier is not one.")
+
+
 def test_notice_type_wins_over_category() -> None:
     """Instrument shape is decided before what is being bought."""
     print("\nPrecedence:")
@@ -118,6 +151,15 @@ def test_notice_type_wins_over_category() -> None:
     check("a construction RFSA is still a qualification",
           r["opportunity_kind"], "qualification")
     check("...and says the notice type decided it", r["kind_basis"], "notice_type")
+
+    # The same rule, on the type it affects most: 22 of the 33 ITQs on the
+    # 2026-08-17 feed were *CNST. None reach the corpus, but the construction
+    # drop is not what stops them — the relevance filter is, on their 72xxxxxx
+    # codes. Pinned explicitly so that consequence is not left implied by the
+    # RFSA case above. See "The order the rules run in" in notice-kinds.md.
+    itq = classify_notice("Invitation to Qualify", "*CNST")
+    check("a construction ITQ is still a qualification, not construction",
+          itq["opportunity_kind"], "qualification")
 
 
 def test_results_notices_are_not_solicitations() -> None:
@@ -278,6 +320,7 @@ def main() -> int:
     test_qualification_family()
     test_matching_is_exact_not_substring()
     test_category_fallback()
+    test_pre_awarded_family()
     test_notice_type_wins_over_category()
     test_results_notices_are_not_solicitations()
     test_call_up_recovery_from_prose()
