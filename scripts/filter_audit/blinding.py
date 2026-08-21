@@ -163,6 +163,11 @@ def reveal_payload(decision_row, queue_row, disposition: Optional[dict]) -> dict
             "matched_keywords": decision_row["matched_keywords"],
         },
         "stratum": queue_row["stratum"],
+        # Post-reveal, like everything else here. Tolerant of its absence
+        # because this function is also handed plain dicts by callers that
+        # never went through a queue.
+        "drawn_for_segment": (queue_row["drawn_for_segment"]
+                              if "drawn_for_segment" in queue_row.keys() else None),
         "audit_stage_results": decision_row["audit_stage_results"],
         "next_step": (
             "Attach a failure category with `categorize` if you disagreed. That "

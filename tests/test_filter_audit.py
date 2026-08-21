@@ -588,6 +588,127 @@ def test_historical_reproducibility() -> None:
     check("the original run's rows are untouched", rows, written)
 
 
+def test_coded_wrong_family_stratum() -> None:
+    """
+    The branch that no keyword refinement can reach, sampled so that a draw
+    covers segments rather than re-sampling the largest one.
+
+    Stage 5's coded and uncoded paths are mutually exclusive, so a notice
+    carrying codes is judged on its codes and the competency list is never
+    consulted. Uniform sampling over all rejects therefore keeps surfacing
+    vocabulary bugs — which live in the other branch — and never tests whether
+    the family list is where the blindness is.
+    """
+    print("\nCoded-wrong-family stratum:")
+
+    # A publisher-supplied code that is not eight digits is not evidence of a
+    # segment, and must not be truncated into one.
+    malformed = json.dumps([{"stage": "relevance", "outcome": "drop",
+                             "evidence": {"codes": ["81111500", "561118", "",
+                                                    "abcdefgh"]}}])
+    check("segments read only well-formed codes",
+          review._segments_of(malformed), {"81"})
+
+    if not NOTICES_DB.exists():
+        print("  SKIP  no data/notices.db for the sampling checks")
+        return
+    from filter_audit.replay import replay
+
+    tmp = Path(tempfile.mkdtemp())
+    audit_db = tmp / "audit.db"
+    run = replay(source="archive", as_of_spec="publication", sample=4000,
+                 seed=5, persist=True, audit_db=audit_db)
+    run_id = run["run_id"]
+
+    # The two refusals. Both are contradictions rather than unsupported
+    # options, so both must say what the caller actually asked for.
+    conflict = review.sample_rejects(run_id=run_id, strategy="coded_wrong_family",
+                                     branch="uncoded_no_keyword", audit_db=audit_db)
+    check("a conflicting --branch is refused",
+          "contradicts" in conflict.get("error", ""), True)
+    mixed = review.sample_rejects(run_id=run_id, strategy="coded_wrong_family",
+                                  include_admitted=True, audit_db=audit_db)
+    check("--include-admitted is refused, not ignored",
+          "no admitted notice is in this branch" in mixed.get("error", ""), True)
+    unknown = review.sample_rejects(run_id=run_id, strategy="segments",
+                                    audit_db=audit_db)
+    check("an unknown strategy names the built ones",
+          "coded_wrong_family" in unknown.get("error", ""), True)
+
+    queue = review.sample_rejects(run_id=run_id, strategy="coded_wrong_family",
+                                  n=12, seed=99, audit_db=audit_db)
+    check("the queue was built", "error" in queue, False)
+    if "error" in queue:
+        return
+    population = queue["branch_population"]
+    check("the population is reported before the draw",
+          population["branch"], "coded_wrong_family")
+    check("...with the segment count", population["segments"] > 1, True)
+    check("...and what the draw could not reach",
+          population["segments_drawn"] + population["segments_unsampled"],
+          population["segments"])
+    check("a draw of n covers min(n, segments) segments",
+          population["segments_drawn"],
+          min(queue["n"], population["segments"]))
+    check("every row in the frame carries a segment",
+          population["rows_without_segment"], 0)
+
+    conn = review._queue_conn(audit_db)
+    items = conn.execute(
+        "SELECT * FROM review_queue WHERE queue_id=? ORDER BY position",
+        (queue["queue_id"],)).fetchall()
+    segments = [row["drawn_for_segment"] for row in items]
+    check("every item records the segment it was drawn for",
+          all(segments), True)
+    check("...and no segment is drawn twice", len(set(segments)), len(segments))
+    check("...and the strategy is recorded, not the generic one",
+          {row["sampling_strategy"] for row in items}, {"coded_wrong_family"})
+
+    # Every drawn item really is in the branch.
+    in_branch = conn.execute(
+        "SELECT COUNT(*) FROM decisions WHERE run_id=? AND has_codes=1 AND "
+        "family_result='wrong_family' AND notice_id IN "
+        "(SELECT reference_number FROM review_queue WHERE queue_id=?)",
+        (run_id, queue["queue_id"])).fetchone()[0]
+    check("every drawn item is in the branch", in_branch, len(items))
+
+    # The recorded segment must be one the notice actually carries.
+    mismatched = []
+    for row in items:
+        stored = conn.execute(
+            "SELECT audit_stage_results FROM decisions WHERE run_id=? AND "
+            "notice_id=?", (run_id, row["reference_number"])).fetchone()[0]
+        if row["drawn_for_segment"] not in review._segments_of(stored):
+            mismatched.append(row["item_id"])
+    check("the recorded segment is one the notice carries", mismatched, [])
+    conn.close()
+
+    # Same seed, same draw. A recorded seed that does not reproduce the queue is
+    # a recorded seed that means nothing.
+    again = review.sample_rejects(run_id=run_id, strategy="coded_wrong_family",
+                                  n=12, seed=99, audit_db=audit_db)
+    other = review.sample_rejects(run_id=run_id, strategy="coded_wrong_family",
+                                  n=12, seed=100, audit_db=audit_db)
+    conn = review._queue_conn(audit_db)
+
+    def _refs(queue_id):
+        return [r[0] for r in conn.execute(
+            "SELECT reference_number FROM review_queue WHERE queue_id=? "
+            "ORDER BY position", (queue_id,))]
+
+    check("the same seed draws the same items",
+          _refs(again["queue_id"]), _refs(queue["queue_id"]))
+    check("a different seed does not",
+          _refs(other["queue_id"]) != _refs(queue["queue_id"]), True)
+    conn.close()
+
+    # And the blinding is untouched: the item surface still carries no stratum.
+    item = review.next_item(queue["queue_id"], audit_db=audit_db)
+    check("the blinded item carries no stratum", "stratum" in item, False)
+    check("...and no drawn_for_segment either",
+          "drawn_for_segment" in item, False)
+
+
 def test_unique_contribution_is_not_a_second_count_of_the_same_rows() -> None:
     """
     A stage that only fires on notices some other stage also rejects removes
@@ -825,6 +946,7 @@ def main() -> int:
     test_regression_protection()
     test_no_change_is_not_equivalence()
     test_historical_reproducibility()
+    test_coded_wrong_family_stratum()
     test_unique_contribution_is_not_a_second_count_of_the_same_rows()
     test_limitation_is_bounded_by_the_snapshots()
     test_false_negative_recording()

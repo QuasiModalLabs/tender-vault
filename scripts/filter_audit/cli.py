@@ -18,6 +18,7 @@ Usage:
     python scripts/filter_audit explain SSC-22-00019111:T
     python scripts/filter_audit verify-equivalence --source feed
     python scripts/filter_audit sample-rejects --branch uncoded_no_keyword --n 25
+    python scripts/filter_audit sample-rejects --strategy coded_wrong_family --n 25
     python scripts/filter_audit next --queue q-20260820-00306
     python scripts/filter_audit record-review --item q-...-005 --decision ACCEPT
     python scripts/filter_audit categorize --item q-...-005 \\
@@ -141,6 +142,49 @@ def cmd_verify_equivalence(args):
     return result, render(result)
 
 
+def _population_lines(population: dict) -> list:
+    """
+    The branch's shape, printed BEFORE the queue id.
+
+    Not the queue's composition - the branch's, which the caller named by
+    choosing the strategy. It goes first because coverage is only useful in
+    advance: told afterwards that 25 items reached a quarter of the segments,
+    a reader has already formed a view of what the result means.
+
+    No verdict on whether the coverage is enough. That is a judgement about the
+    question being asked, and this prints the numbers it takes to make it.
+    """
+    sizes = population["segment_sizes"]
+    largest = list(sizes.items())[:6]
+    lines = [
+        f"{population['branch']} - {population['rows']:,} rows"
+        + (f", {population['share_of_rejects']}% of "
+           f"{population['rejects_in_run']:,} rejects in this run"
+           if population.get("share_of_rejects") is not None else ""),
+        f"  {population['segments']} distinct UNSPSC segments. This draw reaches "
+        f"{population['segments_drawn']}, leaving {population['segments_unsampled']} "
+        f"unsampled.",
+        "  largest: " + ", ".join(f"{seg} ({count:,})" for seg, count in largest)
+        + (" ..." if len(sizes) > len(largest) else ""),
+        "  Read the result as a shortlist of segments to look at, not as a rate: "
+        "one item per",
+        "  segment is an observation about that segment, not a measurement of it.",
+    ]
+    if population.get("rows_without_segment"):
+        lines.append(
+            f"  WARNING: {population['rows_without_segment']:,} row(s) carry codes "
+            f"but no readable segment and were NOT in the sampling frame.")
+    if population.get("stage_filter"):
+        lines.append(f"  restricted to rejects whose first gate was "
+                     f"`{population['stage_filter']}`")
+    lines.append("  This queue is single-stratum by construction: every item is a "
+                 "reject, so agreement")
+    lines.append("  measured from it is conditional on that. The blinding still "
+                 "withholds the gate and")
+    lines.append("  the stratum per item.")
+    return lines
+
+
 def cmd_sample_rejects(args):
     from .review import sample_rejects
     result = sample_rejects(run_id=args.run, strategy=args.strategy, n=args.n,
@@ -148,10 +192,16 @@ def cmd_sample_rejects(args):
                             include_admitted=args.include_admitted)
     text = None
     if "error" not in result:
-        text = (f"queue {result['queue_id']} - {result['n']} items\n"
-                f"  Composition is deliberately not reported: a single-stratum "
-                f"queue would announce its own answer.\n"
-                f"  Next: filter_audit next --queue {result['queue_id']}")
+        lines = []
+        if result.get("branch_population"):
+            lines += _population_lines(result["branch_population"]) + [""]
+        lines += [
+            f"queue {result['queue_id']} - {result['n']} items",
+            "  Composition is deliberately not reported: a single-stratum "
+            "queue would announce its own answer.",
+            f"  Next: filter_audit next --queue {result['queue_id']}",
+        ]
+        text = "\n".join(lines)
     return result, text
 
 
@@ -363,7 +413,13 @@ def build_parser() -> argparse.ArgumentParser:
     sample = sub.add_parser("sample-rejects",
                             help="Build a blinded review queue")
     sample.add_argument("--run", help="Run id (default: most recent)")
-    sample.add_argument("--strategy", default="random")
+    sample.add_argument("--strategy", default="random",
+                        help="random (default), or coded_wrong_family: draws "
+                             "the branch that is 78%% of all rejects, spread "
+                             "round-robin across UNSPSC segments so the draw "
+                             "tests the family list rather than re-sampling the "
+                             "largest segment. Any other name reports what it "
+                             "would need to exist.")
     sample.add_argument("--n", type=int, default=20)
     sample.add_argument("--seed", type=int)
     sample.add_argument("--stage", help="Only rejects whose first gate was this")

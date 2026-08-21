@@ -97,6 +97,39 @@ unaided; this prevents anchoring on the machine's answer, not expertise. And a
 queue drawn only from rejects still tells the reviewer the verdict was REJECT —
 `--include-admitted` closes that gap and is off by default.
 
+## Sampling strategies
+
+`random` draws uniformly. `coded_wrong_family` draws the branch that holds
+21,471 rows — 78% of all rejects — spread round-robin across UNSPSC segments at
+a recorded seed.
+
+The branch is separated out because **no keyword refinement can reach any of
+it**: stage 5's coded and uncoded paths are mutually exclusive, so a notice
+carrying codes is judged on its codes and the competency list is never
+consulted. Uniform sampling keeps surfacing vocabulary bugs, which live in the
+*other* branch, and never tests whether the family list is where the blindness
+is. Spreading across segments is what turns the exercise into a shortlist of
+segments to look at rather than a rate.
+
+The segment each item was drawn for is recorded on the queue row and in the
+review log, so after review the answer can be "segments 43 and 81 produced
+disagreements, everything else was a clean reject". It withholds nothing —
+`next` already prints the notice's own `unspsc` field.
+
+The branch's segment distribution is printed **before** the draw: 55 distinct
+segments today, so a queue of 25 reaches 25 of them and leaves 30 unsampled.
+That is reported with no verdict on whether it is enough, and reported in
+advance, because learning afterwards that a queue covered a quarter of the
+population would make the result look stronger than it is at the moment it is
+being read. This describes the *branch*, which the caller named by choosing the
+strategy — not the queue's own composition, which stays withheld.
+
+`--include-admitted` is refused with this strategy rather than ignored: no
+admitted notice is in the branch by construction, so honouring it would mean
+drawing from a second population and calling the result one queue. The natural
+control arm is the `coded_pass` branch, and building that is a separate
+decision.
+
 ## Review has two phases
 
 | phase | question | blinded |

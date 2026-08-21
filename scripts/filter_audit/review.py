@@ -57,6 +57,14 @@ CREATE TABLE IF NOT EXISTS review_queue (
     position        INTEGER NOT NULL,
     sampling_strategy TEXT NOT NULL,
     sampling_seed   INTEGER,
+    -- WHICH AXIS THIS ITEM WAS DRAWN TO COVER, for a stratified strategy; NULL
+    -- for the ones that draw uniformly. Not withheld and not withholdable: it
+    -- is the notice's own UNSPSC segment, and `next` already prints the notice's
+    -- unspsc field, so the reviewer is looking at it either way. It is here so
+    -- that AFTER review the answer can be "segments 43 and 81 produced
+    -- disagreements, everything else was a clean reject" - which is the output
+    -- the exercise is for, and which nothing in the record could express.
+    drawn_for_segment TEXT,
     revealed_at     TEXT,
     force_unblinded INTEGER NOT NULL DEFAULT 0
 );
@@ -67,6 +75,16 @@ CREATE INDEX IF NOT EXISTS queue_by_queue ON review_queue(queue_id, position);
 def _queue_conn(audit_db: Path = AUDIT_DB) -> sqlite3.Connection:
     conn = connect(audit_db)
     conn.executescript(QUEUE_SCHEMA)
+    # CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, so
+    # a database written before drawn_for_segment existed keeps the old shape.
+    # Added here rather than by a migration script because there is one column
+    # and the alternative is a queue that silently records nothing. Existing
+    # rows keep NULL, which is the honest value: they were not drawn for a
+    # segment.
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(review_queue)")}
+    if "drawn_for_segment" not in columns:
+        with conn:
+            conn.execute("ALTER TABLE review_queue ADD COLUMN drawn_for_segment TEXT")
     return conn
 
 
@@ -88,6 +106,159 @@ def taxonomy_keys() -> list:
 # ---------------------------------------------------------------------------
 # Sampling
 # ---------------------------------------------------------------------------
+
+def _segments_of(audit_stage_results: str) -> set:
+    """
+    The UNSPSC segments a notice was coded into, from its stored decision.
+
+    Two digits - the top of the UNSPSC hierarchy. Read out of the recorded
+    audit rather than from a new column, so this works on runs that were
+    persisted before this strategy existed and needs no re-replay. Parsing all
+    21,471 rows of the branch costs ~0.4s, measured, which is cheaper than a
+    schema migration and cannot fall out of step with the decision it describes.
+
+    A code that is not eight digits is skipped rather than truncated: the field
+    is publisher-supplied and a malformed value is not evidence of a segment.
+    """
+    for result in json.loads(audit_stage_results):
+        if result.get("stage") != "relevance":
+            continue
+        codes = result.get("evidence", {}).get("codes") or []
+        return {str(code)[:2] for code in codes
+                if len(str(code)) == 8 and str(code).isdigit()}
+    return set()
+
+
+def _coded_wrong_family_population(conn, run_id, stage=None) -> tuple:
+    """
+    The branch, bucketed by segment. Returns (buckets, rows, report).
+
+    `buckets` maps segment -> notice ids, and a notice carrying codes in two
+    segments appears in both - it is genuinely evidence about both, and the draw
+    below takes it once.
+    """
+    where = ["run_id = ?", "production_admitted = 0",
+             "has_codes = 1", "family_result = 'wrong_family'"]
+    params = [run_id]
+    if stage:
+        where.append("first_rejecting_stage = ?")
+        params.append(stage)
+    # ORDER BY so the pre-shuffle order is fixed: a seeded shuffle over an
+    # unordered scan is only reproducible by accident.
+    sql = ("SELECT notice_id, production_admitted, first_rejecting_stage, "
+           "has_codes, family_result, keyword_result, audit_stage_results "
+           "FROM decisions WHERE " + " AND ".join(where) + " ORDER BY notice_id")
+
+    buckets: dict = {}
+    rows: dict = {}
+    without_segment = 0
+    for row in conn.execute(sql, params):
+        segments = _segments_of(row["audit_stage_results"])
+        if not segments:
+            # Cannot happen while has_codes is derived from the same code list,
+            # so it is counted rather than ignored: a nonzero figure here means
+            # the two have come apart, and the sampling frame would be quietly
+            # smaller than the branch.
+            without_segment += 1
+            continue
+        rows[row["notice_id"]] = {
+            key: row[key] for key in
+            ("notice_id", "production_admitted", "first_rejecting_stage",
+             "has_codes", "family_result", "keyword_result")}
+        for segment in segments:
+            buckets.setdefault(segment, []).append(row["notice_id"])
+
+    rejects = conn.execute(
+        "SELECT COUNT(*) FROM decisions WHERE run_id=? AND production_admitted=0",
+        (run_id,)).fetchone()[0]
+    report = {
+        "branch": "coded_wrong_family",
+        "rows": len(rows),
+        "rejects_in_run": rejects,
+        "share_of_rejects": round(100 * len(rows) / rejects, 1) if rejects else None,
+        "segments": len(buckets),
+        # Largest first: the shape of the branch is the point, and the reader
+        # needs to see how lopsided it is before reading any draw from it.
+        "segment_sizes": {segment: len(ids) for segment, ids in
+                          sorted(buckets.items(),
+                                 key=lambda kv: (-len(kv[1]), kv[0]))},
+        "rows_without_segment": without_segment,
+        "stage_filter": stage,
+    }
+    return buckets, rows, report
+
+
+def _strategy_coded_wrong_family(conn, run_id, n, seed, stage, branch,
+                                 include_admitted):
+    """
+    Draw across the coded_wrong_family branch, spread over UNSPSC segments.
+
+    WHY THIS IS NOT `--strategy random --branch coded_wrong_family`. That draws
+    the same population but records `random` on the queue row and persists
+    nothing about the branch, so the review log cannot say what was sampled. And
+    it draws uniformly, which on this branch means proportionally: segment 72
+    holds 3,934 of 21,471 rows, so a queue of 25 spends four items there and
+    never sees most of the tail.
+
+    WHY THE BRANCH AT ALL. It is 78% of all rejects and no keyword refinement
+    can reach any of it - stage 5's coded and uncoded paths are mutually
+    exclusive, so a notice carrying codes is judged on its codes and the
+    competency list is never consulted. Uniform sampling over all rejects keeps
+    surfacing vocabulary bugs, which live in the OTHER branch, and never tests
+    whether the family list is where the real blindness is.
+
+    The draw is round-robin over segments in a seeded order, taking one notice
+    per segment per pass. So `n` items reach `min(n, segments)` distinct
+    segments, and the result reads as a shortlist of segments to look at rather
+    than as a rate.
+    """
+    if branch:
+        raise KeyError(
+            f"--branch {branch!r} contradicts --strategy coded_wrong_family, "
+            f"which IS a branch. Drop the flag, or use --strategy random "
+            f"--branch {branch} to sample that branch uniformly.")
+    if include_admitted:
+        raise KeyError(
+            "--include-admitted cannot be honoured here: no admitted notice is "
+            "in this branch, by construction - a wrong-family verdict IS the "
+            "rejection. Mixing in admitted notices would mean drawing them from "
+            "a different population and calling the result one queue. The "
+            "natural control arm is the coded_pass branch, and building that is "
+            "a separate decision.")
+
+    buckets, rows, report = _coded_wrong_family_population(conn, run_id, stage)
+    if not buckets:
+        return [], report
+
+    rng = random.Random(seed)
+    order = sorted(buckets)
+    rng.shuffle(order)
+    for segment in order:
+        rng.shuffle(buckets[segment])
+
+    drawn, seen = [], set()
+    while len(drawn) < n:
+        progressed = False
+        for segment in order:
+            if len(drawn) >= n:
+                break
+            bucket = buckets[segment]
+            while bucket:
+                notice_id = bucket.pop()
+                if notice_id in seen:
+                    continue        # already drawn for one of its other segments
+                seen.add(notice_id)
+                drawn.append((rows[notice_id], segment))
+                progressed = True
+                break
+        if not progressed:
+            break                   # the branch is exhausted before n
+
+    report["drawn"] = len(drawn)
+    report["segments_drawn"] = len({segment for _, segment in drawn})
+    report["segments_unsampled"] = report["segments"] - report["segments_drawn"]
+    return drawn, report
+
 
 def _strategy_random(conn, run_id, n, seed, stage, branch, include_admitted):
     where = ["run_id = ?"]
@@ -115,7 +286,10 @@ def _strategy_random(conn, run_id, n, seed, stage, branch, include_admitted):
     rows = conn.execute(sql, params).fetchall()
     rng = random.Random(seed)
     rng.shuffle(rows)
-    return rows[:n]
+    # (row, drawn_for_segment) like every strategy, and None because this one
+    # draws uniformly: there is no axis it was spread across, and writing one in
+    # would claim a coverage the draw does not have.
+    return [(row, None) for row in rows[:n]], None
 
 
 # Strategies the interface is designed for. `random` is built; the rest parse
@@ -132,6 +306,13 @@ _UNBUILT = {
     "predicate": "use --stage / --branch on the random strategy instead",
 }
 
+# The built ones. A registry rather than a chain of `if strategy == ...`, so
+# adding one is adding a function and cannot forget a call site.
+_STRATEGIES = {
+    "random": _strategy_random,
+    "coded_wrong_family": _strategy_coded_wrong_family,
+}
+
 
 def sample_rejects(run_id: Optional[str] = None,
                    strategy: str = "random",
@@ -142,17 +323,31 @@ def sample_rejects(run_id: Optional[str] = None,
                    include_admitted: bool = False,
                    audit_db: Path = AUDIT_DB) -> dict:
     """
-    Build a shuffled review queue and return ONLY its id and size.
+    Build a shuffled review queue and return its id, its size, and - for a
+    stratified strategy - the shape of the population it drew from.
 
-    Deliberately returns nothing else. Echoing the strategy or the strata back
-    would tell the reviewer what every item in a single-stratum queue is, which
-    is the answer the blinding exists to withhold.
+    NOTHING ABOUT THE QUEUE'S OWN COMPOSITION, which is the rule that matters:
+    per-item strata stay withheld until a disposition exists, because knowing
+    which stratum an item came from is knowing the answer.
+
+    `branch_population` does not break that and is not an exception to it. It
+    describes the BRANCH, which the caller named by choosing the strategy, and
+    it is reported BEFORE the draw rather than after the review, because the
+    thing a reader needs to know in advance is how much of the population a
+    queue of this size can reach. Learning after the fact that 25 items covered
+    a quarter of the segments would make the result look stronger than it is at
+    exactly the moment it is being read.
+
+    A single-stratum queue does still tell the reviewer the verdict was REJECT.
+    That gap is old, it is why `--include-admitted` exists on the uniform
+    strategy, and this strategy cannot close it - see its docstring.
     """
     if strategy in _UNBUILT:
         return {"error": f"Strategy {strategy!r} is not implemented: "
                          f"{_UNBUILT[strategy]}"}
-    if strategy != "random":
-        return {"error": f"Unknown strategy {strategy!r}. Built: random. "
+    if strategy not in _STRATEGIES:
+        return {"error": f"Unknown strategy {strategy!r}. "
+                         f"Built: {', '.join(sorted(_STRATEGIES))}. "
                          f"Designed for: {', '.join(sorted(_UNBUILT))}"}
 
     conn = _queue_conn(audit_db)
@@ -169,7 +364,8 @@ def sample_rejects(run_id: Optional[str] = None,
         seed = random.randrange(1, 2**31)
 
     try:
-        rows = _strategy_random(conn, run_id, n, seed, stage, branch, include_admitted)
+        rows, population = _STRATEGIES[strategy](
+            conn, run_id, n, seed, stage, branch, include_admitted)
     except KeyError as exc:
         conn.close()
         return {"error": str(exc)}
@@ -180,18 +376,27 @@ def sample_rejects(run_id: Optional[str] = None,
 
     queue_id = f"q-{datetime.now().strftime('%Y%m%d')}-{seed % 100000:05d}"
     records = []
-    for position, row in enumerate(rows):
+    for position, (row, segment) in enumerate(rows):
         item_id = f"{queue_id}-{position:03d}"
         stratum = _stratum_of(row)
         records.append((item_id, queue_id, run_id, row["notice_id"], stratum,
-                        position, strategy, seed, None, 0))
+                        position, strategy, seed, segment, None, 0))
     with conn:
+        # Named columns, not positional: the table has grown a column once and
+        # a positional insert is how the next one lands in the wrong field.
         conn.executemany(
-            "INSERT OR IGNORE INTO review_queue VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO review_queue "
+            "(item_id, queue_id, run_id, reference_number, stratum, position, "
+            " sampling_strategy, sampling_seed, drawn_for_segment, revealed_at, "
+            " force_unblinded) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             records)
     conn.close()
-    # Queue id and size. Nothing about composition.
-    return {"queue_id": queue_id, "n": len(records)}
+    # Queue id and size. Nothing about the queue's own composition; see the
+    # docstring for why the branch's shape is a different question.
+    out = {"queue_id": queue_id, "n": len(records)}
+    if population is not None:
+        out["branch_population"] = population
+    return out
 
 
 def _stratum_of(row) -> str:
@@ -349,6 +554,12 @@ def record_review(item_id: str, decision: str, reviewer: str,
         "filter_version_label": run["filter_version_label"] if run else None,
         "sampling_strategy": item["sampling_strategy"],
         "sampling_seed": item["sampling_seed"],
+        # The axis this item was drawn to cover, or None for a uniform draw.
+        # In the log rather than only in the queue database, because the log is
+        # the evidence that survives - filter_audit.db is regenerable
+        # scaffolding, and "which segments produced disagreements" has to be
+        # answerable from the committed reviews alone.
+        "drawn_for_segment": item["drawn_for_segment"],
         # Read from the run. NEVER typed by the reviewer - a reviewer who could
         # state what production decided could state it wrong.
         "original_decision": "ACCEPT" if decision_row["production_admitted"] else "REJECT",
