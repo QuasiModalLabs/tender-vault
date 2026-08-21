@@ -64,6 +64,7 @@ NOTICES_DB = PROJECT_ROOT / "data" / "notices.db"
 AUDIT_DB = PROJECT_ROOT / "data" / "filter_audit.db"
 DEFAULT_PROFILE = PROJECT_ROOT / "vault" / "profiles" / "my-company.md"
 FEED_CSV = PROJECT_ROOT / ".cache" / "tenders.csv"
+SNAPSHOT_DIR = FEED_CSV.parent / "snapshots"
 
 TOOL_VERSION = "filter_audit/1"
 
@@ -167,6 +168,33 @@ def iter_archive(conn: sqlite3.Connection, closing_days: dict) -> Iterator:
         notice = P.Notice.from_archive_row(
             row, closing_day=closing_days.get(row["reference_number"]))
         yield notice, row["opportunity_kind"]
+
+
+def first_snapshot_date(snapshot_dir: Path = SNAPSHOT_DIR) -> Optional[str]:
+    """
+    The earliest day whose feed was kept, or None when none was.
+
+    ingest.py copies the outgoing .cache/tenders.csv into that directory before
+    each overwrite, so feed membership is recoverable from this date forward and
+    not before it. Read from the FILENAMES rather than from an index: there is
+    deliberately no index, and a directory listing cannot disagree with its own
+    contents.
+
+    The date is taken as the filename says it - not parsed into a date object
+    and reformatted - so a file the naming convention does not fit is skipped
+    rather than being coerced into a day it does not describe.
+    """
+    if not snapshot_dir.exists():
+        return None
+    dates = []
+    for path in snapshot_dir.glob("*.csv.gz"):
+        stem = path.name[:-len(".csv.gz")]
+        candidate = stem.rsplit("-", 3)[-3:]
+        if len(candidate) == 3 and all(part.isdigit() for part in candidate):
+            year, month, day = candidate
+            if len(year) == 4 and len(month) == 2 and len(day) == 2:
+                dates.append(f"{year}-{month}-{day}")
+    return min(dates) if dates else None
 
 
 def iter_feed(csv_path: Path = FEED_CSV) -> Iterator:
@@ -343,6 +371,7 @@ def replay(source: str = "archive",
         conn.close()
 
     admitted = first_reject.get("ADMITTED", 0)
+    snapshot_from = first_snapshot_date()
     return {
         "run_id": run_id,
         "filter_version": version,
@@ -374,13 +403,44 @@ def replay(source: str = "archive",
             "never present in the open feed on any day ingest.py ran."
             if source == "archive" else
             "The open-notice feed as last downloaded - a snapshot of what was "
-            "open that day, which is overwritten on the next download."),
-        "limitation": (
-            ".cache/tenders.csv is overwritten on every download, so the exact "
-            "set of notices ChromaDB admitted on a past day cannot be "
-            "reconstructed. This replay answers a different, answerable "
-            "question - see the module docstring."),
+            "open that day. The outgoing copy is kept in .cache/snapshots/ "
+            "before each overwrite, so past days are recoverable from the first "
+            "snapshot forward."),
+        "first_snapshot_date": snapshot_from,
+        "limitation": _limitation(snapshot_from),
     }
+
+
+def _limitation(snapshot_from: Optional[str]) -> str:
+    """
+    What this replay cannot recover, stated against a date once there is one.
+
+    Two wordings, not one with a date appended, because the claims differ in
+    kind. With no snapshots the limitation is unbounded - every past day is
+    gone. With snapshots it is bounded, and the boundary is the only part a
+    reader can act on: before that date the question is unanswerable, after it
+    the feed is on disk and a future replay can read it. Saying "cannot be
+    reconstructed" flat once that stopped being true would be the audit
+    overstating its own blindness, which is the same failure as overstating what
+    it checked.
+
+    Note what a snapshot does NOT give back: the predicates of that day. Before
+    filter_audit existed no filter version was recorded, so a replay over an old
+    snapshot judges old notices by today's rules.
+    """
+    if snapshot_from is None:
+        return (".cache/tenders.csv is overwritten on every download and no "
+                "snapshot has been taken yet, so the exact set of notices "
+                "ChromaDB admitted on a past day cannot be reconstructed. This "
+                "replay answers a different, answerable question - see the "
+                "module docstring.")
+    return (f"Replay of feed membership is unavailable before {snapshot_from}: "
+            f".cache/tenders.csv was overwritten on every download until the "
+            f"first snapshot was taken, so no set of notices open before that "
+            f"date can be reconstructed. From {snapshot_from} forward the feed "
+            f"as downloaded is in .cache/snapshots/. The PREDICATES of a past "
+            f"day are still not recoverable - no filter version was recorded "
+            f"before this package existed.")
 
 
 def render_funnel(result: dict) -> str:
@@ -439,6 +499,10 @@ def render_funnel(result: dict) -> str:
                    f"reads as 'undated, kept'. Shapes: {shapes}")
     out.append("")
     out.append(f"  {result['population_note']}")
+    # Printed, not just carried in the JSON. A limitation only a --json reader
+    # ever sees is a limitation the person reading the funnel does not know
+    # about, and this one bounds what every number above can be checked against.
+    out.append(f"  {result['limitation']}")
     if result["persisted"]:
         out.append(f"  persisted {result['rows_written']:,} decision rows "
                    f"(0 means this exact run was already recorded)")

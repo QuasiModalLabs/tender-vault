@@ -588,6 +588,54 @@ def test_historical_reproducibility() -> None:
     check("the original run's rows are untouched", rows, written)
 
 
+def test_limitation_is_bounded_by_the_snapshots() -> None:
+    """
+    What the replay says it cannot do must track what is actually on disk.
+
+    The limitation is the one line in the funnel that bounds every number above
+    it, so it has to be derived rather than written down. Before any snapshot
+    exists the claim is unbounded; once ingest.py has kept a day, the claim is
+    that everything BEFORE that day is unrecoverable — and saying otherwise
+    would be the audit overstating its own blindness.
+    """
+    print("\nLimitation text:")
+    from filter_audit.replay import _limitation, first_snapshot_date
+
+    empty = Path(tempfile.mkdtemp()) / "no-snapshots"
+    check("an absent snapshot directory reports no date",
+          first_snapshot_date(empty), None)
+
+    empty.mkdir(parents=True)
+    check("an empty snapshot directory reports no date",
+          first_snapshot_date(empty), None)
+
+    for name in ("tenders-2026-08-19.csv.gz", "tenders-2026-08-17.csv.gz",
+                 "tenders-2026-09-01.csv.gz"):
+        (empty / name).write_bytes(b"")
+    check("the EARLIEST snapshot bounds the claim",
+          first_snapshot_date(empty), "2026-08-17")
+
+    # A file the convention does not fit is skipped, never coerced into a day
+    # it does not describe.
+    (empty / "tenders-backup.csv.gz").write_bytes(b"")
+    (empty / "tenders-2026-8-1.csv.gz").write_bytes(b"")
+    check("a non-conforming name is ignored, not parsed",
+          first_snapshot_date(empty), "2026-08-17")
+
+    unbounded = _limitation(None)
+    bounded = _limitation("2026-08-17")
+    check("with no snapshots the claim stays general",
+          "cannot be reconstructed" in unbounded, True)
+    check("...and names no date", "2026" not in unbounded, True)
+    check("with snapshots the claim names the boundary",
+          "2026-08-17" in bounded, True)
+    check("...and says unavailable BEFORE it, not unavailable",
+          "unavailable before 2026-08-17" in bounded, True)
+    # A snapshot returns the feed, not the filter that read it.
+    check("...while still refusing to claim the past predicates",
+          "PREDICATES" in bounded, True)
+
+
 def test_false_negative_recording() -> None:
     """
     A rejected notice can become structured evidence without moving the filter.
@@ -716,6 +764,7 @@ def main() -> int:
     test_regression_protection()
     test_no_change_is_not_equivalence()
     test_historical_reproducibility()
+    test_limitation_is_bounded_by_the_snapshots()
     test_false_negative_recording()
     test_reviewer_must_be_stated()
 

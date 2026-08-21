@@ -183,10 +183,18 @@ rewriting an entry would retroactively change what a past run claims to have bee
 
 ## What this cannot do
 
-`.cache/tenders.csv` is overwritten on every download, and the CanadaBuys open
-feed is a snapshot of what was open the day it was read. **The exact set of
-notices ChromaDB admitted on any past day is gone and no replay recovers it.**
-Notices that opened and closed between two archive cuts may not appear at all.
+The CanadaBuys open feed is a snapshot of what was open the day it was read, and
+`.cache/tenders.csv` was overwritten on every download. **The exact set of
+notices ChromaDB admitted on any day before the first entry in
+`.cache/snapshots/` is gone and no replay recovers it.** From that date forward
+the outgoing feed is copied there before each overwrite, so feed membership is
+recoverable — `replay-filter` prints the boundary date in its limitation line
+rather than leaving the reader to check the directory.
+
+Recoverable feed membership is not a recoverable decision. No filter version was
+recorded before this package existed, so replaying an old snapshot judges old
+notices by today's predicates. Notices that opened and closed between two
+archive cuts may still not appear at all.
 
 `--as-of publication` answers a different, answerable question: given the archive
 row and today's predicates, would this notice have passed on the day it was

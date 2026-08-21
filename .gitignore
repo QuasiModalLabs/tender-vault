@@ -7,6 +7,15 @@ venv/
 # CSV cache — re-downloaded when you run ingest
 .cache/
 
+# Feed snapshots — the one thing under .cache/ that is NOT re-downloadable. The
+# open-notice feed is a snapshot of what was open the day it was read, and
+# CanadaBuys publishes no history, so a day not copied here is a day gone. Still
+# not committed: a year of daily snapshots is hundreds of megabytes, and they
+# are local evidence rather than shared source. Redundant under `.cache/` above
+# and written out anyway, so that a future narrowing of that line does not
+# start committing them by accident.
+.cache/snapshots/
+
 # ChromaDB — rebuilt by ingest.py. Not committed, to keep the repo small.
 # Anyone cloning runs ingest.py once.
 chroma_db/
