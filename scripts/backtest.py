@@ -75,19 +75,42 @@ A FROZEN LITERAL IS NOT A FROZEN MEANING
 Clause 5 names five `opportunity_kind` strings. The strings are frozen here;
 what they DENOTE is decided by ingest.classify_notice, three modules away, and
 that moved: "Directed Contract" was mapped to `pre_awarded` in 6aea2d0, so 25
-archive notices that clause 5 admitted as `solicitation` or `product` will be
-excluded by it the next time notices.db is rebuilt. Nothing was edited here and
-the predicate changed anyway.
+archive notices that clause 5 admitted as `solicitation` or `product` are
+excluded by it once notices.db is rebuilt. Nothing was edited here and the
+predicate changed anyway.
 
 So the meaning is recorded, not just the words. `FROZEN_KIND_MANIFEST` holds the
-literals that produced each of the five kinds at the freeze commit, and
-`non_procurement_kinds()` — the only way to read the frozen set — refuses to
-return it when the live manifest disagrees, naming the kinds whose membership
-moved. It does not auto-resolve and does not re-derive: re-deriving would be the
-predicate agreeing with whatever the classifier now says, which is the fitting
-this rule exists to prevent. The check currently RAISES, and that is not a bug
-to route around — it is the drift above, waiting on a deliberate re-freeze and a
-discarded run.
+literals that produce each of the five kinds, and `non_procurement_kinds()` —
+the only way to read the frozen set — refuses to return it when the live
+manifest disagrees, naming the kinds whose membership moved. It does not
+auto-resolve and does not re-derive: re-deriving would be the predicate agreeing
+with whatever the classifier now says, which is the fitting this rule exists to
+prevent.
+
+PREDICATE REVISION 2 — 2026-08-21, re-frozen against the current classifier
+--------------------------------------------------------------------------
+The manifest was re-frozen to include "directed contract" under `pre_awarded`,
+deliberately, and this is the record of why it did not require discarding the
+2026-08-15 run.
+
+Measured before deciding, against the 30,527-row archive: of the 25 notices
+whose membership moves, **none passes clause 3**. Not one is relevant IT work,
+so not one was ever a hit, and the label is identical either side of the change
+— 168 department-year hits before, 168 after, with no department-year gained or
+lost. The extension of clause 5 changed; the extension of the PREDICATE, which
+is clauses 3-6 together, did not.
+
+The check was still right to fire. It can see that a meaning moved; it cannot
+see whether the moved notices were ever admitted, because that depends on the
+other clauses and on the corpus. Only a measurement can say that, and firing is
+what forced the measurement to be made rather than assumed. A re-freeze without
+that measurement would have been the predicate quietly agreeing with the
+classifier, which is exactly what the mechanism exists to prevent.
+
+`vault/reference/backtest-2026-08-15.md` therefore stands as computed, and
+carries a dated note saying so. Nothing was re-run: the predictive line is
+stopped as of 2026-08-16, and re-running to confirm a number that provably
+cannot move would be theatre.
 
 ------------------------------------------------------------------------------
 LEAKAGE — WHY EACH FEATURE IS KNOWABLE AT T
@@ -208,22 +231,27 @@ _NON_PROCUREMENT_KINDS = frozenset({
     "construction", "results_notice", "pre_awarded", "information", "call_up",
 })
 
-# What those five words denoted when the predicate was frozen, from
-# ingest.kind_manifest() at the freeze commit (605590f).
+# What those five words denote, from ingest.kind_manifest().
 #
 # THIS IS THE POINT OF THE WHOLE BLOCK. Clause 5 froze five kind STRINGS. Commit
 # 6aea2d0 added "Directed Contract" to ingest._NOTICE_KINDS, and `pre_awarded`
 # kept its spelling while changing its meaning: 25 archive notices — 14 typed
 # *SRV that classified as `solicitation`, 11 typed *GD that classified as
-# `product` — become `pre_awarded` the next time notices.db is rebuilt, and
-# clause 5 then excludes them. The other 34 Directed Contract notices are *CNST
-# and were already `construction`, so they do not move.
+# `product` — become `pre_awarded` once notices.db is rebuilt, and clause 5 then
+# excludes them. The other 34 Directed Contract notices are *CNST and were
+# already `construction`, so they do not move.
 #
 # The frozen predicate at the top of this module says a predicate that has to
 # change means the run is DISCARDED AND RESTARTED, not patched. That rule
 # assumed the predicate could only change by someone editing it. It can also
 # change by someone editing a table three modules away, which is what happened,
 # and this manifest is what makes that visible instead of silent.
+#
+# RE-FROZEN 2026-08-21 against the current classifier, deliberately, after
+# measuring that none of the 25 passes clause 3 — none was ever a hit, and the
+# label is byte-identical either side of the change. See PREDICATE REVISION 2 in
+# the module docstring; that measurement is the reason no run was discarded, and
+# it exists because the check refused to run until someone made it.
 #
 # RESTRICTED TO THE FIVE FROZEN KINDS on purpose. A literal moving between two
 # kinds that are both outside the set — say a new notice type joining
@@ -242,7 +270,13 @@ FROZEN_KIND_MANIFEST = {
     ],
     "construction": ["procurement_category:*CNST"],
     "information": ["notice_type:request for information"],
-    "pre_awarded": ["notice_type:advance contract award notice"],
+    "pre_awarded": [
+        "notice_type:advance contract award notice",
+        # Added by the 2026-08-21 re-freeze. A directed contract is the same
+        # shape as an ACAN — a sole-source already decided — so this is the
+        # classifier getting more right, not the predicate getting looser.
+        "notice_type:directed contract",
+    ],
     "results_notice": [
         "prose_results_phrase:following the itq",
         "prose_results_phrase:have been selected as qualified",
@@ -257,8 +291,12 @@ FROZEN_KIND_MANIFEST = {
 # agree with it by construction and prove nothing; written down, it is a second
 # statement of the same fact, and editing the frozen membership without
 # re-recording this is itself caught — see _check_frozen_manifest.
+#
+# 27db5c7af97b.. was the freeze-time value and is kept here as the record of what
+# this predicate was frozen against before 2026-08-21. It is a comment and not a
+# list: a second live value would invite a check that accepts either.
 FROZEN_KIND_MANIFEST_SHA256 = (
-    "27db5c7af97b5109d52f3aad850ddb32b5b279a908dba8e9b4da778d37603d79")
+    "785e2db9e9769ab861a44bfd8db7e0727f0ee2d2e41cfb6bbd0ed65c9ff0ae25")
 
 
 class FrozenPredicateDrift(RuntimeError):

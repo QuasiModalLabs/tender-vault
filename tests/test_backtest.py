@@ -139,34 +139,19 @@ def test_every_feature_is_reachable_only_through_evidence():
     Each registered feature must run against an Evidence alone and must carry a
     written justification of why its inputs are knowable at T. The docstring
     table is the argument; this is the check that no feature ships without one.
-
-    Run with the kind classifier PINNED to the freeze-time manifest, because
-    `prior_year_hit` evaluates the frozen target predicate and that predicate
-    currently refuses to run — see
-    test_the_frozen_predicate_refuses_a_moved_classifier, which is where the
-    refusal is asserted. Leaving the pin out would turn this leakage check into
-    a second, noisier report of the same drift, and would stop it answering the
-    question it exists to ask: can a feature reach around the as-of gate.
     """
     ev = bt.as_of(PROBE_DATE)
     start, end = bt.fy_bounds(2024)
-    original_manifest = bt.kind_manifest
-    bt.kind_manifest = lambda: dict(bt.FROZEN_KIND_MANIFEST)
-    bt.non_procurement_kinds.cache_clear()
-    try:
-        for feat in bt.FEATURES:
-            try:
-                value = feat.fn(ev, "ssc", start, end)
-                ran = isinstance(value, float)
-            except Exception as exc:                      # noqa: BLE001
-                ran = False
-                print(f"        {feat.name} raised {exc!r}")
-            check(ran, f"feature {feat.name} runs against Evidence alone")
-            check(bool(feat.knowable_because.strip()),
-                  f"feature {feat.name} states why it is knowable at T")
-    finally:
-        bt.kind_manifest = original_manifest
-        bt.non_procurement_kinds.cache_clear()
+    for feat in bt.FEATURES:
+        try:
+            value = feat.fn(ev, "ssc", start, end)
+            ran = isinstance(value, float)
+        except Exception as exc:                      # noqa: BLE001
+            ran = False
+            print(f"        {feat.name} raised {exc!r}")
+        check(ran, f"feature {feat.name} runs against Evidence alone")
+        check(bool(feat.knowable_because.strip()),
+              f"feature {feat.name} states why it is knowable at T")
 
 
 # ---------------------------------------------------------------------------
@@ -329,31 +314,70 @@ def test_the_frozen_predicate_refuses_a_moved_classifier():
     experiment — and it must name what moved, because "something changed" is not
     something a human can act on.
 
-    This currently fires for real: "Directed Contract" was mapped to
-    `pre_awarded` after the freeze. The assertions are written against the
-    mechanism, not against that one drift, so they survive the re-freeze that
-    resolves it.
+    The drift is driven by a STAND-IN classifier rather than by the repository's
+    current state. It fired for real once — "Directed Contract" was mapped to
+    `pre_awarded` after the freeze, and the manifest was re-frozen against it on
+    2026-08-21 — and a test that asserted the live state would have passed only
+    until that decision was made. The mechanism is what has to keep working.
     """
     row = {"opportunity_kind": "solicitation", "unspsc": "*81111500"}
 
+    # The live classifier and the recorded manifest agree: the re-freeze holds,
+    # and the predicate runs.
+    bt.non_procurement_kinds.cache_clear()
+    check(bt._manifest_sha256(bt._live_kind_manifest())
+          == bt.FROZEN_KIND_MANIFEST_SHA256,
+          "the recorded manifest describes the live classifier")
+    check(bt.is_target_notice(row, ["8111"], []) is True,
+          "...so the frozen predicate runs")
+
+    # Now move a literal into one of the frozen kinds, as 6aea2d0 did.
+    moved = {kind: list(literals)
+             for kind, literals in bt.FROZEN_KIND_MANIFEST.items()}
+    moved["pre_awarded"] = moved["pre_awarded"] + ["notice_type:letter of interest"]
+    original_manifest = bt.kind_manifest
+    bt.kind_manifest = lambda: moved
     bt.non_procurement_kinds.cache_clear()
     raised = None
     try:
         bt.is_target_notice(row, ["8111"], [])
     except bt.FrozenPredicateDrift as exc:
         raised = exc
+    finally:
+        bt.kind_manifest = original_manifest
+        bt.non_procurement_kinds.cache_clear()
+
     check(raised is not None,
           "is_target_notice refuses to run under a moved classifier")
     if raised is not None:
         message = str(raised)
         check("pre_awarded" in message,
               "...naming the kind whose membership changed")
-        check("directed contract" in message,
+        check("letter of interest" in message,
               "...and the literal it gained")
         check("construction" not in message,
               "...and NOT a kind whose membership held still")
         check("discarded and restarted" in message,
               "...and what resolving it means, rather than how to silence it")
+
+    # A literal LOST from a frozen kind is the same class of change and must
+    # also fire: a notice type that stops meaning `information` starts being
+    # admitted by clause 5.
+    shrunk = {kind: list(literals)
+              for kind, literals in bt.FROZEN_KIND_MANIFEST.items()}
+    shrunk["information"] = []
+    bt.kind_manifest = lambda: shrunk
+    bt.non_procurement_kinds.cache_clear()
+    lost = None
+    try:
+        bt.non_procurement_kinds()
+    except bt.FrozenPredicateDrift as exc:
+        lost = str(exc)
+    finally:
+        bt.kind_manifest = original_manifest
+        bt.non_procurement_kinds.cache_clear()
+    check(lost is not None and "lost" in lost,
+          "a literal LOST from a frozen kind fires too, and says so")
 
     # The manifest is restricted to the kinds the predicate actually reads. A
     # literal joining `qualification` cannot change what clause 5 excludes, and
