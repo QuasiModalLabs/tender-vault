@@ -152,6 +152,8 @@ Stamps rather than file timestamps, because ChromaDB rewrites its segment files 
 
 The `state` field keeps three cases apart that would otherwise look identical — `stamped`, `unstamped` (predates stamping; a rebuild will date it), and `no_feed_at_build` (built with no cached feed, so its data can't be dated and a rebuild alone won't fix it).
 
+The corpus also records **what it dropped after the funnel had already counted it.** The blank-reference-number check runs at write time, so the funnel's final number was always an upper bound on what reached ChromaDB and the gap appeared in no line the ingest printed. `funnel_admitted`, `corpus_written` and the delta now sit beside the stamps. It's currently zero, which is the answer I wanted and not one I had before — a count reported only when it's interesting is a count nobody can trust when it's absent.
+
 **Closing windows are computed per query, not stored.** `closing_window` is derived from `closing_date` against the profile's `imminent_within_days`, so it's correct on the day you ask rather than the day of the ingest: `imminent`, `open`, `closed`, `standing`, `unknown`. Notices closing in two days are *labelled*, never dropped — whether a short fuse is disqualifying is the reader's call, for the same reason the scoring formula is gone. `standing` catches the sentinel years the feed uses for arrangements with no real close, so nothing ever reports a fifty-year countdown.
 
 ## Does the pre-RFP idea actually work?
@@ -203,6 +205,24 @@ Neither is possible with this data, because federal contracts describe work as c
 I'm recording that because it's a durable boundary, not a bug to fix later: **this dataset is good for *who won what, roughly* and useless for *what is actually happening*.** Every future idea gets tested against that line.
 
 The provocation idea isn't dead, though — it just needed sources that carry intent and detail. Which is exactly what the plans and audit layers turned out to be.
+
+## Then I did the same thing to the filter
+
+The backtest checked the premise. It didn't check the thing every part of this depends on: the filter that decides what enters the corpus at all.
+
+I could see precision — the weekly briefing is a list of what survived, and I read it. Recall was invisible by construction. The vault only knows about tenders that got through, so the entire question *what did it throw away that it shouldn't have* had no surface. That's not a gap you can close by looking harder at the output.
+
+So `scripts/filter_audit/` replays the filter over the notice archive and records why each of 30,527 notices landed where it did. Every number below is from that archive, which is **not** the population the live filter sees — `notices.db` holds every federal notice for the fiscal years ingested, including ones that were never in the open feed on a day this ran. Every replay says so in its own output and refuses to compare the two. Three things fell out of it.
+
+**The rejects are two different failures, not one.** 27,655 rejected, and the split that matters is 21,471 coded by the publisher into a commodity family we don't buy, against 6,121 that carry no codes and matched no keyword. They imply opposite fixes, and **no keyword refinement can touch the first group at all** — a notice with UNSPSC codes is judged on its codes and the competency list is never consulted. Half the improvements I'd have reached for would have been aimed at 22% of the problem. So the record refuses to collapse them into one `relevant: false`, and `sample-rejects --strategy coded_wrong_family` draws that branch spread across UNSPSC segments, because sampling it uniformly just keeps returning the biggest segment.
+
+**Four of the five gates remove almost nothing the fifth wouldn't.** Closed, exclusion, construction and jurisdiction reject 3,041 notices between them, which looks load-bearing. But 2,978 of those fail the relevance gate independently — the funnel only ever credited the *first* gate to fire, which is whichever one happened to run earlier. Remove all four and **63 notices of 30,527** enter that otherwise wouldn't. They're still worth having; they're just worth having for their reasons — a construction notice is not IT work whatever its codes say — rather than for their volume.
+
+**A predicate frozen in one file changed because a table in another file changed.** The backtest's target predicate names five notice kinds it excludes. Those five words never moved. What they *denote* did, the moment `classify_notice` started mapping "Directed Contract" to `pre_awarded`, and 25 archive notices silently changed sides. It's now recorded as a hash of the classifier's own vocabulary, and the predicate refuses to run when the two disagree. It fired; I measured; none of the 25 had ever passed the relevance clause, so nothing was discarded and the recorded run stands. The check couldn't have known that — which is exactly why it had to stop and make someone look.
+
+Review is blinded, and structurally rather than by agreement: the reviewer is handed a type that doesn't carry the verdict, and `reveal` refuses until a disposition exists in the store. Reviewed cases graduate into a golden set that gates refinements. **Nothing in the package is readable from a decision** — `predicates.py` doesn't import the review module, so an ACCEPT label physically cannot reach admission.
+
+What it still can't do is tell you what was in the feed on a past day. CanadaBuys publishes no history and `.cache/tenders.csv` was overwritten on every download, so that's gone for good up to the first snapshot the ingest now keeps. The replay prints that boundary date rather than implying it can see past it.
 
 ## Convergence
 
@@ -327,6 +347,10 @@ The presentation rules turned out to carry design weight, because a template is 
 
 **Relevance leans on the publisher, and the publisher has gaps.** Tenders are filtered on their UNSPSC commodity codes where CanadaBuys files them, because guessing a procurement officer's vocabulary is how a boiling-liquid-expanding-vapour-explosion study ends up in a cloud search — "vapour cloud". But three source systems file no codes at all (MX, PW and SSC — 37 of 431 notices post-filter on the 2026-08-04 feed), and one of them is Shared Services Canada, the largest federal IT buyer. Those fall back to keyword matching, and the ingest funnel prints the split every run so the gap stays visible.
 
+**Recall is measurable now and still unmeasured.** The filter audit gives the rejects a surface — they can be replayed, sampled and reviewed blind — but a surface is not a finding. What's actually been reviewed is a handful of cases, and 21,471 of the rejects sit in a branch that has barely been looked at. The honest statement is that I know the *shape* of what the filter throws away and not yet whether it's wrong.
+
+**Feed history starts when I started keeping it.** The open-notice feed is a snapshot of what was open the day it was read, CanadaBuys publishes no archive of it, and this repo overwrote its copy on every download for months. Every one of those days is unrecoverable. The ingest now keeps the outgoing file before replacing it, so the loss stops accumulating — but nothing recovers what's already gone, and no replay of a day before the first snapshot is possible. The audit prints that boundary rather than glossing it.
+
 **The contracts data is directional, not exact.** It's unaudited, vendor names are only lightly normalized (near-variants may still count separately), reporting lags about a quarter, and contract amendments are aggregated per procurement family using the highest recorded value — which avoids double-counting but under-represents families that straddle the date window.
 
 **The Auditor General's own deep links are dead.** 214 of the 364 audit records carry an `oag-bvg.gc.ca` URL that now serves an error page under an HTTP 200, so nothing about it fails loudly. The dossier links to the CKAN dataset instead and keeps the original URL as citation text.
@@ -385,6 +409,20 @@ python scripts/backtest.py --write     # report to vault/reference/
 python tests/test_backtest.py          # the leak tests, which are the point
 ```
 
+The same archive is what the filter audit replays, so once it's built you can
+ask what the filter has been throwing away:
+
+```bash
+python scripts/filter_audit replay-filter --persist        # the funnel, and what each gate is worth
+python scripts/filter_audit explain SSC-22-00019111:T      # one notice, production beside audit
+python scripts/filter_audit sample-rejects --strategy coded_wrong_family --n 25
+```
+
+The last one builds a blinded queue; `next`, `record-review` and `categorize`
+work through it. Your dispositions land in `vault/reference/filter-reviews.jsonl`
+as append-only evidence, which is why they're committed and the audit database
+isn't.
+
 Then either open Claude Code in the repo root and ask *"any good federal IT tenders for us this week?"*, or wire it into Claude Desktop as an MCP server.
 
 **Nothing derived is committed.** Every layer is filtered and scored against your profile, so the same source data produces different results for different firms — which makes a shipped database actively misleading rather than a convenience. Only `data/crosswalk.db` ships, because it derives from `org_aliases.yaml` and is a fact about the Government of Canada rather than about any one firm. The venv is optional for the commands above but required for the MCP path.
@@ -410,14 +448,15 @@ The contracts and plans refresh workflows are manual-dispatch only. They rebuilt
 9. [`scripts/plans_ingest.py`](scripts/plans_ingest.py) — the two-pole scoring technique, with the docstring explaining why the forward-looking field beats the retrospective one.
 10. [`scripts/contracts_ingest.py`](scripts/contracts_ingest.py) — streaming filter over millions of rows into SQLite; the design notes are in the module docstring.
 11. [`scripts/oag_ingest.py`](scripts/oag_ingest.py) — the audit pull, relevance scoring, and department attribution.
-12. [`scripts/backtest.py`](scripts/backtest.py) — the experiment that checked the premise, and the module docstring is most of why it's here: the frozen target predicate, a per-feature table of why each input was knowable at the date it's read as of, and the argument for why a score is permitted in that one file and nowhere else. It also carries the record of the one time the predicate changed, before any result existed, and why that run was discarded rather than patched.
-13. [`.github/workflows/ingest.yml`](.github/workflows/ingest.yml) — how data stays fresh without me remembering.
+12. [`scripts/backtest.py`](scripts/backtest.py) — the experiment that checked the premise, and the module docstring is most of why it's here: the frozen target predicate, a per-feature table of why each input was knowable at the date it's read as of, and the argument for why a score is permitted in that one file and nowhere else. It also carries both times the predicate changed. The first was an error found before any result existed, and that run was discarded rather than patched. The second is the more interesting one: nothing in the file was edited at all, and the predicate changed anyway, because a classifier three modules away redefined one of the words it was frozen on.
+13. [`scripts/filter_audit/`](scripts/filter_audit) — replaying the filter over the archive and reviewing what it rejected. Start at [`predicates.py`](scripts/filter_audit/predicates.py): the seven admission gates, one per function, each evaluated independently so a notice rejected at gate 3 still gets a real verdict from gate 5. That independence is what makes "what is this gate worth" answerable at all. [`blinding.py`](scripts/filter_audit/blinding.py) is the shortest argument in the package — the reviewer gets a type that does not carry the withheld fields, rather than a rule about not printing them.
+14. [`.github/workflows/ingest.yml`](.github/workflows/ingest.yml) — how data stays fresh without me remembering.
 
 ## What comes next
 
 - **A department-level tender index.** The dossier reads the open-notice feed directly and resolves entity names per query, which is fine at the ~900 notices the feed carried in August 2026 and won't be at ten thousand. The attribution belongs at ingest, next to where the audits already write theirs.
 - **A pre-mortem command.** For any tender under serious consideration: *assume we bid and lost, or won and regretted it — walk backwards and tell me why.* One adversarial pass against my own enthusiasm before committing. This is the surviving core of a multi-persona "steering committee" feature I cut mid-build; the personas changed tone without changing reasoning, but the skepticism they were reaching for is real.
-- **A profile refinement loop.** Quarterly, read across everything watched, parked, and archived, and propose profile edits based on revealed preference. One structural catch to design around: the vault only knows about tenders that survived the filter, so it can improve precision but is blind to recall. It has to be paired with an audit that samples what the filter *rejected*.
+- **A profile refinement loop.** Quarterly, read across everything watched, parked, and archived, and propose profile edits based on revealed preference. The recall half of this is now built — the audit replays what the filter rejected and gates a proposed change against a golden set — so what's left is the loop itself, and the reviewing. A refinement that no one has evaluated against reviewed cases is still just an opinion about the profile.
 - **The tier decision, and the count that follows it.** The gating series says qualify on TBIPS; it doesn't yet say at which tier, region and resource categories. Once that's chosen, the reachable count gets re-derived against it — and the series keeps running either way, since the value of a verified zero is that it accumulates.
 - **Similarity drift.** Flag a new tender that closely resembles one archived as a loss.
 - **Win/loss pattern mining**, once the archive is deep enough to say things like *we lose every tender that requires active SOC work*.
@@ -436,4 +475,4 @@ None of these need new infrastructure. That's mostly what the markdown-first des
 
 Contains information licensed under the [Open Government Licence – Canada](https://open.canada.ca/en/open-government-licence-canada). Code is MIT.
 
-The derived contracts database is committed as a static file, so you can browse it with no server at all by pointing [Datasette Lite](https://lite.datasette.io/) at its raw GitHub URL.
+One database is committed, and it's the one that isn't about my company: `data/crosswalk.db`, the department registry derived from [`vault/crosswalk/org_aliases.yaml`](vault/crosswalk/org_aliases.yaml). Ninety-odd hand-checked assertions about what the Government of Canada calls itself, 60KB, and browsable with no server at all by pointing [Datasette Lite](https://lite.datasette.io/) at its raw GitHub URL. The rest are gitignored — the contracts, plans and audit databases are filtered and scored against one profile, so they aren't portable, and `notices.db` is 120MB. All of them rebuild from the ingest scripts.
