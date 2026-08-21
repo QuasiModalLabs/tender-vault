@@ -11,3 +11,10 @@
 # attestation file is rewritten wholesale by `crosswalk.py --attest`, so without
 # this it shows as modified after every run that changed nothing.
 *.yaml text eol=lf
+
+# Python, because scripts/filter_audit/version.py hashes predicates.py to make
+# the filter version, and a CRLF checkout would hash differently from an LF one
+# — two machines silently disagreeing about which filter they ran. The hash
+# helper normalizes newlines too; this settles what git stores, that settles
+# what the hash sees regardless of how the file arrived.
+*.py text eol=lf

@@ -1,0 +1,1011 @@
+# Golden evaluation set for the tender filter.
+#
+# WHAT THIS IS FOR. Comparing two filter versions on exactly the same entries,
+# so a refinement can be judged rather than believed. Precision and recall are
+# reported as two separate observed numbers with intervals - never combined into
+# one figure, because a single number is what lets "admits more" pass for
+# "is better".
+#
+# EVERY ENTRY FREEZES ITS RAW ROW. Feed-sourced entries have no other home
+# (.cache/tenders.csv is overwritten on every download) and archive-sourced ones
+# need it too, because data/notices.db is gitignored and 120MB and this set must
+# evaluate on a fresh clone. `verify-golden` compares frozen rows against the
+# archive when it is present and REPORTS disagreement rather than resolving it.
+#
+# HOW IT WAS BUILT, in order. The clearly_relevant and clearly_irrelevant strata
+# were drawn first, by a deterministic rule at seed 20260820, before any review
+# existed - so the set is not merely the population the filter is known to fail.
+# The four named cases were then added from the repository's own documented
+# evidence and from predicate-independent replay. Nothing here is invented.
+#
+# EVERY ENTRY CARRIES ITS OWN `as_of`. Evaluating a 2022 notice against today's
+# clock rejects it at stage 1 and measures nothing.
+#
+# Editing an entry changes what every past evaluation meant. Add entries; do not
+# rewrite them.
+schema_version: 1
+set_version: 1
+frozen: '2026-08-20'
+deterministic_seed: 20260820
+entries:
+- id: gold-relevant-01
+  reference_number: cb-6630-76863747
+  source: archive
+  class: clearly_relevant
+  expected: ADMIT
+  as_of: '2023-06-22'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: deterministic_draw
+    seed: 20260820
+    rule: FY2023-2024, shuffled at seed, first admitted
+  rationale: Drawn by the deterministic FY2023-2024 rule at seed 20260820, before any review
+    existed. Admitted by the filter at its own publication date; retained as a regression
+    anchor so a refinement that starts rejecting real IT work is visible.
+  frozen_row:
+    reference_number: cb-6630-76863747
+    title: Flight Management System (FMS) Database Subscription Services
+    description: "1.\tAdvance Contract Award Notice (ACAN)\r\nAn ACAN is a public notice indicating\
+      \ to the supplier community that a department or agency intends to award a contract\
+      \ for services to a pre-identified supplier, thereby allowing other suppliers to signal\
+      \ their interest in bidding, by submitting a statement of capabilities. If no supplier\
+      \ submits a statement of capabilities that meets the requirements set out in the ACAN,\
+      \ on or before the closing date stated in the ACAN, the contracting officer may then\
+      \ proceed with the award to the pre-identified supplier.\r\n2.\tDefinition of the requirement\r\
+      \nThe Department of Transport Canada, through the Aircraft Services Directorate (ASD)\
+      \ (the “End User”) has a requirement for electronic Flight Management System (FMS) database\
+      \ services on an as and when required basis.\r\nThe requirement involves uninterrupted\
+      \ access to the supplier’s FMS database items.\r\n3.\tCriteria for assessment of the\
+      \ Statement of Capabilities (Minimum Essential Requirements)\r\nThe End User must operate\
+      \ in accordance with the latest navigation information provided by the supplier. The\
+      \ supplier must be the production certificate holder, as well as its current parts and\
+      \ support products manufacturer for the FMS in use on the End User’s fleet and flight\
+      \ simulator.\r\n4.\tApplicability of the trade agreement(s) to the procurement\r\nThis\
+      \ procurement is subject to the following trade agreements:\r\no\tCanadian Free Trade\
+      \ Agreement (CFTA)\r\no\tRevised World Trade Organization - Agreement on Government\
+      \ Procurement (WTO-AGP)\r\no\tCanada-European Union Comprehensive Economic and Trade\
+      \ Agreement (CETA)\r\no\tComprehensive and Progressive Agreement for Trans-Pacific Partnership\
+      \ (CPTPP)\r\no\tCanada-Chile Free Trade Agreement (CCFTA)\r\no\tCanada-Colombia Free\
+      \ Trade Agreement\r\no\tCanada-Honduras Free Trade Agreement\r\no\tCanada-Korea Free\
+      \ Trade Agreement\r\no\tCanada-Panama Free Trade Agreement\r\no\tCanada-Peru Free Trade\
+      \ Agreement (CPFTA)\r\no\tCanada-United Kingdom Trade Continuity Agreement (Canada-UK\
+      \ TCA)\r\no\tCanada-Ukraine Free Trade Agreement (CUFTA)\r\n5.\tJustification for the\
+      \ Pre-Identified Supplier\r\nThe End User must operate in accordance with the latest\
+      \ navigation information provided by the pre-identified manufacturer. The pre-identified\
+      \ supplier is the production certificate holder, as well as the current parts and support\
+      \ products manufacturer for the FMS in use on the End User’s fleet and flight simulator.\r\
+      \n6.\tGovernment Contracts Regulations Exception(s)\r\nThis ACAN invokes the exception\
+      \ to the Government Contracts Regulations found in Part I section 6 (d).\r\n7.\tExclusions\
+      \ and/or Limited Tendering Reasons\r\nThe following exclusions and/or limited tendering\
+      \ reasons are invoked:\r\n•\tunder the CFTA, CAP Code 71 Exclusive Rights (a. ii.)\r\
+      \n•\tunder all of Canada’s trade agreements, CAP Code 74 Interchangeable Parts\r\n8.\t\
+      Ownership of Intellectual Property\r\nOwnership of any Foreground Intellectual Property\
+      \ arising out of the proposed contract will vest in the Contractor.\r\n9.\tPeriod of\
+      \ the proposed contract or delivery date\r\nThe proposed contract is for a period of\
+      \ three (3) years, starting 2023-09-07. Two (2) one-year optional periods are considered\
+      \ to extend the contract period.\r\n10.\tCost estimate of the proposed contract\r\n\
+      The estimated value of the contract, including options, is USD $ 360,000.00 (HST extra).\r\
+      \n11.\tName and address of the pre-identified supplier\r\nUniversal Avionics \r\n3260\
+      \ E. Universal Way\r\nTucson (AZ) 85756\r\nUSA\r\n12.\tSuppliers' right to submit a\
+      \ statement of capabilities\r\nSuppliers who consider themselves fully qualified and\
+      \ available to provide the services described in the ACAN may submit a statement of\
+      \ capabilities in writing to the contact person identified in this notice on or before\
+      \ the closing date of this notice. The statement of capabilities must clearly demonstrate\
+      \ how the supplier meets the advertised requirements.\r\n13.\tClosing date for a submission\
+      \ of a statement of capabilities\r\n2023-07-06 at 2PM (ET)\r\n14.\tInquiries and submission\
+      \ of statements of capabilities\r\nInquiries and statements of capabilities are to be\
+      \ directed to:\r\nName: Dominik Giroux\r\nTransport Canada\r\nAircraft Services Directorate\r\
+      \nTelephone: \t+1 343-576-9931\r\nE-mail address: dominik.giroux@tc.gc.ca"
+    closing_date: '2023-07-07'
+    publication_date: '2023-06-22'
+    contracting_entity: Transport Canada
+    end_user: ''
+    notice_type: Advance Contract Award Notice
+    procurement_category: '*SRVTGD'
+    unspsc: '*81111902
+
+      *81112000'
+    gsin: ''
+  frozen_row_sha256: 9cd6cd64dd7ea52b64b56521a9492a416f7b74b46643cf14ef994e9d3475ef90
+- id: gold-relevant-02
+  reference_number: cb-6213-96181614
+  source: archive
+  class: clearly_relevant
+  expected: ADMIT
+  as_of: '2023-06-07'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: deterministic_draw
+    seed: 20260820
+    rule: FY2023-2024, shuffled at seed, first admitted
+  rationale: Drawn by the deterministic FY2023-2024 rule at seed 20260820, before any review
+    existed. Admitted by the filter at its own publication date; retained as a regression
+    anchor so a refinement that starts rejecting real IT work is visible.
+  frozen_row:
+    reference_number: cb-6213-96181614
+    title: Data Capture Services
+    description: The Contractor must provide data entry services on an "as and when requested”
+      basis. The work will be performed in accordance with detailed specified requirements
+      related to the information to be data captured and to technical conditions as to an
+      acceptable error rate, security standards, turnaround time, input data, storage media
+      to be kept until permission to destroy them is received.
+    closing_date: '2023-07-18'
+    publication_date: '2023-06-07'
+    contracting_entity: Employment and Social Development Canada
+    end_user: ''
+    notice_type: Request for Proposal
+    procurement_category: '*SRV'
+    unspsc: '*81112000'
+    gsin: ''
+  frozen_row_sha256: 1f3143f0c8d50f82abd78ab3e485ec14c889f52f95b3d33e0691f5f3b74a13f9
+- id: gold-relevant-03
+  reference_number: MX-43031818309
+  source: archive
+  class: clearly_relevant
+  expected: ADMIT
+  as_of: '2024-02-12'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: deterministic_draw
+    seed: 20260820
+    rule: FY2023-2024, shuffled at seed, first admitted
+  rationale: Drawn by the deterministic FY2023-2024 rule at seed 20260820, before any review
+    existed. Admitted by the filter at its own publication date; retained as a regression
+    anchor so a refinement that starts rejecting real IT work is visible.
+  frozen_row:
+    reference_number: MX-43031818309
+    title: INSURANCE BROKERAGE SERVICES
+    description: "ABOUT FCC\r\n\r\nFCC is Canada&rsquo;s leading agriculture and food lender,\
+      \ dedicated to the industry that feeds the world. FCC employees are committed to the\
+      \ long-standing success of those who produce and process Canadian food by providing\
+      \ flexible financing, AgExpert business management software, information and knowledge.\
+      \ FCC provides a complement of expertise and services designed to support the complex\
+      \ and evolving needs of food businesses. As a financial Crown corporation, FCC is a\
+      \ stable partner that reinvests profits back into the industry and communities it serves.\
+      \ For more information, visit fcc.ca.\r\n\r\nRFP CONTACT\r\n\r\nAdam Gottselig\r\nProcurement\
+      \ Manager\r\nFarm Credit Canada\r\nprocurement@fcc.ca\r\n\r\nRFP SCOPE\r\n\r\nFCC is\
+      \ soliciting proposals from qualified insurance brokers to provide insurance brokerage\
+      \ services for its current lines of insurance. The preferred Proponent will be required\
+      \ to provide claims support, make risk management decisions recommendations, evaluate\
+      \ the current policy structure and suggest ways to enhance FCC&rsquo;s exposure to risk.\
+      \ Refer to the RFP Scope (Part 4) of the RFP for further details.\r\n\r\nRFP PARTICULARS\r\
+      \n\r\n\tAll conditions for Proponent participation are included in the RFP documents.\r\
+      \n\tDuration of Contract:&nbsp; Sixty (60) months initial term.\r\n\tOptions: Option\
+      \ to extend for up to an additional sixty (60) months.\r\n\tEstimated Quantity of Goods\
+      \ or Services: N/A\r\n\tTimeframe of Delivery of Goods or Services: N/A\r\n\r\nRFP SCHEDULE\r\
+      \n\r\n\r\n\tRFP Release Date:&nbsp; February 12, 2024\r\n\tProponent Questions Accepted\
+      \ Until:&nbsp; February 20, 2024 at 2:00PM*\r\n\tFCC Response to Proponent Questions\
+      \ Delivered Before:&nbsp; February 27, 2024 at 5:00PM*\r\n\tRFP Closing Date/Time:&nbsp;\
+      \ March 7, 2024 at 2:00PM*\r\n\r\nNOTE: All times are CST &ndash; Saskatchewan. The\
+      \ above dates are subject to change at the sole discretion of FCC. Any changes to the\
+      \ RFP Schedule will be communicated to all Proponents via amendment on MERX.\r\n\r\n\
+      RFP PROCESS CONSIDERATIONS\r\n\r\n\r\n\tThis opportunity is covered under the provisions\
+      \ of Chapter 5 (Government Procurement) of the Canadian Free Trade Agreement (CFTA)\
+      \ and Chapter 19 (Government Procurement) of the Canada-European Union Comprehensive\
+      \ Economic and Trade Agreement (CETA).\r\n\tFCC is subject to the Official Languages\
+      \ Act (Canada). Proponents may choose to respond to this RFP in their official language\
+      \ of choice (English or French).\r\n\tThis opportunity notice references a non-binding,\
+      \ competitive RFP, and is not a call for tenders. FCC is not obligated to proceed with\
+      \ the Work described in the RFP Scope, and may cancel the RFP at any time. FCC&rsquo;s\
+      \ procurement process allows for consecutive or concurrent negotiations between FCC\
+      \ and one (1) or multiple Proponents, prior to awarding a Contract.\r\n\r\nMERX ELECTRONIC\
+      \ BIDDING SYSTEM\r\n\r\n\r\n\tThis Request for Proposals (RFP), including any attachments\
+      \ and amendments to such RFP, is available for download by the Proponent on MERX. MERX\
+      \ is a Canadian Public Tenders electronic bidding system accessible at https://www.merx.com.\
+      \ It is the sole responsibility of the Proponent to ensure its compatibility with MERX.\r\
+      \n\tProponent proposals MUST be submitted electronically through MERX, preferably in\
+      \ a PDF or MS Word file, prior to the RFP Closing Date/Time specified in the RFP. Proposals\
+      \ submitted in other formats, by other methods or through any other means, or after\
+      \ the RFP Closing Date/Time specified in the RFP, may be rejected by FCC.\r\n\r\nPRIORITY\
+      \ OF DOCUMENTS\r\n\r\nIn the event there are any discrepancies between this opportunity\
+      \ notice and the information on the MERX website proper, this opportunity notice shall\
+      \ take precedence.Bidding and Documents are available on http://www.merx.com.  Fees\
+      \ may apply; See https://www.merx.com/public/pricing for more information."
+    closing_date: '2024-03-07'
+    publication_date: '2024-02-12'
+    contracting_entity: Farm Credit Canada (FCC)
+    end_user: ''
+    notice_type: ''
+    procurement_category: '*SRV'
+    unspsc: '*'
+    gsin: ''
+  frozen_row_sha256: 80f0cd4683d0504eaa4655462950f1c32d9cc2f4743594319c3e2ccdf34b3e52
+- id: gold-relevant-04
+  reference_number: MX-42857491945
+  source: archive
+  class: clearly_relevant
+  expected: ADMIT
+  as_of: '2023-09-08'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: deterministic_draw
+    seed: 20260820
+    rule: FY2023-2024, shuffled at seed, first admitted
+  rationale: Drawn by the deterministic FY2023-2024 rule at seed 20260820, before any review
+    existed. Admitted by the filter at its own publication date; retained as a regression
+    anchor so a refinement that starts rejecting real IT work is visible.
+  frozen_row:
+    reference_number: MX-42857491945
+    title: RFP – ORGANIZATIONAL AND CULTURAL TRANSFORMATION
+    description: "ABOUT FCC\r\nFCC is Canada&rsquo;s leading agriculture and food lender,\
+      \ dedicated to the industry that feeds the world. FCC employees are committed to the\
+      \ long-standing success of those who produce and process Canadian food by providing\
+      \ flexible financing, AgExpert business management software, information and knowledge.\
+      \ FCC provides a complement of expertise and services designed to support the complex\
+      \ and evolving needs of food businesses. As a financial Crown corporation, FCC is a\
+      \ stable partner that reinvests profits back into the industry and communities it serves.\
+      \ For more information, visit fcc.ca.\r\n\r\nRFP CONTACT\r\nAdam Gottselig\r\nProcurement\
+      \ Manager\r\nFarm Credit Canada\r\nprocurement@fcc.ca\r\n\r\nRFP SCOPE\r\nEffective\
+      \ July 31, 2023, FCC established a Transformation Hub that will coordinate the development\
+      \ of and execution of corporate transformation efforts.&nbsp;&nbsp;This &ldquo;Hub&rdquo;\
+      \ will remain in place for the duration of the corporate transformation activities,\
+      \ and will be dissolved following its completion.\r\n\r\nTo support the mandate of the\
+      \ Transformation Hub, FCC requires the services of an experienced and skilled Proponent\
+      \ (i.e. management consultant) to serve in the role of Head of Organizational and Cultural\
+      \ Transformation.&nbsp;&nbsp;This individual will report directly to FCC&rsquo;s new\
+      \ President and Chief Executive Officer and work closely with the Office of the CEO,\
+      \ the Executive Management Team (EMT), and the other members of the Transformation Hub,\
+      \ to help revitalize FCC&#39;s culture and review the organizational structure, develop\
+      \ a roadmap for its execution, and coordinate execution activities.\r\n\r\nRFP PARTICULARS\r\
+      \n\r\n\tAll conditions for Proponent participation are included in the RFP documents.\r\
+      \n\tDuration of Contract:&nbsp; Initial Term of three (3) years.\r\n\tOptions: Two (2),\
+      \ one (1) year options.\r\n\tEstimated Quantity of Goods or Services:&nbsp; Not applicable.\r\
+      \n\tTimeframe of Delivery of Goods or Services:&nbsp; Not applicable.\r\n\r\nRFP SCHEDULE\r\
+      \n\r\n\r\n\tRFP Release Date:&nbsp; September 8, 2023\r\n\tProponent Questions Accepted\
+      \ Until:&nbsp; September 15, 2023 at 2:00PM*\r\n\tFCC Response to Proponent Questions\
+      \ Delivered Before:&nbsp; September 25, 2023 at 5:00PM*\r\n\tRFP Closing Date/Time:&nbsp;\
+      \ October 3, 2023 at 2:00PM*\r\n\r\nNOTE: All times are CST &ndash; Saskatchewan. The\
+      \ above dates are subject to change at the sole discretion of FCC. Any changes to the\
+      \ RFP Schedule will be communicated to all Proponents via amendment on MERX.\r\n\r\n\
+      RFP PROCESS CONSIDERATIONS\r\n\r\n\r\n\tThis opportunity is covered under the provisions\
+      \ of Chapter 5 (Government Procurement) of the Canadian Free Trade Agreement (CFTA)\
+      \ and Chapter 19 (Government Procurement) of the Canada-European Union Comprehensive\
+      \ Economic and Trade Agreement (CETA).\r\n\tFCC is subject to the Official Languages\
+      \ Act (Canada). Proponents may choose to respond to this RFP in their official language\
+      \ of choice (English or French).\r\n\tThis opportunity notice references a non-binding,\
+      \ competitive RFP, and is not a call for tenders. FCC is not obligated to proceed with\
+      \ the Work described in the RFP Scope, and may cancel the RFP at any time. FCC&rsquo;s\
+      \ procurement process allows for consecutive or concurrent negotiations between FCC\
+      \ and one (1) or multiple Proponents, prior to awarding a Contract.\r\n\r\nMERX ELECTRONIC\
+      \ BIDDING SYSTEM\r\n\r\n\r\n\tThis Request for Proposals (RFP), including any attachments\
+      \ and amendments to such RFP, is available for download by the Proponent on MERX. MERX\
+      \ is a Canadian Public Tenders electronic bidding system accessible at https://www.merx.com.\
+      \ It is the sole responsibility of the Proponent to ensure its compatibility with MERX.\r\
+      \n\tProponent proposals MUST be submitted electronically through MERX, preferably in\
+      \ a PDF or MS Word file, prior to the RFP Closing Date/Time specified in the RFP. Proposals\
+      \ submitted in other formats, by other methods or through any other means, or after\
+      \ the RFP Closing Date/Time specified in the RFP, may be rejected by FCC.\r\n\r\nPRIORITY\
+      \ OF DOCUMENTS\r\nIn the event there are any discrepancies between this opportunity\
+      \ notice and the information on the MERX website proper, this opportunity notice shall\
+      \ take precedence.\r\n&nbsp;Bidding and Documents are available on http://www.merx.com.\
+      \  Fees may apply; See https://www.merx.com/public/pricing for more information."
+    closing_date: '2023-10-03'
+    publication_date: '2023-09-08'
+    contracting_entity: Farm Credit Canada (FCC)
+    end_user: ''
+    notice_type: ''
+    procurement_category: '*SRV'
+    unspsc: '*'
+    gsin: ''
+  frozen_row_sha256: 9f8d9cfd0c51e21141ce950b4508d6395ac27bafca7fa34ca1df0669aae7e30e
+- id: gold-relevant-05
+  reference_number: WS4188053755-Doc4188937392
+  source: archive
+  class: clearly_relevant
+  expected: ADMIT
+  as_of: '2023-09-01'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: deterministic_draw
+    seed: 20260820
+    rule: FY2023-2024, shuffled at seed, first admitted
+  rationale: Drawn by the deterministic FY2023-2024 rule at seed 20260820, before any review
+    existed. Admitted by the filter at its own publication date; retained as a regression
+    anchor so a refinement that starts rejecting real IT work is visible.
+  frozen_row:
+    reference_number: WS4188053755-Doc4188937392
+    title: ACAN Automated Airline Hosting and Aircraft Tasking System (AAHATS)
+    description: 'AMENDMENT TO RESPONSE DEADLINE: Please ignore the response deadline that
+      appears in the Ariba Discovery posting. You must submit your statement of capability
+      by14:00 EDT on 21 September 2023. The full Advance Contract Award Notice (ACAN) and
+      attachments can be accessed and downloaded from the Ariba Discovery Posting, your SAP
+      Ariba supplier account or by contacting the identified Contracting Authority. Access
+      and download the full ACAN and submit a statement of capability by logging in to your
+      SAP Ariba account and ensuring you have filled out your Government of Canada profile.
+      The Department of National Defence (DND), has a requirement for an Automated Airline
+      Hosting and AircraftTasking System. DND operates a fleet of Canadian Armed Forces (CAF)
+      aircraft as well as chartering with commercial industry to provide airlift resources
+      in support of operations and requires the capability to monitor flights throughout their
+      various phases, access to a passenger reservation system with related equipment in place
+      at various locations across Canada.'
+    closing_date: '2023-09-21'
+    publication_date: '2023-09-01'
+    contracting_entity: Department of Public Works and Government Services (PSPC)
+    end_user: Department of National Defence (DND)
+    notice_type: Advance Contract Award Notice
+    procurement_category: '*SRV'
+    unspsc: '*81112106'
+    gsin: ''
+  frozen_row_sha256: ed409dcdfcbc60f9f22103fee9c151eed0d8bb8888db0ba8e9563deaa0bbf578
+- id: gold-relevant-06
+  reference_number: cb-5354-1770598
+  source: archive
+  class: clearly_relevant
+  expected: ADMIT
+  as_of: '2023-05-10'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: deterministic_draw
+    seed: 20260820
+    rule: FY2023-2024, shuffled at seed, first admitted
+  rationale: Drawn by the deterministic FY2023-2024 rule at seed 20260820, before any review
+    existed. Admitted by the filter at its own publication date; retained as a regression
+    anchor so a refinement that starts rejecting real IT work is visible.
+  frozen_row:
+    reference_number: cb-5354-1770598
+    title: A.7 Programmer/Analyst Level 3
+    description: The National Research Council Canada Industrial Research Assistance Program
+      (NRC IRAP) requires the provision of a Level 3 BI Programmer/Analyst to support our
+      datawarehouse/business intelligence (DW/BI) projects.
+    closing_date: '2023-05-25'
+    publication_date: '2023-05-10'
+    contracting_entity: National Research Council
+    end_user: ''
+    notice_type: RFP against Supply Arrangement
+    procurement_category: '*SRV'
+    unspsc: '*81111600'
+    gsin: ''
+  frozen_row_sha256: 6811e84e4e61113d58e1dcca3f2ce3e67e3f0c911373df32b61ff734ccba1f95
+- id: gold-irrelevant-01
+  reference_number: WS4107145964-Doc4444391335
+  source: archive
+  class: clearly_irrelevant
+  expected: REJECT
+  as_of: '2024-02-16'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: deterministic_draw
+    seed: 20260820
+    rule: FY2023-2024, shuffled at seed, first rejected
+  rationale: Drawn by the same deterministic rule and seed, before any review. Rejected at
+    `relevance`. These are the entries a recall-chasing refinement breaks first, which is
+    exactly why they are here and why they were not chosen by anyone.
+  frozen_row:
+    reference_number: WS4107145964-Doc4444391335
+    title: ACAN W7714-238518-DNA Priority Improving High Fidelity Code for Assessing Emerging
+      Threats
+    description: 'AMENDMENT TO CLOSING TIME: Please disregard the Ariba Discovery posting
+      response deadline closing time and CanadaBuys posting closing time. You must submit
+      your statement of capability by 2024-03-04 at 14:00 EST. An Advance Contract Award Notice
+      (ACAN) is a public notice indicating to the supplier community that a department or
+      agency intends to award a contract for goods, services or construction to a pre-identified
+      supplier, thereby allowing other suppliers to signal their interest in bidding, by submitting
+      a statement of capabilities. If no supplier submits a statement of capabilities that
+      meets the requirements set out in the ACAN, on or before the closing date stated in
+      the ACAN, the contracting officer may then proceed with the award to the pre-identified
+      supplier. Over the last 2 decades DRDC Suffield Research Centre has conducted several
+      projects on the effects of various explosive technologies and the effectiveness of numerous
+      protective solutions resulting in physics based models that capture system effects.
+      This work resulted in the Computational Fluid Dynamics code Chinook by Martec Limited.
+      This contract will continue the development of this tool.'
+    closing_date: '2024-03-04'
+    publication_date: '2024-02-16'
+    contracting_entity: Department of Public Works and Government Services (PSPC)
+    end_user: Defence Research and Development Canada (DRDC)
+    notice_type: Advance Contract Award Notice
+    procurement_category: '*SRV'
+    unspsc: '*92111700'
+    gsin: ''
+  frozen_row_sha256: 30a940abca012bb11757e00131941d7dc9e738ef7caa59b56903e8b46b85751f
+- id: gold-irrelevant-02
+  reference_number: WS3930489742-Doc3961126501
+  source: archive
+  class: clearly_irrelevant
+  expected: REJECT
+  as_of: '2023-04-12'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: deterministic_draw
+    seed: 20260820
+    rule: FY2023-2024, shuffled at seed, first rejected
+  rationale: Drawn by the same deterministic rule and seed, before any review. Rejected at
+    `relevance`. These are the entries a recall-chasing refinement breaks first, which is
+    exactly why they are here and why they were not chosen by anyone.
+  frozen_row:
+    reference_number: WS3930489742-Doc3961126501
+    title: W689C-230016 - Alarm Monitoring and Maintenance Services
+    description: 'AMENDMENT TO CLOSING TIME: Please disregard the Ariba Discovery posting
+      response deadline closing time and CanadaBuys posting closing time. All required supporting
+      documentation and bid submission must be submitted by 2023-05-02 at 14:00 EDT. All bids
+      submitted after 14:00 EDT will result in the bid being declared non-responsive. There
+      are security requirements associated with this requirement. The Department of National
+      Defence, by Real Property Operations Unit (West) Calgary has a requirement for the supply
+      of all labour, equipment, tools, material, transportation and supervision required to
+      provide 24 hour monitoring of intrusion and fire systems, annual inspections to maintain
+      ULC certification and on an “as and when requested” basis the supply of all labour,
+      equipment, tools, material, transportation and supervision required to provide repairs,
+      maintenance and upgrades for electronic protection/detection devices. The period of
+      the contract is from 2023-06-01 to 2028-05-31, which includes the mobilization period.'
+    closing_date: '2023-05-02'
+    publication_date: '2023-04-12'
+    contracting_entity: Department of Public Works and Government Services (PSPC)
+    end_user: Department of National Defence (DND)
+    notice_type: Request for Proposal
+    procurement_category: '*SRV'
+    unspsc: '*92121700'
+    gsin: ''
+  frozen_row_sha256: 7256877082c14675d3aa3399bde93b19c86da937486b18e90bc34084f75121c8
+- id: gold-irrelevant-03
+  reference_number: WS3684530704-Doc4130732229
+  source: archive
+  class: clearly_irrelevant
+  expected: REJECT
+  as_of: '2023-08-08'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: deterministic_draw
+    seed: 20260820
+    rule: FY2023-2024, shuffled at seed, first rejected
+  rationale: Drawn by the same deterministic rule and seed, before any review. Rejected at
+    `relevance`. These are the entries a recall-chasing refinement breaks first, which is
+    exactly why they are here and why they were not chosen by anyone.
+  frozen_row:
+    reference_number: WS3684530704-Doc4130732229
+    title: ITQ - Little River Dredging and Containment Cell Construction Project
+    description: Public Services and Procurement Canada (PSPC), has a new requirement, the
+      work involves dredging at Little River, Victoria County Small Craft Harbour (SCH), Nova
+      Scotia, and disposal of dredged material at a designated dredge material management
+      site in Birch Plain, NS. Dredging within the entrance channel and basin to 2.0 meters
+      below chart datum. It also comprises the excavation, testing and construction of a containment
+      cell complete with low permeability liner, access road and construction of surface water
+      control features. Insitu material is to be transported directly from insitu, to scows,
+      to trucks. No bottom stockpiling, dragging or side casting material during dredging
+      will be allowed. The project is scheduled to be completed by February 15th, 2024.
+    closing_date: '2023-08-31'
+    publication_date: '2023-08-08'
+    contracting_entity: Department of Public Works and Government Services (PSPC)
+    end_user: Department of Public Works and Government Services (PSPC)
+    notice_type: Request for Information
+    procurement_category: '*CNST'
+    unspsc: '*72141206'
+    gsin: ''
+  frozen_row_sha256: 646c18ddc46cd3ab06d188ed08a2deeae296566c7c82c094fadb46dd250e0eb4
+- id: gold-irrelevant-04
+  reference_number: cb-970-17255440
+  source: archive
+  class: clearly_irrelevant
+  expected: REJECT
+  as_of: '2024-03-20'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: deterministic_draw
+    seed: 20260820
+    rule: FY2023-2024, shuffled at seed, first rejected
+  rationale: Drawn by the same deterministic rule and seed, before any review. Rejected at
+    `relevance`. These are the entries a recall-chasing refinement breaks first, which is
+    exactly why they are here and why they were not chosen by anyone.
+  frozen_row:
+    reference_number: cb-970-17255440
+    title: Onkwehonwehneha Program Development, Ontario Region
+    description: "Onkwehonwehneha Program Development, Ontario Region\r\n\r\nAn advanced contract\
+      \ award notice (ACAN) is a public notice indicating to the supplier community that a\
+      \ department or agency intends to award a contract for goods, services or construction\
+      \ to a pre-identified supplier, thereby allowing other suppliers to signal their interest\
+      \ in bidding, by submitting a statement of capabilities. If no supplier submits a statement\
+      \ of capabilities that meets the requirements set out in the ACAN, on or before the\
+      \ closing date and time stated in the ACAN, the contracting officer may then proceed\
+      \ with the award to the pre-identified supplier.\r\n\r\n1. Definition of the requirement:\r\
+      \n\r\nThe Correctional Service of Canada (CSC) has a requirement to support Indigenous\
+      \ offender reintegration through targeted interventions within the Indigenous Continuum\
+      \ of Care.\r\n\r\nThe work will involve the following:\r\n\r\n1.1\tObjectives:\r\n\r\
+      \nImprove CSC’s ability to return Indigenous offenders to their home communities with\
+      \ Section 84 release plans through Reintegration Support in remote communities.\r\n\r\
+      \nIncrease CSC’s capacity to engage Indigenous communities in the Section 84 process,\
+      \ and identify and coordinate community resources for offenders.\r\n\r\n1.2\t Tasks:\r\
+      \n\r\nThe Contractor must: \r\n\r\nProvide community education and information about\
+      \ Section 84 and Section 81 of the Corrections and Conditional Release Act (CCRA), and\
+      \ CSC’s Indigenous Continuum of Care and interventions.\r\n\r\nIdentify resources and\
+      \ community contracts that may be used by CSC personnel when preparing a release plan\
+      \ for an offender.\r\n\r\nWork with communities and organizations to establish a process\
+      \ for CSC engagement on corrections.\r\n\r\nProvide information that will assist CSC\
+      \ personnel to develop a Section 84 release plan. CSC personnel may include the Parole\
+      \ Officer or Indigenous Community Development Officer (as per CSC policy CD 712-1).\r\
+      \n\r\nWork with CSC personnel, including but not limited to Indigenous Community Development\
+      \ Officers, Indigenous Community Liaison Officers, Indigenous Liaison Officers, and\
+      \ Parole Officers, as well as community contacts, to assist Indigenous offenders being\
+      \ released to their community(ies) or area. \r\n\r\nOn mutual agreement, perform additional\
+      \ tasks as requested by the Project Authority.\r\n\r\n1.3\t Expected results:\r\n\r\n\
+      -\tIncreased culturally specific offender reintegration support;\r\n-\tIncrease community\
+      \ awareness of Section 84 of the Corrections and Conditional Release Act (CCRA), and\
+      \ the interventions with the Indigenous Continuum of Care within CSC;\r\n-\tIdentify\
+      \ and develop community resources such as housing, counselling, employment, education,\
+      \ and other resources that can be utilized to support offenders on a conditional release\
+      \ plan, under Section 84;\r\n-\tCommunity development activities as agreed to by the\
+      \ Project Authority and Contractor to advance offender reintegration.\r\n\r\n1.4\t Performance\
+      \ standards:\r\n\r\nThe Contractor must provide services as requested for the duration\
+      \ of the contract. The Contractor must be available for client service delivery Monday\
+      \ through Friday during CSC’s core business hours from 7 am to 5 pm.\r\n\r\n1.5\t Deliverables:\r\
+      \n\r\n1.5.1\tPrepare monthly reports on the following activities:\r\n\r\n-\tContacts\
+      \ with CSC personnel\r\n-\tCommunity contacts, including names and contact information\r\
+      \n-\tAn updated resource list, including, but not limited to, reintegration support\
+      \ services, such as addictions services, housing, Elder supports.\r\n-\tCollect and\
+      \ report on additional information upon request of the Project Authority.\r\n\r\nIdentify\
+      \ resources and community contacts that may be used by CSC personnel when preparing\
+      \ a release plan for an Indigenous offender. \r\n\r\n1.5.2\tPaper consumption: \r\n\r\
+      \na.\tShould printed material be required, double sided printing in black and white\
+      \ format is the default unless otherwise specified by the Project Authority. \r\n\r\n\
+      b.\tThe Contractor must ensure printed material is on paper with a minimum recycled\
+      \ content of 30% and/or certified as originating from a sustainably managed forest.\
+      \ \r\n\r\nc.\tThe Contractor must recycle unneeded printed documents (in accordance\
+      \ with Security Requirements).\r\n\r\n1.6 Constraints:\r\n\r\n1.6.1\tLocation of work:\r\
+      \n\r\n\ta.\tThe Contractor must perform the work within the contractor’s Indigenous\
+      \ community and places of business.\r\n\t\t\r\nb.\tTravel\r\n\r\n\ti.\tAs part of the\
+      \ scope of work for this contract, the Regions will identify what travel is required\
+      \ within their Region. Any travel must be pre-authorized by the Project Authority and\
+      \ comply with the National Join Council Travel Directive.\r\n\r\n1.6.2\tLanguage of\
+      \ Work:\r\n\r\nThe contractor must perform all work in English.  \r\n\r\n1.6.3 Security\
+      \ Requirements:\r\n\r\nThere are no security requirements associated to this contract.\r\
+      \n\r\n2. Criteria for assessment of the statement of capabilities (minimum essential\
+      \ requirements):\r\n\r\nAny interested supplier must demonstrate by way of a statement\
+      \ of capabilities that it meets the following requirements:\r\n\r\nExperience: The Supplier\
+      \ must have at least 3 years experience, obtained within the last five years prior to\
+      \ the ACAN closing date, in Indigenous service delivery and providing Indigenous based\
+      \ support and social services to Indigenous community members.\r\n\r\n\r\n\r\n3. Applicability\
+      \ of the trade agreement(s) to the procurement\r\n\r\nThis procurement is not subject\
+      \ to any trade agreement.\r\n\r\n4. Set-aside under the Procurement Strategy for Indigenous\
+      \ Business\r\n\r\nThis procurement is set-aside for an Indigenous Supplier in accordance\
+      \ with the government Procurement Strategy for Indigenous Business (PSIB). Therefore,\
+      \ only suppliers who meet the definition of an Indigenous business, as defined in the\
+      \ PSIB, may submit a statement of capabilities.\r\n\r\n\r\n5. Comprehensive Land Claims\
+      \ Agreement(s)\r\n\r\nThis procurement is not subject to a Comprehensive Land Claims\
+      \ Agreement.\r\n\r\n6. Justification for the Pre-Identified Supplier\r\n\r\nThere is\
+      \ a limited number of suppliers available and willing to provide reintegration support\
+      \ consistent with Sections 81 and 84 of the CCRA to meet the reintegration needs of\
+      \ CSC indigenous offenders.\r\n\r\nThe pre-identified supplier meets all of the minimum\
+      \ essential requirements described in this ACAN.\r\n\r\n7. Government Contracts Regulations\
+      \ Exception(s)\r\n\r\nThe following exception to the Government Contracts Regulations\
+      \ is invoked for this procurement under subsection: \r\n\r\n(d) only one person is capable\
+      \ of performing the contract.\r\n\r\n8. Exclusions and/or Limited Tendering Reasons\r\
+      \n\r\nThis procurement is not subject to any trade agreement.\r\n\r\n9. Ownership of\
+      \ Intellectual Property\r\n\r\nThere are no intellectual property terms in the contract.\r\
+      \n\r\n10. Period of the proposed contract or the delivery date(s)\r\n\r\nThe proposed\
+      \ contract is for a period of one (1) year from April 8, 2024 – March 31, 2025 with\
+      \ an option to extend the contract for two (2) additional one (1) year periods.\r\n\r\
+      \n11.Cost estimate of the proposed contract\r\n\r\nThe estimated value of the contract,\
+      \ including option(s), is $288,081.00 (GST/HST extra).\r\n\r\n12. Name and address of\
+      \ the pre-identified supplier\r\n\r\nName: Mohawk Council of Akwesasne\r\nAddress: P.O.\
+      \ Box 90, 15 Akwesasne Street\r\n\t\t\tAkwesasne, Quebec\r\n\t\t\tH0M 1A0\r\n\r\n13.\
+      \ Suppliers' right to submit a statement of capabilities\r\n\r\nSuppliers who consider\
+      \ themselves fully qualified and available to provide the goods, services or construction\
+      \ services described in the ACAN, may submit a statement of capabilities in writing\
+      \ to the contact person identified in this notice on or before the closing date and\
+      \ time of this notice. The statement of capabilities must clearly demonstrate how the\
+      \ supplier meets the advertised requirements.\r\n\r\n14. Closing date and time for a\
+      \ submission of a statement of capabilities\r\n\r\nThe closing date and time for accepting\
+      \ statements of capabilities is April 1, 2024 at 2:00 PM EST.\r\n\r\n15. Inquiries and\
+      \ submission of statements of capabilities\r\n\r\nInquiries and statement of capabilities\
+      \ are to be directed to:\r\n\r\nDanielle Murdoch, Regional Contract Administrator\r\n\
+      Correctional Service Canada, Ontario Region\r\nP.O Box 1174, 445 Union Street West\r\
+      \nKingston, Ontario\r\nK7L 4Y8\r\nTelephone: 343-422-4831\r\nFacsimile: 613-536-4571\r\
+      \nEmail:  danielle.murdoch@csc-scc.gc.ca"
+    closing_date: '2024-04-04'
+    publication_date: '2024-03-20'
+    contracting_entity: Correctional Services Canada
+    end_user: ''
+    notice_type: Advance Contract Award Notice
+    procurement_category: '*SRV'
+    unspsc: '*86101803'
+    gsin: ''
+  frozen_row_sha256: f93fa866e50b5ad667f3b18356a7901c0cf2287804ed6bce1c543c180935c416
+- id: gold-irrelevant-05
+  reference_number: WS4071378535-Doc4071646263
+  source: archive
+  class: clearly_irrelevant
+  expected: REJECT
+  as_of: '2023-06-26'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: deterministic_draw
+    seed: 20260820
+    rule: FY2023-2024, shuffled at seed, first rejected
+  rationale: Drawn by the same deterministic rule and seed, before any review. Rejected at
+    `relevance`. These are the entries a recall-chasing refinement breaks first, which is
+    exactly why they are here and why they were not chosen by anyone.
+  frozen_row:
+    reference_number: WS4071378535-Doc4071646263
+    title: 21207-234536 Fire Alarm Inspection, Maintenance and Repair
+    description: Public Services and Procurement Canada (PSPC) on behalf of Correctional Service
+      Canada (CSC) has a requirement inspection, testing, maintenance, repair and upgrade
+      of Fire Alarm Systems, on an as and when required basis, at various Atlantic CSC locations.
+    closing_date: '2023-08-01'
+    publication_date: '2023-06-26'
+    contracting_entity: Department of Public Works and Government Services (PSPC)
+    end_user: Department of Public Works and Government Services (PSPC)
+    notice_type: Request for Standing Offer
+    procurement_category: '*CNST'
+    unspsc: '*46191505
+
+      * 92121702'
+    gsin: ''
+  frozen_row_sha256: 98d614c03e101a944897ade45203352b9d1b8935fd4828fcbd08a3d93fed5e1d
+- id: gold-irrelevant-06
+  reference_number: cb-9070-91354194
+  source: archive
+  class: clearly_irrelevant
+  expected: REJECT
+  as_of: '2023-09-14'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: deterministic_draw
+    seed: 20260820
+    rule: FY2023-2024, shuffled at seed, first rejected
+  rationale: Drawn by the same deterministic rule and seed, before any review. Rejected at
+    `construction`. These are the entries a recall-chasing refinement breaks first, which
+    is exactly why they are here and why they were not chosen by anyone.
+  frozen_row:
+    reference_number: cb-9070-91354194
+    title: Roof Shingle Replacement
+    description: "Invitation to tender 01B46-23-091\r\nRoof Shingle Replacement  – Charlottetown\
+      \ Research and Development Centre\r\n\r\nTenders for the project indicated above, will\
+      \ be accepted at the following address, up to the tender closing date and time indicated\
+      \ below: aafc.escprocurement-cseapprovisionnement.aac@agr.gc.ca  \r\n\r\nScope of Work:\r\
+      \n\r\nCharlottetown Research and Development Centre of Agriculture and Agri-Food Canada\
+      \ (AAFC) located at 440 University Avenue in Ottawa, wishes to offer a contract to a\
+      \ general contractor for the set of works below:\r\n\r\nRoof Shingle Replacement  \r\
+      \n\r\nOptional Site Visit:\r\nThere will be a site visit on Thursday, September 21,\
+      \ 2023 at 9:30am (local time). \r\n\r\nTender Period Closing Date and Time: October\
+      \ 4, 2023 2023  at 02:00 pm (EDT).\r\n\r\nInformation requests and inquiries related\
+      \ to this tender process are to be directed, in writing, ONLY to the AAFC Contract Officer\
+      \ identified below. Bidders who contact anyone other than the AAFC Contract Officer\
+      \ to obtain such information during the solicitation period may, for that reason alone,\
+      \ be disqualified.\r\n\r\nIt is MANDATORY for the Firms intending to submit tenders\
+      \ on this project to obtain the related specifications, plans and drawings, and all\
+      \ other tender documents through the CanadaBuy service provider’s platform. Addenda,\
+      \ when issued, will be available from the CanadaBuy service provider platform. \r\n\r\
+      \nAAFC reserves the right to accept any Proposal in whole or in part, without prior\
+      \ negotiation and reject any or all Proposals\r\nreceived.\r\n\r\nAAFC Contract Officer:\r\
+      \n\r\nJacques Toussaint\r\nAgent de contrats\r\nAgriculture et Agroalimentaire Canada\r\
+      \n2001 Robert-Bourassa, Pièce 671-TEN,\r\nMontréal, Qc H3A 3N2\r\nTel.: 438-455 8237\r\
+      \nE-mail: jacques.toussaint@agr.gc.ca"
+    closing_date: '2023-10-04'
+    publication_date: '2023-09-14'
+    contracting_entity: Agriculture and Agri-Food Canada
+    end_user: ''
+    notice_type: Request for Proposal
+    procurement_category: '*CNST'
+    unspsc: '*30151508'
+    gsin: ''
+  frozen_row_sha256: 8e6066287fdded20401daf87f4cbe476ce0dd405985f5d3f46ffeedac41f4008
+- id: gold-ssc-cyber-security-itq
+  reference_number: SSC-22-00019111:T
+  source: archive
+  class: known_false_negative
+  expected: ADMIT
+  as_of: '2022-04-29'
+  failure_categories:
+  - vocabulary_mismatch
+  provenance:
+    added: '2026-08-20'
+    added_by: replay
+    found_by: predicate-independent replay of data/notices.db
+    corroborated_by: vault/briefings/briefing-2026-08-17.md
+  rationale: 'Shared Services Canada is the largest federal IT buyer and files no UNSPSC,
+    so
+
+    its notices can only ever reach the keyword branch. The profile carries the
+
+    one-word `cybersecurity`; the notice says "Cyber Security". matched_competencies
+
+    matches on word boundaries, so \bcybersecurity\b cannot reach it.
+
+
+    Measured over archive rows where parse_unspsc_codes returns empty - the same
+
+    definition the filter uses - 35 say "cyber security" and 12 say "cybersecurity".
+
+    The profile picked the minority spelling. A narrower unspsc=''*'' query gives 8
+
+    and misses 174 null/empty rows, which is why the count is recorded with the
+
+    query that produced it.
+
+
+    This entry must ADMIT. A variant that admits it by widening the keyword list to
+
+    anything is not a fix - see gold-canadapost-cloud-in-url for the cost.'
+  frozen_row:
+    reference_number: SSC-22-00019111:T
+    title: Invitation to Qualify for the Cyber Security Procurement Vehicle
+    description: "Cette invitation &#224; se qualifier (ISQ) est les deux premi&#232;res phases\
+      \ du MAMC. Il continu le processus d’approvisionnement agile lanc&#233; par Services\
+      \ partag&#233;s Canada (SPC) au nom du gouvernement du Canada en 2019. Les fournisseurs\
+      \ sont invit&#233;s &#224; se pr&#233;-qualifier conform&#233;ment aux modalit&#233;s\
+      \ de la pr&#233;sente invitation &#224; se qualifier (ISQ), d&#233;crites aux phases\
+      \ 1 et 2, afin de devenir des &#171;&amp;nbsp;r&#233;pondants qualifi&#233;s ou RQ&amp;nbsp;&#187;\
+      \ pour toute phase ult&#233;rieure du MAMC, y compris les phases 3 et 4. Seuls les r&#233;pondants\
+      \ qualifi&#233;s seront autoris&#233;s &#224; soumissionner pour toute soumission subs&#233;quente\
+      \ &#233;mise dans le cadre du MAMC.\n\nCette ISQ n&#39;est pas une sollicitation de\
+      \ soumissions ou d&#39;appels d&#39;offres. Aucun contrat ne sera attribu&#233; &#224;\
+      \ la suite des activit&#233;s durant la phase ISQ du MAMC.\n\nLa date limite de pr&#233;sentation\
+      \ des soumissions de l’ISQ est indiqu&#233;e sur la page titre de l’ISQ et les d&#233;tails\
+      \ &#224; ce sujet se trouvent dans le portail APL.\n\nEn 2016, SPC a adopt&#233; un\
+      \ nouveau syst&#232;me appel&#233; Approvisionnement au paiement en ligne (APL) pour\
+      \ g&#233;rer &#233;lectroniquement les processus d&#39;approvisionnement jusqu&#39;aux\
+      \ processus de paiement. L’APL int&#232;gre les processus de comptes payables et d&#39;approvisionnement,\
+      \ permet l&#39;acheminement automatis&#233; des travaux et les notifications par courrier\
+      \ &#233;lectronique, fournit des approbations &#233;lectroniques de bout en bout et\
+      \ permet &#224; SPC de passer au traitement sans papier. Les fournisseurs de SPC devront\
+      \ s&#39;interfacer avec le portail APL de SPC pour cette invitation &#224; se qualifier\
+      \ (ISQ).\n\nLes soumissionnaires peuvent s’inscrire au portail APL de SPC pour&amp;nbsp;le\
+      \ pr&#233;sente invitation &#224; se qualifier (ISQ).\n\nPour acc&#233;der &#224; cette\
+      \ ISQ, veuillez-vous connecter &#224; l&#39;application SPC portail APL en cliquant\
+      \ sur le lien suivant&amp;nbsp;: https://sscp2pspc.ssc-spc.gc.ca/page.aspx/en/rfp/request_browse_public\
+      \ et en effectuant une recherche &#224; l&#39;aide des informations suivantes&amp;nbsp;:\
+      \ et recherche en utilisant les informations suivantes:\n\nNom de la RFx: Invitation\
+      \ &#224; se qualifier pour le M&#233;canisme d’approvisionnement en mati&#232;re de\
+      \ cybers&#233;curit&#233;\n\tDate de cl&#244;ture:&amp;nbsp;26 mai 2023 14&amp;nbsp;:00&amp;nbsp;:00\
+      \ PM\n\n\nPour vous inscrire, allez &#224; la page https://sscp2pspc.ssc-spc.gc.ca et\
+      \ cliquez sur &#171;&amp;nbsp;Inscrivez-vous maintenant&amp;nbsp;&#187;.&amp;nbsp;\n\
+      \nSi vous avez des questions concernant l&#39;inscription au APL, veuillez envoyer un\
+      \ courriel &#224;: Vanessa.woodend@ssc-spc.gc.ca\n\n______________________________________________________________________________&amp;nbsp;This\
+      \ Invitation to Qualify (ITQ) is the first two phases of the CSPV. It continues the\
+      \ agile procurement process started by Shared Services Canada (SSC) on behalf of the\
+      \ Government of Canada in 2019. Suppliers are invited to pre-qualify in accordance with\
+      \ the terms and conditions of this ITQ, described in Phases 1 and 2, in order to become\
+      \ “Qualified Respondents or QRs” for any later phases of the CSPV, including Phases\
+      \ 3 and 4. Only Qualified Respondents will be permitted to bid on any subsequent solicitations\
+      \ issued under the CSPV.\n\nThis ITQ is not a solicitation of bids or tenders. No contract\
+      \ will be awarded as a result of the activities during the ITQ phase of the CSPV.\n\n\
+      The ITQ submission deadline is included on the front page of the ITQ document and is\
+      \ detailed in the P2P portal.\n\nIn 2016, SSC adopted a new system called Procure-to-Pay\
+      \ (P2P) to electronically manage procurement to payment processes. P2P integrates accounts\
+      \ payable and procurement processes, allows for automated work routing and email notifications,\
+      \ provides end-to-end electronic approvals and enables SSC to move towards paperless\
+      \ processing. SSC&#39;s Suppliers will be required to interface with the SSC P2P portal\
+      \ for this Invitation to Qualify (ITQ).\n\nBidders may register on the SSC P2P Portal\
+      \ for this Invitation to Qualify (ITQ).\n\nTo access this ITQ, please connect to the\
+      \ SSC P2P Portal application by clicking on the following link: https://sscp2pspc.ssc-spc.gc.ca/page.aspx/en/rfp/request_browse_public\
+      \ and searching using the following information:\n\nRFx name : Invitation to Qualify\
+      \ for the Cyber Security Procurement Vehicle\n\tClosing date : May 26, 2023 2:00 PM\
+      \ ESTTo register, please go to https://sscp2pspc.ssc-spc.gc.ca and click \"Register\
+      \ Now\". If you have any questions regarding registering for P2P, please email: Vanessa.woodend@ssc-spc.gc.ca\n\
+      \t\n\n&amp;nbsp;SSC Invitation to Qualify for the Cyber Security Procurement Vehicle-\
+      \ Amendment 000"
+    closing_date: '2022-05-13'
+    publication_date: '2022-04-29'
+    contracting_entity: Shared Services Canada
+    end_user: Shared Services Canada
+    notice_type: Invitation to Qualify
+    procurement_category: '*CNST
+
+      *GD
+
+      *SRV
+
+      *SRVTGD'
+    unspsc: '*'
+    gsin: '*5164CJ
+
+      *AJ212528
+
+      *JX5810
+
+      *JX7025AD
+
+      *N7030
+
+      *N7030645
+
+      *N7030AJA'
+  frozen_row_sha256: 64509d23ff08eb01723b65d79ec92fd3e35bcb1bc509caa7b1b88d93b83cc0df
+- id: gold-nrc-elevator-modernization
+  reference_number: PW-23-01030114
+  source: archive
+  class: clearly_irrelevant
+  expected: REJECT
+  as_of: '2023-03-13'
+  failure_categories: []
+  provenance:
+    added: '2026-08-20'
+    added_by: replay
+    note: Found by predicate-independent replay, 2026-08-20.
+  rationale: 'The precision guard for every keyword-widening refinement, and the clearest
+
+    demonstration in the set of why predicates are evaluated independently.
+
+
+    Uncoded, so it reaches the keyword branch, and `modernization` HITS - relevance
+
+    evaluates to pass. Production never asks, because the construction stage rejects
+
+    it first. The audit records `construction: drop` and `relevance: pass` on the
+
+    same notice, which is information the production funnel structurally cannot
+
+    report.
+
+
+    Must REJECT. A refinement that reorders or weakens the construction stage will
+
+    admit an elevator contract and this entry is what catches it.'
+  frozen_row:
+    reference_number: PW-23-01030114
+    title: SAS - IPF Elevator Modernization
+    description: '22-58148SAS - IPF Elevator ModernizationThe National Research Council Canada,
+      110 Gymnasium Place, Saskatoon, SK, has a requirement for a project that includes:Work
+      under this contract covers the complete modernization of the IPF elevator in the Council''s
+      Building 110 Gymnasium Place of the National Research Council.1. GENERAL:Questions regarding
+      any aspect of the project are to be addressed to and answered only by the Departmental
+      Representative (or his designate) or the Contracting Authority.Any information received
+      other than from the Departmental Representative (or his designate) or the Contracting
+      Authority will be disregarded when awarding the contract and during construction.Firms
+      intending to submit tenders on this project should obtain tender documents through the
+      Buyandsell.gc.ca TMA services provider. Addenda, when issued, will be available from
+      the Buyandsell.gc.ca TMA service provider. Firms that elect to base their bids on tender
+      documents obtained from other sources do so at their own risk and will be solely responsible
+      to inform the tender calling authority of their intention to bid. Tender packages are
+      not available for distribution on the actual day of tender closing.2. MANDATORY SITE
+      VISIT:It is mandatory that the bidder attends one of the site visits at the designated
+      date and time.At least one representative from proponents that intend to bid must attend.The
+      site visits will be held on March 28th and March 29th, 2023 at 10:00. Meet Jazmin McLean
+      at SAS Building, 110 Gymnasium Place, Saskatoon, SK. Bidders who, for any reason, cannot
+      attend at the specified date and time will not be given an alternative appointment to
+      view the site and their tenders, therefore, will be considered as non-responsive. NO
+      EXCEPTIONS WILL BE MADE.As proof of attendance, at the site visit, the Contracting Authority
+      will have an Attendance Form which MUST be signed by the bidder’s representative. It
+      is the responsibility of all bidders to ensure they have signed the Mandatory Site Visit
+      Attendance form prior to leaving the site. Proposals submitted by bidders who have not
+      attended the site visit or failed to sign the Attendance Form will be deemed non-responsive.3.
+      TENDER CLOSING DATE:Tender closing date is April 28th, 2023 at 14:00.4. TENDER RESULTSFollowing
+      the Tender closing, the tender results will be sent by e-mail to all Contractors who
+      submitted a tender.5. SECURITY REQUIREMENT FOR CANADIAN CONTRACTORS5.1 MANDATORY SECURITY
+      REQUIREMENT:.1 All personnel that will be involved with the project must be security
+      screened to RELIABILITY status level as defined in the security policy of Canada.6.0
+      WORKSAFE Saskatchewan .1 All Bidders must provide a valid WORKSAFE Saskatchewan certificate
+      with their Tender or prior to contract award.7.0 Office of the Procurement Ombudsman.1
+      Dispute Resolution ServicesThe parties understand that the Procurement Ombudsman appointed
+      pursuant to Subsection 22.1(1) of the Department of Public Works and Government Services
+      Act will, on request or consent of the parties to participate in an alternative dispute
+      resolution process to resolve any dispute between the parties respecting the interpretation
+      or application of a term and condition of this contract and their consent to bear the
+      cost of such process, provide to the parties a proposal for an alternative dispute resolution
+      process to resolve their dispute. The Office of the Procurement Ombudsman may be contacted
+      by telephone at 1-866-734-5169 or by e-mail at .Contract AdministrationThe parties understand
+      that the Procurement Ombudsman appointed pursuant to Subsection 22.1(1) of the Department
+      of Public Works and Government Services Act will review a complaint filed by [the supplier
+      or the contractor or the name of the entity awarded this contract] respecting administration
+      of this contract if the requirements of Subsection 22.2(1) of the Department of Public
+      Works and Government Services Act and Sections 15 and 16 of the Procurement Ombudsman
+      Regulations have been met, and the interpretation and application of the terms and conditions
+      and the scope of the work of this contract are not in dispute. The Office of the Procurement
+      Ombudsman may be contacted by telephone at 1-866-734-5169 or by e-mail at ..3 The Office
+      of the Procurement Ombudsman (OPO) was established by the Government of Canada to provide
+      an independent avenue for suppliers to raise complaints regarding the award of contracts
+      under $25,000 for goods and under $100,000 for services. You have the option of raising
+      issues or concerns regarding the solicitation, or the award resulting from it, with
+      the OPO by contacting them by telephone at 1-866-734-5169 or by e-mail at boa.opo@boa-opo.gc.ca.
+      You can also obtain more information on the OPO services available to you at their website
+      at www.opo-boa.gc.ca.The Departmental Representative or his designate for this project
+      is: Jazmin McLeanJazmin.McLean@nrc-cnrc.gc.caTelephone: (306) 491-4099Contracting Authority
+      for this project is: Collin LongCollin.Long@nrc-cnrc.gc.ca'
+    closing_date: '2023-04-28'
+    publication_date: '2023-03-15'
+    contracting_entity: National Research Council Canada
+    end_user: National Research Council Canada
+    notice_type: Request for Proposal
+    procurement_category: '*CNST'
+    unspsc: '*'
+    gsin: '*5129B'
+  frozen_row_sha256: a076b55bb6e41c5d2f394ea16042118894d90e0850a553a7dee3bf694a741378
+- id: gold-canadapost-cloud-in-url
+  reference_number: MX-443978767209
+  source: feed
+  class: known_false_positive
+  expected: REJECT
+  as_of: '2026-08-17'
+  failure_categories:
+  - semantic_context_mismatch
+  provenance:
+    added: '2026-08-20'
+    added_by: vault_briefing
+    source_file: vault/briefings/briefing-2026-08-17.md
+  rationale: 'Canada Post RFSA for Electrical Services, admitted because `cloud` matched
+
+    inside the Ariba portal hostname portal.us.bn.cloud.ariba.com and nowhere else.
+
+
+    Recorded in vault/briefings/briefing-2026-08-17.md, which flagged it on two
+
+    consecutive briefings and said the fix is NOT to prune `cloud` but to stop
+
+    matching keywords inside URLs - then declined to make the change for want of a
+
+    way to evaluate it. This entry is that way.
+
+
+    Frozen inline because it exists only in .cache/tenders.csv, which the next
+
+    download overwrites.'
+  frozen_row:
+    reference_number: MX-443978767209
+    title: Request for Supply Arrangement_Electrical Services_2024_Wave-2
+    description: "Request for Supply Arrangement (RFSA) for Electrical Services accross Canada.\r\
+      \n&nbsp;\r\nThe Requirement to be performed is outlined in the ARIBA Sourcing Event:&nbsp;https://portal.us.bn.cloud.ariba.com/dashboard/public/appext/comsapsbncdiscoveryui#/RfxEvent/preview/1110002888?anId=ANONYMOUS\r\
+      \n&nbsp;Bidding and Documents are available on http://www.merx.com.  Fees may apply;\
+      \ See https://www.merx.com/public/pricing for more information."
+    closing_date: '2076-12-31T14:00:00'
+    publication_date: null
+    contracting_entity: Canada Post Corporation
+    end_user: null
+    notice_type: null
+    procurement_category: '*SRV
+
+      *GD'
+    unspsc: null
+    gsin: null
+  frozen_row_sha256: dee3eac3cdf20c8410ade7352874e23efba0b9bfcd9b84a8789455362acae90b
+- id: gold-fintrac-industry-day
+  reference_number: cb-564-37642506
+  source: feed
+  class: known_false_negative
+  expected: ADMIT
+  as_of: '2026-08-17'
+  failure_categories:
+  - structured_field_error
+  provenance:
+    added: '2026-08-20'
+    added_by: vault_briefing
+    source_file: vault/briefings/briefing-2026-08-17.md
+  rationale: 'FINTRAC "Industry Day Solution", flagged on three consecutive briefings and
+
+    found only via the FINTRAC dossier''s feed scan.
+
+
+    Rejected on the CODED branch, which makes it a different failure from the SSC
+
+    case even though both are false negatives. The publisher filed 83110000
+
+    (telecom) and 80161502 (management support), neither in the profile families -
+
+    and because codes are present, the keyword branch is never consulted. Widening
+
+    the competency list cannot recover this notice. That distinction is why
+
+    family_result and keyword_result are recorded separately.
+
+
+    Frozen inline: feed-only, and the feed is overwritten on every download.'
+  frozen_row:
+    reference_number: cb-564-37642506
+    title: Industry Day Solution
+    description: "FINTRAC is looking to enhance the quality, security, and bilingual delivery\
+      \ of it's future Industry Day webinars . FINTRAC would like to engage a technical support\
+      \ provider, to ensure compliance with Official Languages requirements, provide a registration\
+      \ portal and webinar platform which will deliver a professional experience for a minimum\
+      \ of 4,000 participants.\r\n\r\nFINTRAC intends to award one ( 1) contract as a result\
+      \ of the solicitation\r\n\r\nBase contract periods includes four(4) webinars 9 October,\
+      \ February, June, October\r\nIncludes four (4) one (1) year optional contract periods\
+      \ with three (3) webinars February, June, October."
+    closing_date: '2026-08-18T14:00:00'
+    publication_date: null
+    contracting_entity: Financial Transactions and Reports Analysis Centre of Canada (FINTRAC)
+    end_user: null
+    notice_type: Request for Proposal
+    procurement_category: '*SRV'
+    unspsc: '*80161502
+
+      *83110000'
+    gsin: null
+  frozen_row_sha256: d0ce9a0afba8baa11680e474daf3e629fbfec0d22d8b1c6d5e3b5499836e475d

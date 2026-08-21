@@ -1044,9 +1044,26 @@ def _source_system(tender_id) -> str:
 
 
 def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
-                   value_extractor=None) -> pd.DataFrame:
+                   value_extractor=None, as_of=None) -> pd.DataFrame:
     """
     Apply profile filters. Prints a funnel so you can tune the profile.
+
+    THE STAGE DECISIONS LIVE IN filter_audit.predicates, not inline here. Each
+    drop below calls the same stage function the audit replays, so the corpus
+    and the audit cannot come to disagree about what the filter does — the same
+    argument notices_ingest.py makes about sharing the classifiers. The
+    narrowing sequence is unchanged, so every funnel count still means what it
+    meant: a stage only ever sees the rows earlier stages let through.
+
+    Imported lazily, because filter_audit.predicates imports THIS module and a
+    module-level import here would be circular. Same reason entity_org_keys
+    imports crosswalk lazily.
+
+    as_of: the date "closed" is judged against. None means datetime.now().date(),
+    which is what production has always done. It is an argument now because a
+    predicate that reads a wall clock cannot be replayed, and because the
+    equivalence check needs both paths on one clock — see
+    filter_audit/equivalence.py.
 
     Relevance is decided by the publisher's UNSPSC classification where there is
     one, and falls back to keyword matching where there isn't. The fallback is
@@ -1059,15 +1076,17 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     value_extractor: callable(description) -> Optional[float], or None. None
     means no value is extracted and none is stored — see estimate_value.
     """
+    from filter_audit import predicates as _pred
+
     print(f"\nStarting with {len(df):,} tenders")
 
-    # Parse closing dates (timezone-naive for simplicity)
+    # Parse closing dates (timezone-naive for simplicity). THE definition lives
+    # in filter_audit.predicates so the replay parses identically — pandas
+    # infers a format from the first element and coerces the rest to NaT, so a
+    # second implementation would disagree on any feed that is not
+    # format-uniform, silently and in the "kept, tagged unknown" direction.
     df = df.copy()
-    df["_closing"] = pd.to_datetime(
-        df[cols["closing_date"]],
-        errors="coerce",
-        utc=True,
-    ).dt.tz_localize(None)
+    df["_closing"] = _pred.parse_closing_days(df[cols["closing_date"]])
 
     # Drop only what is dead. Everything still open enters and is tagged; the
     # reader decides whether a near-close notice is worth acting on.
@@ -1089,16 +1108,19 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     #
     # Hence `.dt.normalize()` on both sides: "ten days out" is a count of days,
     # never a time of day.
-    today = pd.Timestamp(datetime.now().date())
+    effective_as_of = as_of or datetime.now().date()
     closing_day = df["_closing"].dt.normalize()
 
     # NaT is not "closed". Comparison against NaT is False either way, so the
     # old expression dropped undated notices as a side effect of the arithmetic
     # rather than as a decision. There are none in the current feed; that is a
     # property of today's data, not a guarantee. Keep them and say so.
+    #
+    # Stage 1 in filter_audit.predicates.stage_closed.
     undated = closing_day.isna()
     before = len(df)
-    df = df[undated | (closing_day >= today)]
+    keep = _pred.stage_mask(df, cols, criteria, _pred.stage_closed, effective_as_of)
+    df = df[pd.Series(keep, index=df.index)]
     closed = before - len(df)
     if closed:
         print(f"  After dropping closed notices: {len(df):,}  ({closed:,} already closed)")
@@ -1112,10 +1134,11 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
         + df[cols["description"]].fillna("").astype(str)
     )
 
-    # Exclusions first (cheap, removes obvious misfits)
+    # Exclusions first (cheap, removes obvious misfits).
+    # Stage 2 in filter_audit.predicates.stage_exclusion.
     if criteria["exclude"]:
-        mask = ~df["_text"].apply(lambda t: contains_excluded(t, criteria["exclude"]))
-        df = df[mask]
+        keep = _pred.stage_mask(df, cols, criteria, _pred.stage_exclusion)
+        df = df[pd.Series(keep, index=df.index)]
         print(f"  After exclusion filter: {len(df):,}")
 
     # --- Instrument shape, from the publisher's structured fields -----------
@@ -1157,8 +1180,10 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     # Construction is dropped outright. procurementCategory is populated on 100%
     # of notices across every source system, which makes this the one filter
     # here that never falls back to guessing.
+    # Stage 3 in filter_audit.predicates.stage_construction.
     before = len(df)
-    df = df[df["_opportunity_kind"] != "construction"]
+    keep = _pred.stage_mask(df, cols, criteria, _pred.stage_construction)
+    df = df[pd.Series(keep, index=df.index)]
     if before != len(df):
         print(f"  After construction drop (*CNST): {len(df):,}  "
               f"({before - len(df):,} dropped)")
@@ -1166,12 +1191,14 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     # Provincial and territorial notices are dropped; `unrecognised` is NOT,
     # because federal Crown corporations land there and one of them is the best
     # tender in the corpus.
+    # Stage 4 in filter_audit.predicates.stage_jurisdiction.
     before = len(df)
     juris = df["_jurisdiction"].apply(lambda j: j["jurisdiction"])
     dropped_names = sorted({
         str(v) for v in df.loc[juris == "non_federal", cols["contracting_entity"]]
     })
-    df = df[juris != "non_federal"]
+    keep = _pred.stage_mask(df, cols, criteria, _pred.stage_jurisdiction)
+    df = df[pd.Series(keep, index=df.index)]
     if before != len(df):
         print(f"  After non-federal drop: {len(df):,}  "
               f"({before - len(df):,} dropped — {'; '.join(dropped_names)[:70]})")
@@ -1220,10 +1247,14 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     #
     # Where no codes were filed there is nothing to defer to, so keywords carry
     # those notices — 37 of 431, entirely from MX, PW and SSC.
+    # Stage 5 in filter_audit.predicates.stage_relevance, which keeps the two
+    # reject modes apart — "coded into a family we don't buy" and "uncoded and
+    # no keyword fired" imply different fixes and split 21,471 / 6,121 on the
+    # archive. This funnel line reports only the survivors; the audit reports
+    # both failures.
     if families or criteria["competencies"]:
-        by_family = df["_unspsc_families"].apply(bool)
-        by_keyword = df["_matched"].apply(bool)
-        relevant = (has_codes & by_family) | (~has_codes & by_keyword)
+        keep = _pred.stage_mask(df, cols, criteria, _pred.stage_relevance)
+        relevant = pd.Series(keep, index=df.index)
         df = df[relevant]
         kept_coded = int((has_codes & relevant).sum())
         kept_uncoded = int((~has_codes & relevant).sum())

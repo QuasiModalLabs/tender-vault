@@ -130,6 +130,23 @@ jobs:
           done
           exit $failed
 
+      - name: Filter golden-set gate
+        if: env.FULL_RUN == 'true'
+        # Regression protection for the tender filter, not a backlog alarm. The
+        # gate fails only when a clearly_relevant or clearly_irrelevant entry
+        # breaks — those were drawn deterministically before any review and the
+        # filter gets them right today, so one of them flipping means a real
+        # change in behaviour.
+        #
+        # The known_false_negative / known_false_positive entries are EXPECTED to
+        # fail until a refinement ships. Gating on them would paint Monday red
+        # permanently and train everyone to ignore it. They are printed either
+        # way, which is the point of recording them.
+        #
+        # Needs no database: every golden entry freezes its own raw row, so this
+        # runs on a fresh clone where data/notices.db does not exist.
+        run: python scripts/filter_audit evaluate-golden --gate
+
       - name: Check the MCP server still imports
         if: env.FULL_RUN == 'true'
         # No test suite imports mcp_server.py and no workflow runs it, which is

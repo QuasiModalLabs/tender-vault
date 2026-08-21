@@ -81,3 +81,14 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
+
+# The filter audit's replay records. Regenerable by construction: a run is keyed
+# on a content-addressed id over the filter version, the corpus fingerprint and
+# the as_of spec, so `replay-filter --persist` recreates any run byte for byte.
+# Deleting this file loses nothing that is not reproducible.
+#
+# The audit's EVIDENCE is committed instead, and deliberately elsewhere:
+# vault/reference/filter-reviews.jsonl, filter-golden-set.yaml,
+# filter-failure-taxonomy.yaml, filter-versions.yaml and filter-refinements/.
+# Those are human judgement and belong in a diff; this is scaffolding.
+data/filter_audit.db

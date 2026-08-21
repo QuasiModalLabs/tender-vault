@@ -1,0 +1,145 @@
+# Why the tender filter misses relevant work, as a controlled vocabulary.
+#
+# EXTENSIBLE, BUT NEVER SILENTLY. `record-review` refuses a category that is not
+# listed here; `filter_audit taxonomy --add` appends one with a required
+# definition. The point of a closed vocabulary is that "what are the top reasons
+# we miss relevant tenders" has an answer you can count, and free text does not
+# count.
+#
+# EVERY CATEGORY CARRIES A `not:` LINE. The categories that get confused with
+# each other are the ones that make the counts meaningless, so each says what it
+# is NOT and names its nearest neighbour. An exemplar is attached wherever a
+# real, verified case exists; categories without one are honest placeholders and
+# say so rather than borrowing an example that does not fit.
+#
+# These describe failures of the FILTER, not of the notice. "The publisher filed
+# a code that does not describe the work" is a fact about the world; the filter's
+# failure is having no way to notice.
+
+schema_version: 1
+declared: '2026-08-20'
+
+categories:
+
+  vocabulary_mismatch:
+    definition: >
+      The notice and the profile name the same thing with different words, and
+      the difference is orthographic - spacing, hyphenation, casing, plural.
+    not: >
+      Not synonym_mismatch. This is the SAME term written differently, which
+      word-boundary matching cannot bridge. A different WORD for the same
+      concept is synonym_mismatch.
+    exemplar: gold-ssc-cyber-security-itq
+    exemplar_note: >
+      Profile carries the one-word `cybersecurity`; the notice says
+      "Cyber Security". Measured over rows where parse_unspsc_codes returns
+      empty: 35 say the two-word form, 12 the one-word. The profile picked the
+      minority spelling, on the largest federal IT buyer.
+
+  synonym_mismatch:
+    definition: >
+      The notice uses a different word for a concept the profile already covers
+      under another name.
+    not: >
+      Not vocabulary_mismatch, which is the same word spelled differently. Not
+      buyer_specific_language, which is a term only one organization uses.
+    exemplar: null
+    exemplar_note: >
+      No verified case yet. `informatics` versus `information technology` is the
+      shape to expect - both are already in the profile, which is why neither
+      has failed.
+
+  acronym_mismatch:
+    definition: >
+      The notice names an instrument or capability only by acronym, or only in
+      expanded form, and the profile carries the other.
+    not: >
+      Not synonym_mismatch. The two strings denote the same named thing and one
+      is mechanically derivable from the other.
+    exemplar: null
+    exemplar_note: >
+      TBIPS and SBIPS are both in the profile as acronyms; a notice writing only
+      "task-based informatics professional services" would be this category.
+
+  missing_structured_field:
+    definition: >
+      The publisher filed no value in the field the filter relies on, so the
+      notice reaches a weaker fallback or none at all.
+    not: >
+      Not structured_field_error, where a value WAS filed and is wrong. Absent
+      and wrong are different failures with different fixes: absent argues for a
+      better fallback, wrong argues for not trusting the field.
+    exemplar: null
+    exemplar_note: >
+      The standing example is the uncoded source systems - MX, PW and SSC file
+      no UNSPSC at all, 7,213 of 30,527 archive rows. That is the CONDITION
+      behind several misses rather than a miss in itself, so a review files the
+      specific failure (usually vocabulary_mismatch) and notes this as context.
+
+  structured_field_error:
+    definition: >
+      The publisher filed a code or category that does not describe the work
+      being bought, and the filter believed it.
+    not: >
+      Not missing_structured_field - a value is present. Not
+      overly_restrictive_rule - the rule is right and the data is wrong.
+    exemplar: gold-fintrac-industry-day
+    exemplar_note: >
+      FINTRAC "Industry Day Solution" is coded 83110000 (telecom) and 80161502
+      (management support services). Neither is in the profile families, so it
+      is rejected on the coded branch - and because codes are present, the
+      keyword branch is never consulted. Flagged on three consecutive briefings.
+
+  buyer_specific_language:
+    definition: >
+      One organization has house vocabulary for work the profile would otherwise
+      recognize.
+    not: >
+      Not synonym_mismatch, which is general usage. This is a term you would fix
+      per buyer, not per concept.
+    exemplar: null
+
+  procurement_mechanism_ambiguity:
+    definition: >
+      The instrument's shape is what makes the notice hard to judge - a
+      qualification, a call-up, or a phased ITQ whose real subject is not in any
+      structured field.
+    not: >
+      Not a relevance failure. The commodity may be classified correctly; what
+      is unclear is whether the notice is reachable work.
+    exemplar: null
+    exemplar_note: >
+      notice-kinds.md records the live case: a stage-1 ITQ qualifies for ONE
+      project's later stage while a source-list ITQ leads to call-ups, and no
+      structured field separates them.
+
+  overly_restrictive_rule:
+    definition: >
+      The filter's rule is narrower than the intent behind it, and correct data
+      is still rejected.
+    not: >
+      Not structured_field_error - the data is right. The rule is the problem.
+    exemplar: null
+
+  semantic_context_mismatch:
+    definition: >
+      A term matched, or failed to match, because of where in the text it sat
+      rather than what the notice is about.
+    not: >
+      Not vocabulary_mismatch. The word is present and spelled as configured;
+      its CONTEXT is what makes the match wrong.
+    exemplar: gold-canadapost-cloud-in-url
+    exemplar_note: >
+      Canada Post electrical-services RFSA matched `cloud` only inside the
+      hostname portal.us.bn.cloud.ariba.com. This is a false POSITIVE rather
+      than a false negative - the taxonomy covers both directions, because a
+      refinement that fixes one can cause the other.
+
+  other:
+    definition: >
+      Deliberately last, and deliberately uncomfortable.
+    not: >
+      Not a resting place. A review filed under `other` is a request to extend
+      this file. If two reviews land here for the same reason, that reason wants
+      a category of its own.
+    exemplar: null
