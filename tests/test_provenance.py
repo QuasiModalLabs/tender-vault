@@ -122,6 +122,13 @@ def _collection_metadata(db_path: Path) -> dict:
         .get_collection("tenders").metadata or {})
 
 
+def _collection_count(db_path: Path) -> int:
+    """Rows the corpus actually holds, as opposed to what it says it holds."""
+    import chromadb
+    return (chromadb.PersistentClient(path=str(db_path))
+            .get_collection("tenders").count())
+
+
 # ---------------------------------------------------------------------------
 # 1 — the ingest stamps, and never writes None
 # ---------------------------------------------------------------------------
@@ -522,7 +529,80 @@ def test_dossier_feed_stamp() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8 — the feed is snapshotted before it is overwritten
+# 8 — the funnel's admitted count reconciled against what was written
+# ---------------------------------------------------------------------------
+
+def test_write_delta_is_reported(tmp: Path) -> None:
+    """
+    Stage 7 runs inside _write_chroma, AFTER filter_tenders has returned and
+    after the funnel has counted the row. So the funnel's final number is an
+    upper bound on the corpus, and the gap belongs in the corpus's own
+    provenance rather than in nobody's.
+
+    Reported at ZERO as well, which is the whole reason the keys are
+    unconditional: an absent key would make "nothing was lost" read the same as
+    "this build never measured it".
+    """
+    print("\nFunnel / corpus reconciliation")
+    df, cols = _one_row_frame()
+
+    db = tmp / "chroma-delta-zero"
+    ingest.build_chroma(df, db, cols)
+    meta = _collection_metadata(db)
+    for key in ("funnel_admitted", "corpus_written", "funnel_write_delta"):
+        check(f"{key} written", key in meta, str(meta))
+    check("funnel_admitted counts the frame",
+          meta.get("funnel_admitted") == 1, repr(meta.get("funnel_admitted")))
+    check("corpus_written counts the corpus",
+          meta.get("corpus_written") == 1, repr(meta.get("corpus_written")))
+    check("a clean build reports delta 0, not an absent key",
+          meta.get("funnel_write_delta") == 0,
+          repr(meta.get("funnel_write_delta")))
+    check("the counts sit beside corpus_built_at",
+          "corpus_built_at" in meta, str(meta))
+
+    # A row the funnel counted and stage 7 then dropped.
+    blank = df.copy()
+    blank.loc[0, cols["tender_id"]] = ""
+    two = pd.concat([df, blank], ignore_index=True)
+    db2 = tmp / "chroma-delta-one"
+    ingest.build_chroma(two, db2, cols)
+    meta2 = _collection_metadata(db2)
+    check("funnel_admitted counts the row stage 7 dropped",
+          meta2.get("funnel_admitted") == 2, repr(meta2.get("funnel_admitted")))
+    check("corpus_written does not",
+          meta2.get("corpus_written") == 1, repr(meta2.get("corpus_written")))
+    check("the delta names the gap",
+          meta2.get("funnel_write_delta") == 1,
+          repr(meta2.get("funnel_write_delta")))
+
+    # Two rows sharing a reference number would give a corpus smaller than the
+    # provenance claims. Asserted as the PROPERTY — the build must not produce
+    # such a corpus — rather than against a particular error: chromadb 1.5.9
+    # refuses duplicate ids itself with DuplicateIDError, so _write_chroma's own
+    # post-write count never gets to fire on this input. Both are the same
+    # guarantee, and which one catches it is Chroma's business.
+    dupe = pd.concat([df, df], ignore_index=True)
+    db3 = tmp / "chroma-duplicate-ids"
+    raised = None
+    try:
+        ingest.build_chroma(dupe, db3, cols)
+    except BaseException as exc:  # noqa: BLE001 — any type is a finding here
+        raised = exc
+    check("duplicate ids fail the build rather than shrinking the corpus",
+          raised is not None, "the build succeeded")
+    if raised is None:
+        # If a future Chroma starts accepting duplicates, the guarantee must
+        # survive as the count check: the stored corpus_written has to describe
+        # the corpus that actually exists.
+        check("...or the corpus still matches its recorded provenance",
+              _collection_metadata(db3).get("corpus_written")
+              == _collection_count(db3),
+              "provenance and corpus disagree")
+
+
+# ---------------------------------------------------------------------------
+# 9 — the feed is snapshotted before it is overwritten
 # ---------------------------------------------------------------------------
 
 class _FakeResponse:
@@ -615,6 +695,7 @@ def main() -> None:
         test_digest_from_unstamped_corpus(tmp)
         test_no_verdict_field(tmp)
         test_dossier_feed_stamp()
+        test_write_delta_is_reported(tmp)
         test_feed_snapshot(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

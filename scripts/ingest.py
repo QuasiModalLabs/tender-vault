@@ -1540,7 +1540,18 @@ def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
 def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
                   feed_path: Optional[Path] = None,
                   identity: Optional[dict] = None) -> None:
-    """Embed and write. Split out so build_chroma owns the rollback logic."""
+    """
+    Embed and write. Split out so build_chroma owns the rollback logic.
+
+    ROWS ARE BUILT BEFORE THE COLLECTION IS CREATED, and that ordering is what
+    lets the provenance be complete at creation rather than patched afterwards.
+    The gate below — a blank or 'nan' reference number — is the filter's stage 7
+    (see filter_audit.predicates), and it runs HERE, after filter_tenders has
+    returned and after the funnel has already counted the row. So the funnel's
+    final count has always been an upper bound on what reached the corpus, and
+    the difference has never appeared in any line this script prints. It does
+    now, at zero or otherwise.
+    """
     import chromadb
     from chromadb.utils import embedding_functions
 
@@ -1549,40 +1560,14 @@ def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
         model_name="all-MiniLM-L6-v2"
     )
 
-    # Provenance, written here because it cannot be recovered afterwards:
-    # ChromaDB rewrites its segment files whenever anything LOADS the
-    # collection, so chroma_db/ mtimes report when the corpus was last queried,
-    # not when it was built. A briefing that reads them describes its own read.
-    provenance = {
-        "corpus_built_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    # OMITTED when unknown, never None. Chroma raises
-    # `TypeError: argument 'metadata': Cannot convert Python object to
-    # MetadataValue` on a None value (verified, chromadb 1.5.9), so the obvious
-    # inline `"feed_downloaded_at": _feed_mtime_iso(...)` crashes the whole
-    # ingest the first time there is no cached feed. An absent key is the
-    # signal — see the provenance states in tender_tools._corpus_provenance.
-    feed_at = _feed_mtime_iso(feed_path)
-    if feed_at is not None:
-        provenance["feed_downloaded_at"] = feed_at
-
-    # The content hashes ride alongside the timestamps rather than replacing
-    # them. A timestamp says when something happened here; a hash says which
-    # bytes it happened to, and only the second one is comparable across two
-    # machines that downloaded the same feed at different moments. Already
-    # omit-when-unknown by construction — see corpus_identity.
-    provenance.update(identity or {})
-
-    collection = client.create_collection(
-        name="tenders",
-        embedding_function=embedder,
-        metadata={"hnsw:space": "cosine", **provenance},
-    )
-
     documents, metadatas, ids = [], [], []
+    unidentifiable = []
     for _, row in df.iterrows():
         tender_id = str(row.get(cols["tender_id"], ""))
         if not tender_id or tender_id == "nan":
+            # Counted, not just skipped. A row dropped silently between the
+            # funnel and the corpus is a row nobody can account for later.
+            unidentifiable.append(str(row.get(cols["title"], ""))[:60])
             continue
 
         title = str(row.get(cols["title"], ""))[:300]
@@ -1645,6 +1630,46 @@ def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
         metadatas.append(metadata)
         ids.append(tender_id)
 
+    # Provenance, written here because it cannot be recovered afterwards:
+    # ChromaDB rewrites its segment files whenever anything LOADS the
+    # collection, so chroma_db/ mtimes report when the corpus was last queried,
+    # not when it was built. A briefing that reads them describes its own read.
+    provenance = {
+        "corpus_built_at": datetime.now().isoformat(timespec="seconds"),
+        # The funnel's last number, and what actually reached the corpus. Two
+        # counts rather than one, and the delta between them stated rather than
+        # left to subtraction, because a reader comparing a funnel line in a log
+        # against a corpus size has no way to know a gate ran in between. ALWAYS
+        # PRESENT, including at zero: an absent key would make "no rows were
+        # lost" indistinguishable from "an older build never measured it".
+        "funnel_admitted": int(len(df)),
+        "corpus_written": int(len(ids)),
+        "funnel_write_delta": int(len(df) - len(ids)),
+    }
+    # OMITTED when unknown, never None. Chroma raises
+    # `TypeError: argument 'metadata': Cannot convert Python object to
+    # MetadataValue` on a None value (verified, chromadb 1.5.9), so the obvious
+    # inline `"feed_downloaded_at": _feed_mtime_iso(...)` crashes the whole
+    # ingest the first time there is no cached feed. An absent key is the
+    # signal — see the provenance states in tender_tools._corpus_provenance.
+    # The three counts above are exempt by construction: a count is never None.
+    feed_at = _feed_mtime_iso(feed_path)
+    if feed_at is not None:
+        provenance["feed_downloaded_at"] = feed_at
+
+    # The content hashes ride alongside the timestamps rather than replacing
+    # them. A timestamp says when something happened here; a hash says which
+    # bytes it happened to, and only the second one is comparable across two
+    # machines that downloaded the same feed at different moments. Already
+    # omit-when-unknown by construction — see corpus_identity.
+    provenance.update(identity or {})
+
+    collection = client.create_collection(
+        name="tenders",
+        embedding_function=embedder,
+        metadata={"hnsw:space": "cosine", **provenance},
+    )
+
     # Batch insert (ChromaDB handles this fine up to several thousand at a time)
     batch = 200
     for i in range(0, len(documents), batch):
@@ -1655,7 +1680,39 @@ def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
         )
         print(f"  Embedded {min(i + batch, len(documents)):,} / {len(documents):,}")
 
-    print(f"\nChromaDB written to {db_path} ({collection.count():,} tenders)")
+    # The counts above are a prediction about what the write would do. This is
+    # the write's own answer, and a disagreement RAISES rather than being
+    # reconciled: build_chroma restores the previous corpus, so the operator
+    # gets a corpus that matches its recorded provenance or no new corpus.
+    #
+    # Nothing known makes these differ today — duplicate ids, the obvious
+    # candidate, are refused by Chroma itself with DuplicateIDError (verified,
+    # chromadb 1.5.9) rather than absorbed. That is exactly why the check is
+    # cheap to keep: it costs one count and it is the only statement in this
+    # function that is checked against the store rather than against the frame.
+    written = collection.count()
+    if written != len(ids):
+        raise RuntimeError(
+            f"Corpus write disagrees with its own provenance: prepared "
+            f"{len(ids):,} rows, the collection holds {written:,}. The recorded "
+            f"corpus_written would describe a corpus that does not exist, so "
+            f"this build is abandoned and the previous corpus restored. Rows "
+            f"cannot go missing between add() and count() by any known path — "
+            f"find out what changed before rebuilding.")
+
+    delta = len(df) - written
+    print(f"\nChromaDB written to {db_path} ({written:,} tenders)")
+    # Printed adjacent, always, so the two are read as one fact. The funnel's
+    # own last line is several hundred lines of output back by now.
+    print(f"  funnel admitted   {len(df):>7,}")
+    print(f"  written to corpus {written:>7,}   "
+          f"(delta {delta}"
+          + (" — every admitted notice reached the corpus)" if delta == 0
+             else " — dropped at stage 7, blank/'nan' reference number)"))
+    for title in unidentifiable[:5]:
+        print(f"    no reference number: {title}")
+    if len(unidentifiable) > 5:
+        print(f"    ... and {len(unidentifiable) - 5:,} more")
 
 
 # ---------------------------------------------------------------------------
