@@ -5,8 +5,10 @@ Runs with plain Python — no pytest needed:
 
     python tests/test_backtest.py
 
-Exit code 0 = all passed. Skips cleanly when data/notices.db has not been built,
-so a fresh clone without a network fetch still passes.
+Exit code 0 = all passed. Without data/notices.db — which is 120MB and
+gitignored, so CI never has it — the checks that need a corpus are skipped BY
+NAME and counted, and the ones that need no data still run. See
+`runs_without_corpus` for why that is opt-in rather than opt-out.
 
 WHAT THIS GUARDS, and why it is the only test file that matters here. A backtest
 that leaks is worse than no backtest: it produces a confident number, the number
@@ -59,6 +61,28 @@ def skip(label: str) -> None:
     global SKIPPED
     SKIPPED += 1
     print(f"  skip  {label}")
+
+
+def runs_without_corpus(fn):
+    """
+    Mark a test as needing no database, so CI runs it.
+
+    data/notices.db is 120MB and gitignored, so it does not exist on a fresh
+    runner and every test here used to be skipped there — including the frozen
+    predicate guard, which is pure logic and is the one thing standing between a
+    rebuilt corpus and a silently changed predicate.
+
+    OPT IN, NOT OPT OUT, and the direction is the whole point. A test that
+    reaches a database and finds it empty does not fail; it passes over nothing.
+    `as_of` returning no rows dated after T is trivially true when it returns no
+    rows at all, and a green tick that means "there was nothing to check" is the
+    failure mode this repository refuses everywhere else - see the `vacuous`
+    verdict in filter_audit/equivalence.py. So a new test is assumed to need the
+    corpus and is skipped loudly without it; only a test that touches no data at
+    all says so here.
+    """
+    fn.runs_without_corpus = True
+    return fn
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +276,7 @@ def test_partial_years_are_excluded_from_the_panel(con):
           f"covered fiscal years are years: {covered}")
 
 
+@runs_without_corpus
 def test_split_point_handles_a_binary_feature():
     """
     A binary feature has median 1.0 among its non-zero values, so a naive
@@ -267,6 +292,7 @@ def test_split_point_handles_a_binary_feature():
           f"binary feature splits into 95 with-signal rows (got {len(selected)})")
 
 
+@runs_without_corpus
 def test_a_lift_on_thin_data_is_not_called_significant():
     """
     THE SECOND BUG THIS FILE EXISTS FOR. The first verdict function called a
@@ -295,6 +321,7 @@ def test_a_lift_on_thin_data_is_not_called_significant():
     check(not at_base.significant, "a lift of exactly 1.0 is never significant")
 
 
+@runs_without_corpus
 def test_wilson_interval_brackets_the_point_estimate():
     """A CI that does not contain its own estimate would silently invert every
     significance call above."""
@@ -307,6 +334,7 @@ def test_wilson_interval_brackets_the_point_estimate():
           "wilson on an empty sample is total ignorance, not a crash")
 
 
+@runs_without_corpus
 def test_the_frozen_predicate_refuses_a_moved_classifier():
     """
     Clause 5 freezes five kind STRINGS. When what those strings denote changes,
@@ -420,20 +448,30 @@ def test_the_frozen_predicate_refuses_a_moved_classifier():
 
 
 def main() -> int:
-    if not NOTICES_DB.exists():
-        print(f"no {NOTICES_DB.name}; run python scripts/notices_ingest.py — skipping")
-        return 0
-    con = sqlite3.connect(NOTICES_DB)
+    have_corpus = NOTICES_DB.exists()
+    if not have_corpus:
+        print(f"no {NOTICES_DB.name} (build it with python scripts/notices_ingest.py).\n"
+              f"Running the checks that need no corpus; the rest are SKIPPED, "
+              f"which is NOT the same as passing.")
+    con = sqlite3.connect(NOTICES_DB) if have_corpus else None
 
     for name, fn in sorted(globals().items()):
         if not (name.startswith("test_") and callable(fn)):
+            continue
+        # A test taking `con` needs the corpus by construction; a test with no
+        # arguments needs it unless it declared otherwise. See runs_without_corpus.
+        needs_corpus = bool(fn.__code__.co_argcount) or not getattr(
+            fn, "runs_without_corpus", False)
+        if needs_corpus and not have_corpus:
+            skip(f"{name} - needs {NOTICES_DB.name}")
             continue
         print(f"\n{name}")
         if fn.__code__.co_argcount:
             fn(con)
         else:
             fn()
-    con.close()
+    if con is not None:
+        con.close()
 
     print(f"\n{PASSED} passed, {FAILED} failed, {SKIPPED} skipped")
     return 1 if FAILED else 0
