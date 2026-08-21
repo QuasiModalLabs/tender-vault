@@ -285,6 +285,8 @@ def replay(source: str = "archive",
 
     first_reject = Counter()
     audit_fires = Counter()
+    unique_drop = Counter()
+    without_relevance = 0
     branch = Counter()
     kind_drift = Counter()
     admitted_ids = []
@@ -314,6 +316,23 @@ def replay(source: str = "archive",
         for result in audit.results:
             if result.drops:
                 audit_fires[result.stage] += 1
+
+        # WHAT EACH STAGE IS WORTH, which no short-circuiting funnel can say.
+        # `audit_fires` counts every stage that would drop a notice, so a row
+        # failing construction AND relevance is counted twice and both stages
+        # look load-bearing. A stage's unique contribution is the rows it drops
+        # that NOTHING else would - remove the stage and exactly these notices
+        # enter the corpus. See dropping_stages.
+        dropped_by = dropping_stages(audit)
+        if len(dropped_by) == 1:
+            unique_drop[next(iter(dropped_by))] += 1
+        if dropped_by and "relevance" not in dropped_by:
+            # Rows removed with no relevance drop behind them. Relevance is the
+            # stage that carries the archive, so this is the honest measure of
+            # what every other stage adds on top of it - and the answer is
+            # small enough that it belongs in the output rather than in a note
+            # someone computed once.
+            without_relevance += 1
 
         rel = audit.by_stage("relevance").detail
         con = audit.by_stage("construction").evidence
@@ -392,6 +411,17 @@ def replay(source: str = "archive",
             name: audit_fires.get(name, 0) - first_reject.get(name, 0)
             for name in P.STAGE_NAMES if audit_fires.get(name)
         },
+        "unique_contribution": {name: unique_drop.get(name, 0)
+                                for name in P.STAGE_NAMES if audit_fires.get(name)},
+        "dropped_without_relevance": without_relevance,
+        "unique_contribution_note": (
+            "Rows a stage drops that no other stage would - remove the stage "
+            "and exactly these notices enter the corpus. THESE DO NOT SUM: a "
+            "row dropped by two stages is unique to neither, so per-stage "
+            "figures fall short of what any GROUP of stages uniquely removes. "
+            "`dropped_without_relevance` is the group figure that matters here "
+            "- everything the other stages remove that relevance would have "
+            "left in."),
         "relevance_branches": dict(sorted(branch.items())),
         "stored_kind_drift": dict(kind_drift.most_common()),
         "closing_date_shapes": shapes,
@@ -409,6 +439,25 @@ def replay(source: str = "archive",
         "first_snapshot_date": snapshot_from,
         "limitation": _limitation(snapshot_from),
     }
+
+
+ACTIVE_STAGES = frozenset(s.name for s in P.STAGES if s.active)
+
+
+def dropping_stages(audit: P.AuditDecision) -> set:
+    """
+    Every active stage that would drop this notice, evaluated independently.
+
+    The set, not the first element: `first_rejecting_stage` is what production
+    reports and it cannot answer "what is this stage worth", because a stage
+    that only ever fires on notices some other stage also rejects removes
+    nothing on its own. A stage's unique contribution is the rows whose set is
+    exactly {that stage}, and a row belonging to two stages is unique to
+    NEITHER - it is removed by the pair, and per-stage figures therefore fall
+    short of what a group of stages removes together.
+    """
+    return {r.stage for r in audit.results
+            if r.drops and r.stage in ACTIVE_STAGES}
 
 
 def _limitation(snapshot_from: Optional[str]) -> str:
@@ -474,8 +523,19 @@ def render_funnel(result: dict) -> str:
     out.append("AUDIT DECISION - every stage evaluated independently")
     for name, fires in result["audit_stage_fires"].items():
         hidden = result["audit_hidden_by_short_circuit"].get(name, 0)
+        unique = result.get("unique_contribution", {}).get(name, 0)
         out.append(f"  {name:<16} would drop {fires:>9,}   "
-                   f"(short-circuit hid {hidden:,})")
+                   f"(short-circuit hid {hidden:,}; "
+                   f"only this stage would drop {unique:,})")
+    if result.get("unique_contribution"):
+        out.append("")
+        out.append(f"  rows dropped with no relevance drop behind them: "
+                   f"{result['dropped_without_relevance']:,}")
+        out.append("    Everything the other stages remove that relevance would "
+                   "have left in.")
+        out.append("    Per-stage figures above do not sum to it: a row dropped "
+                   "by two stages is unique to")
+        out.append("    neither, but is still removed by the pair.")
     if result["relevance_branches"]:
         out.append("")
         out.append("  relevance branches - two different failures, never one boolean")

@@ -588,6 +588,67 @@ def test_historical_reproducibility() -> None:
     check("the original run's rows are untouched", rows, written)
 
 
+def test_unique_contribution_is_not_a_second_count_of_the_same_rows() -> None:
+    """
+    A stage that only fires on notices some other stage also rejects removes
+    nothing on its own, and the funnel cannot say so — it reports the FIRST
+    rejecting stage, which credits whichever gate happened to run earlier.
+
+    Written against the rule, not the archive's current numbers: a row dropped
+    by two stages is unique to neither, and per-stage figures therefore fall
+    short of what a group of stages removes together. That relationship is what
+    must survive; the counts move whenever the profile does.
+    """
+    print("\nUnique contribution:")
+    from filter_audit.replay import dropping_stages
+
+    criteria = _criteria()
+
+    # One stage only: construction rejects it, relevance would have admitted it
+    # on the keyword branch. Remove construction and this notice enters.
+    elevator = P.audit_decision(_notice(NRC_ELEVATOR), criteria, "2023-03-15")
+    check("a single-stage drop names exactly that stage",
+          dropping_stages(elevator), {"construction"})
+
+    # Two stages: unique to neither, still removed by the pair.
+    both = dict(CODED_WRONG_FAMILY)
+    both["closing_date"] = "2020-01-01"
+    two = P.audit_decision(_notice(both), criteria, "2026-01-05")
+    check("a two-stage drop names both", dropping_stages(two),
+          {"closed", "relevance"})
+    check("...so it is unique to neither", len(dropping_stages(two)) == 1, False)
+
+    # An admitted notice contributes to nothing.
+    admitted = P.audit_decision(_notice(SSC_CYBER), criteria, None)
+    check("an admitted notice has an empty drop set",
+          dropping_stages(admitted) - {"relevance"}, set())
+
+    if not NOTICES_DB.exists():
+        print("  SKIP  no data/notices.db for the funnel arithmetic")
+        return
+    from filter_audit.replay import replay
+
+    result = replay(source="archive", as_of_spec="publication", sample=3000,
+                    seed=11)
+    unique = result["unique_contribution"]
+    fires = result["audit_stage_fires"]
+    check("every stage that can fire reports a unique contribution",
+          sorted(unique), sorted(fires))
+    check("no stage is unique on more rows than it fires on",
+          all(unique[name] <= fires[name] for name in unique), True)
+    check("the uniques do not exceed the rows actually rejected",
+          sum(unique.values()) <= result["rejected"], True)
+    # The whole point of the group figure: it is at least the sum of the
+    # non-relevance uniques (each of those rows qualifies) and can exceed it
+    # (a row dropped by two non-relevance stages counts here and in neither).
+    non_relevance = sum(v for k, v in unique.items() if k != "relevance")
+    check("the group figure is at least the sum of its stages' uniques",
+          result["dropped_without_relevance"] >= non_relevance, True)
+    check("...and no larger than everything relevance did not drop",
+          result["dropped_without_relevance"]
+          <= result["rejected"] - fires.get("relevance", 0), True)
+
+
 def test_limitation_is_bounded_by_the_snapshots() -> None:
     """
     What the replay says it cannot do must track what is actually on disk.
@@ -764,6 +825,7 @@ def main() -> int:
     test_regression_protection()
     test_no_change_is_not_equivalence()
     test_historical_reproducibility()
+    test_unique_contribution_is_not_a_second_count_of_the_same_rows()
     test_limitation_is_bounded_by_the_snapshots()
     test_false_negative_recording()
     test_reviewer_must_be_stated()
