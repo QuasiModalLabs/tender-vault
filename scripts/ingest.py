@@ -515,6 +515,56 @@ def classify_notice(notice_type, procurement_category, text=None) -> dict:
     }
 
 
+def kind_manifest() -> dict[str, list[str]]:
+    """
+    Which literals produce each opportunity kind — the EXTENSION of the labels.
+
+    `classify_notice` returns kind strings, and code downstream freezes sets of
+    those strings. A frozen set of strings is only as stable as what the strings
+    denote, and that is decided here, by the tables above. When "Directed
+    Contract" was added to `_NOTICE_KINDS`, `pre_awarded` kept its spelling and
+    changed its meaning: 25 archive notices that classified as `solicitation` or
+    `product` became `pre_awarded`, and any predicate frozen on that word
+    silently started excluding them. Nothing raised, because nothing had a way
+    to notice.
+
+    So the tables are exposed as data. A consumer that freezes a kind can record
+    this manifest's hash beside its frozen set and refuse to run when the two
+    disagree — see backtest.non_procurement_kinds, which is the one doing it.
+
+    Each entry is `basis:literal`, naming the field the literal is read from,
+    because a literal moving from the notice type to the prose is a real change
+    in how confidently the kind is assigned and should not look like a no-op.
+
+    WHAT THIS DOES NOT COVER, stated rather than implied: the ORDER the bases are
+    checked in. Results phrases outrank the notice type, which outranks the
+    category, and reordering them would move notices between kinds without
+    changing any membership here. A consumer of this manifest is protected
+    against a changed vocabulary, not against a changed precedence.
+
+    `unknown` is absent on purpose — it is the residual, produced by no literal.
+    """
+    manifest: dict[str, list[str]] = {}
+    for literal, kind in _NOTICE_KINDS.items():
+        manifest.setdefault(kind, []).append(f"notice_type:{literal}")
+    for phrase in _RESULTS_NOTICE_PHRASES:
+        manifest.setdefault("results_notice", []).append(
+            f"prose_results_phrase:{phrase}")
+    for arrangement in _KNOWN_SUPPLY_ARRANGEMENTS:
+        manifest.setdefault("call_up", []).append(
+            f"prose_arrangement_number:{arrangement}")
+    manifest.setdefault("call_up", []).append(
+        f"prose_vehicle_name:{_VEHICLE_TOKENS.pattern}")
+    manifest.setdefault("construction", []).append(
+        f"procurement_category:{_CATEGORY_CONSTRUCTION}")
+    manifest.setdefault("product", []).append(
+        f"procurement_category:{_CATEGORY_GOODS}")
+    for category in _CATEGORY_SERVICES:
+        manifest.setdefault("solicitation", []).append(
+            f"procurement_category_residual:{category}")
+    return {kind: sorted(literals) for kind, literals in sorted(manifest.items())}
+
+
 def resolve_columns(
     columns: list[str],
     candidates: dict[str, list[str]],
