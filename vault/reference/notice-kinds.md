@@ -2,7 +2,7 @@
 
 What kind of thing a notice is, read before assessing fit. Most of what looks like a bad match is a good requirement in the wrong instrument.
 
-One definition — `classify_notice` in `scripts/ingest.py` — used by both the dossier and the corpus.
+One definition — `classify_notice` in `scripts/ingest/classify.py` — used by both the dossier and the corpus.
 
 ## The eight values
 

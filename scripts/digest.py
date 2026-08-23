@@ -288,7 +288,7 @@ def generate_digest() -> str:
             "", "## Estimated value", "",
             "Not available. The feed publishes no value field, and the "
             "description regex was retired for reading ceilings and trade-"
-            "agreement thresholds as prices. Run `python scripts/ingest.py "
+            "agreement thresholds as prices. Run `python scripts/ingest "
             "--extract-values` to populate it from the descriptions.",
         ]
 

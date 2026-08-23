@@ -170,7 +170,7 @@ def _do_load():
     if not DB_PATH.exists():
         sys.stderr.write(
             f"ChromaDB not found at {DB_PATH}.\n"
-            f"Run: python scripts/ingest.py\n"
+            f"Run: python scripts/ingest\n"
         )
         sys.exit(2)
 
@@ -313,7 +313,7 @@ def _corpus_provenance() -> dict:
     if built_at is None:
         local_state = "unstamped"
         local_note = ("This corpus predates provenance stamping. "
-                      "Re-run: python scripts/ingest.py")
+                      "Re-run: python scripts/ingest")
     elif feed_at is None:
         local_state = "no_feed_at_build"
         local_note = ("Ingest ran with no cached feed, so the corpus is "
@@ -373,7 +373,7 @@ def _corpus_provenance() -> dict:
         elif feed_at < d_feed:
             out["reading"] = (
                 "behind on data — the newest digest was built from a feed this "
-                "machine has not downloaded. Run: python scripts/ingest.py")
+                "machine has not downloaded. Run: python scripts/ingest")
         else:
             out["reading"] = (
                 "this machine has a feed the newest digest has not seen")
@@ -1804,7 +1804,7 @@ def cmd_expiring_contracts(args) -> dict:
 _TENDERS_CSV = PROJECT_ROOT / ".cache" / "tenders.csv"
 
 # The CanadaBuys open-notice feed. The dossier reads the raw feed rather than
-# the profile-filtered corpus, so it keeps its own column map; ingest.py reads
+# the profile-filtered corpus, so it keeps its own column map; the ingest reads
 # most of these into ChromaDB but not the notice URL.
 _TENDER_COLS = {
     "tender_id": "referenceNumber-numeroReference",
@@ -1821,7 +1821,7 @@ _TENDER_COLS = {
     "url": "noticeURL-URLavis-eng",
 }
 
-# Single definition, in ingest.py, imported here. It used to be declared in both
+# Single definition, in scripts/ingest/, imported here. It used to be declared in both
 # modules with the same value and the same comment — which is fine until one of
 # them is tuned and the corpus and the dossier start disagreeing about what a
 # placeholder date is.
@@ -2428,7 +2428,7 @@ def _dossier_tenders(dept: str, limit: int) -> dict:
     import csv
     if not _TENDERS_CSV.exists():
         return {"state": "no_feed",
-                "note": "No open-notice feed cached. Run: python scripts/ingest.py"}
+                "note": "No open-notice feed cached. Run: python scripts/ingest"}
 
     in_corpus = _profile_corpus_ids()
     today = datetime.now()

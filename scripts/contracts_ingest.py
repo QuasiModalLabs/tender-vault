@@ -58,8 +58,9 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 from crosswalk import load_aliases  # noqa: E402
-from ingest import (  # noqa: E402
-    REQUEST_HEADERS, output_path, parse_profile, resolve_columns, staged_db,
+from ingest import parse_profile  # noqa: E402
+from ingest_common import (  # noqa: E402
+    REQUEST_HEADERS, output_path, resolve_columns, staged_db,
 )
 
 CONTRACTS_URL = (

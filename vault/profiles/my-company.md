@@ -23,7 +23,7 @@ location: Toronto, ON
 #
 # Uncommenting these does nothing on its own. The range is only consulted when
 # ingest runs with --extract-values, which reads the description with a model
-# instead of a regex. See estimate_value in scripts/ingest.py.
+# instead of a regex. See estimate_value in scripts/ingest/value.py.
 #
 # THE PROSE GOVERNS. Because this filter is off, the fit range that actually
 # affects anything is the one stated under "What we're looking for" below, which

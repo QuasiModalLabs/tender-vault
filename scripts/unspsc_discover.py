@@ -39,12 +39,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 from ingest import (  # noqa: E402  (path shim above must run first)
     DEFAULT_CACHE,
     PROJECT_ROOT,
-    REQUEST_HEADERS,
     TENDER_COLUMNS,
     TENDER_REQUIRED,
     parse_unspsc_codes,
-    resolve_columns,
 )
+from ingest_common import REQUEST_HEADERS, resolve_columns  # noqa: E402
 
 UNSPSC_REF_URL = (
     "https://donnees-data.tpsgc-pwgsc.gc.ca/ba2/aev-bas/nibsunspsc-gsinunspsc.csv"
@@ -109,7 +108,7 @@ def load_feed_codes() -> tuple[dict[str, set[str]], dict[str, list[str]], int]:
     if not DEFAULT_CACHE.exists():
         sys.exit(
             f"No cached tender feed at {DEFAULT_CACHE}.\n"
-            "Run: python scripts/ingest.py"
+            "Run: python scripts/ingest"
         )
     df = pd.read_csv(DEFAULT_CACHE, low_memory=False)
     cols = resolve_columns(

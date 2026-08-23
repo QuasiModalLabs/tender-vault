@@ -17,7 +17,7 @@ Runs with plain Python — no pytest needed:
 
     python tests/test_end_user_multivalue.py
 
-Requires .cache/tenders.csv (run scripts/ingest.py once to populate it).
+Requires .cache/tenders.csv (run `python scripts/ingest` once to populate it).
 Exit code 0 = all passed.
 """
 from __future__ import annotations
@@ -127,7 +127,7 @@ def test_fields_are_distinct(multi: pd.DataFrame, cols: dict, tmp_db: Path) -> N
 
 def main():
     if not CACHE.exists():
-        print(f"SKIP: {CACHE} not present. Run scripts/ingest.py first.")
+        print(f"SKIP: {CACHE} not present. Run python scripts/ingest first.")
         return
     tmp_root = Path(tempfile.mkdtemp(prefix="tender-vault-eu-test-"))
     try:

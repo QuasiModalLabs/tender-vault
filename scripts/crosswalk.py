@@ -64,7 +64,7 @@ import pandas as pd
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
-from ingest import output_path, resolve_columns, staged_db  # noqa: E402
+from ingest_common import output_path, resolve_columns, staged_db  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).parent.parent
 CONTRACTS_CSV = PROJECT_ROOT / ".cache" / "contracts.csv"

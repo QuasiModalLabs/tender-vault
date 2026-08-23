@@ -204,7 +204,7 @@ with whatever you have:
 | `audits` | `python scripts/oag_ingest.py` | Empty until built |
 | `plans` | `python scripts/plans_ingest.py` | Empty until built |
 | `contracts` | `python scripts/contracts_ingest.py` (~630MB) | Empty until built |
-| `tenders` | `python scripts/ingest.py` | Empty until built |
+| `tenders` | `python scripts/ingest` | Empty until built |
 
 Every section carries a `state` field, and the states distinguish *no data* from
 *no signal* — `attributed` versus `no_audits_found` is the difference between a
@@ -292,7 +292,7 @@ The presentation rules turned out to carry design weight, because a template is 
 > **On every number in this file.** These are measurements from a specific day's
 > feed, recorded to show orders of magnitude and where the filter loses things —
 > they are not invariants, and they drift as the feed does. The funnel that
-> `python scripts/ingest.py` prints on each run is the authority on your corpus,
+> `python scripts/ingest` prints on each run is the authority on your corpus,
 > not anything written here.
 
 **There is no contract value.** The feed publishes no value field, and the regex that used to invent one has been retired. Measured on the 2026-08-04 feed: only 94 of 896 descriptions contain a dollar figure at all, and the first one is usually not the price — the single most common extraction was $10,000,000, off construction source lists reading "estimated value of $10 million and below", which is a ceiling on a qualification vehicle. The resulting field (median $10M, max $5B) described nothing. `estimated_value` is now omitted rather than stored as `0.0`, so unknown stops rendering as free. `--extract-values` reads the descriptions with a model instead, and needs an API key.
@@ -344,7 +344,7 @@ python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\act
 pip install -r requirements.txt
 
 $EDITOR vault/profiles/my-company.md   # the filter reads from this — read its comments
-python scripts/ingest.py               # tender corpus, ~2 min
+python scripts/ingest               # tender corpus, ~2 min
 python scripts/plans_ingest.py         # departmental-plan signal, ~1 min
 python scripts/oag_ingest.py           # Auditor General signal, ~1 min
 ```

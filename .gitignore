@@ -7,8 +7,8 @@ venv/
 # CSV cache — re-downloaded when you run ingest
 .cache/
 
-# ChromaDB — rebuilt by ingest.py. Not committed, to keep the repo small.
-# Anyone cloning runs ingest.py once.
+# ChromaDB — rebuilt by scripts/ingest/. Not committed, to keep the repo small.
+# Anyone cloning runs `python scripts/ingest` once.
 chroma_db/
 
 # Sampling runs (--source, --max-audits) write here instead of over the

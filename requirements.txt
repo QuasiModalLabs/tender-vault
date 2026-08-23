@@ -9,7 +9,7 @@ pyyaml>=6.0
 # Install with: pip install "mcp[cli]"
 mcp>=2.0.0,<3
 
-# LLM value extraction — optional, only used by `ingest.py --extract-values`
+# LLM value extraction — optional, only used by `scripts/ingest --extract-values`
 # (requires ANTHROPIC_API_KEY; default ingest path needs no credentials)
 anthropic>=0.40.0,<1
 
