@@ -8,7 +8,7 @@ Full install, configuration, and troubleshooting. For what the project *is*, see
 - **Network on first run.** Every ingest fetches its source data live, and
   sentence-transformers downloads the `all-MiniLM-L6-v2` embedding model once
   (~90MB, cached in your user profile, not in the repo). Nothing here needs an
-  API key — the only exception is `ingest.py --extract-values`.
+  API key — the only exception is `python scripts/ingest --extract-values`.
 - **Disk.** Roughly 150MB for a tenders-only install: ~90MB model, 30–80MB
   ChromaDB, plus cached source CSVs in `.cache/`. The optional contracts layer
   needs about **1GB more** — its ~630MB source CSV is cached to `.cache/` and
@@ -59,7 +59,7 @@ Nothing derived is committed to this repo. The tender corpus, the contracts data
 ### 1. Tenders — required
 
 ```bash
-python scripts/ingest.py
+python scripts/ingest
 ```
 
 Downloads the current CanadaBuys open-notices CSV, applies the profile filter, and builds embeddings into a local ChromaDB store. About two minutes. The funnel counts print as it runs, so you can see how many notices each stage removed and tune accordingly — that output is the authority on corpus size, not any number written in the docs.
@@ -67,7 +67,7 @@ Downloads the current CanadaBuys open-notices CSV, applies the profile filter, a
 Optional flag:
 
 ```bash
-python scripts/ingest.py --extract-values
+python scripts/ingest --extract-values
 ```
 
 Replaces the default regex value extraction with a per-tender model extraction pass. Requires `ANTHROPIC_API_KEY` and costs a few cents per ingest. Note that value data is sparse in this feed regardless — most notices publish no figure at all, and the value filter is disabled by default because of it.
@@ -194,7 +194,7 @@ purpose** — `IRCC` returns `resolved: null`, because substring matching is how
 one department's name lands on another. A null here is a correct answer about
 your query, not a broken server.
 
-Once `ingest.py` has run, confirm the corpus is wired up too:
+Once `python scripts/ingest` has run, confirm the corpus is wired up too:
 
 > Search the tender corpus for cloud migration.
 
@@ -217,7 +217,7 @@ looks exactly like a server that failed to load.
 3. Writes a digest to `vault/digests/digest-YYYY-MM-DD.md`, including a **New this week** section diffed against the previous run's corpus snapshot (`vault/digests/corpus-latest.txt`)
 4. Commits the digest and the updated snapshot — not `chroma_db/`
 
-Because the digest is generated on the Actions runner, it can reference tenders your local corpus hasn't seen. After pulling a new digest, re-run `python scripts/ingest.py` to sync locally.
+Because the digest is generated on the Actions runner, it can reference tenders your local corpus hasn't seen. After pulling a new digest, re-run `python scripts/ingest` to sync locally.
 
 The contracts and plans refresh workflows are present but disabled. They rebuilt databases that are no longer committed, so on a schedule they would run and commit nothing. Rebuild those locally when you want fresh data.
 

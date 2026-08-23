@@ -63,8 +63,9 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
-from ingest import (  # noqa: E402
-    REQUEST_HEADERS, output_path, parse_profile, resolve_columns, staged_db,
+from ingest import parse_profile  # noqa: E402
+from ingest_common import (  # noqa: E402
+    REQUEST_HEADERS, output_path, resolve_columns, staged_db,
 )
 # Reuse the proven scoring helpers from plans_ingest.
 from plans_ingest import theme_vector, _strip_md, EMBED_MODEL  # noqa: E402

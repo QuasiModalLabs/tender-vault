@@ -153,7 +153,7 @@ length.
 newest digest, and a `state`. State them in the briefing. If this
 machine's feed stamp is behind the digest's, say so and say plainly that
 the briefing cannot see anything the newer corpus holds — the reader's
-fix is `git pull` then `python scripts/ingest.py`.
+fix is `git pull` then `python scripts/ingest`.
 
 `chroma_db/` mtimes are **not** evidence of anything: ChromaDB rewrites
 its segment files on every read, so they report when you last queried.

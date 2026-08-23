@@ -64,8 +64,9 @@ import pandas as pd
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
-from ingest import (  # noqa: E402
-    REQUEST_HEADERS, output_path, parse_profile, staged_db,
+from ingest import parse_profile  # noqa: E402
+from ingest_common import (  # noqa: E402
+    REQUEST_HEADERS, output_path, staged_db,
 )
 
 PLANS_URL = (

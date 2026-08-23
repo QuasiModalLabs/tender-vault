@@ -92,7 +92,7 @@ jobs:
         # ChromaDB is rebuilt into a gitignored directory — we don't commit it.
         # What we DO commit (in the next step) is the digest file: a
         # human-readable markdown summary of what arrived this week.
-        run: python scripts/ingest.py --force
+        run: python scripts/ingest --force
 
       - name: Generate weekly digest
         run: python scripts/digest.py
