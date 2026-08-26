@@ -203,6 +203,11 @@ ACQUISITION_HELP = (
 PRIMARY_MEMBER = "communication_primaryexport.csv"
 DPOH_MEMBER = "communication_dpohexport.csv"
 SUBJECT_MEMBER = "communication_subjectmattersexport.csv"
+# The subject vocabulary, shipped inside the same zip as the data it decodes.
+# Read rather than transcribed: a 54-entry list copied into this file would be
+# a second source of truth for the labels callers filter on, and the day the
+# Office adds a subject it would be a silently stale one.
+CODES_MEMBER = "codes_subjectmattertypesexport.csv"
 
 PRIMARY_COLUMNS = {
     "comlog_id": ["COMLOG_ID"],
@@ -227,10 +232,21 @@ DPOH_COLUMNS = {
     "other_institution": ["OTHER_INSTITUTION_AUTRE"],
     "institution": ["INSTITUTION"],
 }
+# The subject file carries a CODE, not a label. It named its subjects inline
+# once (SUBJ_MATTER_OBJET, the schema this ingest was first written against);
+# the published export now normalizes them into Codes_SubjectMatterTypesExport
+# and stores SMT-17 where it used to store "Government Procurement". Resolving
+# the code is therefore not a nicety — PROCUREMENT_SUBJECT below is matched as
+# English text, so an unresolved code would leave every procurement filter in
+# the project returning nothing, which is the failure that looks like an answer.
 SUBJECT_COLUMNS = {
     "comlog_id": ["COMLOG_ID"],
-    "subject": ["SUBJ_MATTER_OBJET"],
-    "other_subject": ["OTHER_SUBJ_MATTER_AUTRE_OBJET"],
+    "code": ["SUBJECT_CODE_OBJET"],
+    "other_subject": ["CUSTOM_SUBJ_OBJET_PERSO"],
+}
+CODES_COLUMNS = {
+    "code": ["SUBJECT_CODE_OBJET"],
+    "subject": ["SMT_EN_DESC"],
 }
 
 # REG_TYPE_ENR, per the published data dictionary. Not guessable from the
@@ -626,7 +642,7 @@ def validate_archive(source: Path, help_text: str | None = None) -> list[dict]:
 
 def read_members(source: Path) -> dict[str, tuple[list[dict], dict, int]]:
     """
-    Read the three CSVs from the published zip (or a directory of them).
+    Read the four CSVs from the published zip (or a directory of them).
 
     Returns {logical_name: (rows, resolved_columns, replacement_chars)}. Each
     file's headers are resolved against the candidates above, so a column rename
@@ -636,6 +652,7 @@ def read_members(source: Path) -> dict[str, tuple[list[dict], dict, int]]:
         "primary": (PRIMARY_MEMBER, PRIMARY_COLUMNS),
         "dpoh": (DPOH_MEMBER, DPOH_COLUMNS),
         "subjects": (SUBJECT_MEMBER, SUBJECT_COLUMNS),
+        "codes": (CODES_MEMBER, CODES_COLUMNS),
     }
     out: dict[str, tuple[list[dict], dict, int]] = {}
 
@@ -778,20 +795,53 @@ def build_db(members: dict, provenance: dict, archive_members: list,
             _txt(r[dcols["other_institution"]]),
         ))
 
+    # Code -> English label, from the archive's own vocabulary member. The
+    # table is stored decoded rather than as codes: `subject` is what every
+    # caller filters and what `how_to_read` tells them to pass, and a database
+    # of SMT-17 would push this join onto every reader of it.
+    code_rows, ccols, _ = members["codes"]
+    code_labels = {}
+    for r in code_rows:
+        code, label = _txt(r[ccols["code"]]), _txt(r[ccols["subject"]])
+        if code and label:
+            code_labels[code] = label
+
     subjects = []
+    unknown_codes: dict[str, int] = {}
     for r in subject_rows:
         comlog = _txt(r[scols["comlog_id"]])
         if comlog not in keep:
             continue
-        subject = _txt(r[scols["subject"]])
-        # OTHER_SUBJ_MATTER is only free text when the filer chose 'Other'.
+        code = _txt(r[scols["code"]])
+        subject = code_labels.get(code, "")
+        if not subject:
+            # Counted, then fatal below. Dropping the row would understate a
+            # subject's coverage and substituting the raw code would put a
+            # value in the column that no documented filter matches — both are
+            # ways for a filter to answer "none" when the truth is "unmapped".
+            unknown_codes[code] = unknown_codes.get(code, 0) + 1
+            continue
+        # The custom text is only free text when the filer chose 'Other'.
         # Otherwise it repeats the subject, or holds its FRENCH translation
         # ("Mining" / "Mines", "Defence" / "Defense") — 14,113 rows of the
         # published file. Storing that would put French labels in a column
         # callers would reasonably filter in English, so it is dropped where it
-        # is not what the dictionary says it is.
+        # is not what the dictionary says it is. Measured against the current
+        # export it is populated on 8,032 rows and every one of them is 'Other'.
         other = _txt(r[scols["other_subject"]]) if subject.lower() == "other" else ""
         subjects.append((_num(r[scols["comlog_id"]]), subject, other))
+
+    if unknown_codes:
+        listed = ", ".join(f"{c or '(blank)'} x{n:,}"
+                           for c, n in sorted(unknown_codes.items(),
+                                              key=lambda kv: -kv[1])[:10])
+        sys.stderr.write(
+            f"Subject codes not in {CODES_MEMBER}: {listed}\n"
+            "The vocabulary ships in the same archive as the data, so a code "
+            "it does not define means the two members disagree.\n"
+            "Resolve it before building: a subject silently missing from the "
+            "table is a filter that answers 'none' rather than failing.\n")
+        sys.exit(2)
 
     with staged_db(db_path) as con:
         con.execute("""
