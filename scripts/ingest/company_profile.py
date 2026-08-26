@@ -73,6 +73,11 @@ def parse_profile(profile_path: Path) -> dict:
         "imminent_within_days": _imminence_threshold(fm),
         "contracts_window_years": int(fm.get("contracts_window_years", 3)),
         "contracts_categories": [c.lower() for c in fm.get("contracts_categories", [])],
+        # Same shape as the contracts window and the same default, but keyed
+        # separately because the two sources are windowed for different reasons:
+        # contracts are cut to keep a 630MB stream tractable, lobbying is cut
+        # because a meeting from 2011 says nothing about who is in the room now.
+        "lobbying_window_years": int(fm.get("lobbying_window_years", 3)),
         "expiry_min_value": float(fm.get("expiry_min_value", 0)),
         "plan_themes": fm.get("plan_themes", {}),
         "oag_themes": fm.get("oag_themes", {}),

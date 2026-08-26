@@ -265,8 +265,9 @@ def oag_signals(department: str = None, min_score: float = None,
     scrutiny that forces a department to procure a fix.
 
     CONVERGENCE is the intended use: get an audit's department, then call
-    program_signals and expiring_contracts with THE SAME canonical key. All four
-    signal tools take one identifier, so a key that works in one works in all.
+    program_signals, expiring_contracts and lobbying_signals with THE SAME
+    canonical key. All five signal tools take one identifier, so a key that
+    works in one works in all.
 
     READING THE DEPARTMENTS. `departments` are named in the audit itself — half
     of all audits name more than one, and an audit of six departments is a
@@ -308,6 +309,122 @@ def oag_signals(department: str = None, min_score: float = None,
 
 
 @mcp.tool()
+def lobbying_signals(department: str = None, subject: str = None,
+                     client: str = None, vendor: str = None, since: str = None,
+                     list_subjects: bool = False, limit: int = 25) -> dict:
+    """
+    Who has been meeting a department, about what — the earliest signal, and the
+    fifth leg of the convergence.
+
+    Monthly communication reports filed under the Lobbying Act: an arranged oral
+    communication between a lobbyist and a designated public office holder,
+    disclosed with the date, the office holders present, and the subject matters
+    it was filed under. "Government Procurement" is one of those subjects. Where
+    oag_signals says what a department was found failing at and program_signals
+    what it plans, this says who was talking to it while the requirement was
+    still being written.
+
+    PRESENCE, NEVER INFLUENCE. This constraint governs how you may use the
+    result, and it is not boilerplate. Filing these reports is what COMPLIANCE
+    looks like — the organizations named are the ones following the law. You may
+    write "IRCC has been taking procurement meetings with these four firms since
+    2024, per the lobbying registry." You may NOT write, imply, or hint that any
+    firm shaped, steered, influenced or won anything through those meetings, and
+    you must not offer a meeting as the explanation for a contract award, a
+    requirement's wording, or an audit finding. If asked to, decline and say
+    why: the data cannot support it, and the claim is defamatory about named
+    real companies and named real officials.
+
+    COVERAGE IS PARTIAL BY LAW. Only arranged ORAL communications with
+    DESIGNATED office holders are reportable. Written submissions, unarranged
+    conversations, and meetings with officials below the DPOH threshold generate
+    no record at all. Never read an empty result as "nobody lobbied them" — say
+    "no reportable communications in the window."
+
+    The database is also WINDOWED at ingest (three years by default), so check
+    `window` before reading a zero. The published file goes back to 2008; the
+    database usually does not.
+
+    Args:
+        department: Canonical key from org_aliases.yaml (ssc, pspc, ircc) or a
+                    registered name. Matches only office holders whose
+                    institution IS that department — parliamentarians and Crown
+                    corporations are classified separately and never picked up
+                    by a department filter.
+        subject: One filed subject matter, e.g. "Government Procurement".
+                 Call with list_subjects=True to see the controlled list.
+        client: Client organization name contains this (substring).
+        vendor: Client matched the way the contracts data matches vendors, so an
+                incumbent from contracts_intel and a lobbying client compare
+                equal without normalizing by hand.
+        since: Only communications on or after this date (YYYY-MM-DD).
+        list_subjects: Return the subject-matter list and counts, then stop.
+        limit: How many communications to return (default 25).
+
+    Returns:
+        Dict with the matched communications (date, client, lobbyist,
+        registration type, subjects, office holders, communication_number),
+        plus top_clients and top_departments computed over EVERYTHING that
+        matched rather than the returned page, the coverage window, and
+        how_to_read.
+    """
+    args = SimpleNamespace(department=department, subject=subject, client=client,
+                           vendor=vendor, since=since, list_subjects=list_subjects,
+                           limit=limit)
+    return tender_tools.cmd_lobbying_signals(args)
+
+
+@mcp.tool()
+def registrations_signals(as_of: str, department: str = None, client: str = None,
+                          vendor: str = None, limit: int = 25) -> dict:
+    """
+    Who was REGISTERED to lobby a department, as of a specific date.
+
+    The standing declaration behind the meetings. lobbying_signals says a
+    communication happened; this says who was on the record as working that
+    department at a point in time — and which registration version says so.
+
+    `as_of` IS REQUIRED AND HAS NO DEFAULT. Do not invent one. This database
+    keeps every registration version because 53% of amended registrations
+    change which departments they name between versions, so a default meaning
+    "latest" would answer a time-ordered question with present-tense data. If
+    the user wants current state, pass as_of="today" — but only because they
+    asked for current state, never as a fallback when you don't have a date.
+    If you don't know which date the question is about, ask.
+
+    CITE THE VERSION. Every row carries `version_id`, the registration version
+    it rests on. Any claim of the form "they were registered to lobby X in
+    2024" must cite it, because that is what makes the claim checkable against
+    a source that changes over time.
+
+    A null `ends` (`still_in_force: true`) means the version is current, not
+    that its end date is unknown.
+
+    A REGISTRATION IS NOT A MEETING. It declares an intent to lobby; it is not
+    evidence that any communication occurred. Pair it with lobbying_signals for
+    that. And it carries the same constraint as every part of this layer:
+    presence and declaration, never influence. Never offer either as the
+    explanation for an award or a requirement's wording.
+
+    Args:
+        as_of: REQUIRED. "YYYY-MM-DD", or "today" for current state.
+        department: Canonical key from org_aliases.yaml, or a registered name.
+        client: Client organization name contains this (substring).
+        vendor: Client matched the way the contracts data matches vendors.
+        limit: How many registrations to return (default 25).
+
+    Returns:
+        Dict of registration versions in force on that date — client,
+        registration number, version_id, effective/ends window, registrant and
+        the departments named — plus a department roll-up, the corpus counts,
+        and how_to_read.
+    """
+    args = SimpleNamespace(as_of=as_of, department=department, client=client,
+                           vendor=vendor, limit=limit)
+    return tender_tools.cmd_registrations_signals(args)
+
+
+@mcp.tool()
 def resolve_department(name: str) -> dict:
     """
     What a department string resolves to, without running a query.
@@ -318,7 +435,7 @@ def resolve_department(name: str) -> dict:
     would otherwise return the same empty list for both.
 
     Resolution is registry-only and exact after normalization, honouring each
-    entry's `not:` exclusions — the same rule all four signal tools apply.
+    entry's `not:` exclusions — the same rule all five signal tools apply.
     Fragments are refused on purpose: substring matching is how one
     organization's name lands on another's dossier.
 
@@ -337,19 +454,19 @@ def resolve_department(name: str) -> dict:
 def department_dossier(department: str, months_min: int = 6, months_max: int = 24,
                        min_value: float = None, limit: int = 10) -> dict:
     """
-    Everything all four sources know about one department, in one call.
+    Everything all five sources know about one department, in one call.
 
-    The convergence view, and the reason the other four tools share a department
+    The convergence view, and the reason the other five tools share a department
     identifier. Each signal is useful alone; the payoff is when they line up —
     the Auditor General flagged a department, its own plan says it intends to
     modernize that system, and the incumbent's contract expires in five months.
     That is about as strong a pre-RFP case as public data produces.
 
     THIS TOOL DOES NOT SCORE. There is no convergence number, no weighting of
-    the four signals into one figure, and no ranking of departments by it — by
-    design. The four signals are incommensurable, any weighting would be
+    the five signals into one figure, and no ranking of departments by it — by
+    design. The five signals are incommensurable, any weighting would be
     invented, and a single number hides the reasoning that makes the dossier
-    worth reading. Read the four sections and judge. Do not compute a score of
+    worth reading. Read the five sections and judge. Do not compute a score of
     your own from them either; say what converges and why, in words.
 
     TENDERS ARE NOT REQUIRED, and their absence is the most valuable output.

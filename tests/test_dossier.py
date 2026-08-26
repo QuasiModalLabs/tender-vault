@@ -92,15 +92,24 @@ ALLOWED_NUMERIC = {
     "months_until_expiry", "expiring_count", "expiry_min_value",
     "open_notices", "in_profile_corpus", "feed_scanned",
     "dropped_already_closed", "days_until_close",
+    # Lobbying: plain counts of disclosed communications. `communications` is
+    # both the section total and the per-client tally; `on_government_procurement`
+    # is the subset of a client's own total filed under that subject, and is
+    # asserted to stay a subset in test_lobbying_attribution.
+    "communications", "on_government_procurement",
 }
 
 
 def test_no_convergence_score():
     """
     THE architectural guarantee, and the formula that was deleted at the start
-    of this project. The dossier assembles four signals; it must never weight
+    of this project. The dossier assembles five signals; it must never weight
     them into one figure or rank departments by it. Any numeric leaf outside the
     per-source whitelist is a new score until proven otherwise.
+
+    The whitelist is the mechanism: a new section cannot ship numbers without
+    someone naming them here and saying what they count. That is how the
+    lobbying section's two counts got read before they were allowed through.
     """
     d = dossier("ssc")
     numeric = {}

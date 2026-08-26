@@ -52,7 +52,7 @@ The node is also the one file Claude writes to unprompted, appending dated entri
 
 Here's the problem with the whole premise. A tender notice is the *end* of a process. Someone identified a need, got budget, wrote requirements, and published. If your first contact with a department is the notice, you're responding to a document shaped by other people's conversations.
 
-So I went looking for what happens earlier. Three more public datasets, each answering a different question about a federal department:
+So I went looking for what happens earlier. Four more public datasets, each answering a different question about a federal department:
 
 | Question | Source | What it tells you |
 |---|---|---|
@@ -60,8 +60,11 @@ So I went looking for what happens earlier. Three more public datasets, each ans
 | Who actually won? | Proactive contract disclosure | Incumbents, market size, expiry dates |
 | What do they intend to change? | Departmental Plans | Stated spending intent, where a department files the prose |
 | What have they been caught failing at? | Auditor General audits | Independent public criticism — the thing that forces a procurement |
+| Who is already in the room? | Lobbying communication reports | Which firms have been meeting the department, filed under which subject |
 
-Read in order, those move steadily earlier in time: from *an RFP is open now*, back through *an RFP is predictably coming*, to *here are the conditions that will produce one*.
+Read in order, those move steadily earlier in time: from *an RFP is open now*, back through *an RFP is predictably coming*, to *here are the conditions that will produce one*, and finally to *here is who was talking to them while the requirement was still being decided*.
+
+The last one needs a caveat stated once and stated plainly, because it is the only source here that names private companies and individual public servants doing nothing wrong. A monthly communication report is **evidence of presence, never of influence**. Filing one is what compliance with the Lobbying Act looks like. The record supports *this department has been hearing from these firms about procurement since 2024*; it does not support, and this project will not print, any claim that a meeting shaped a requirement or won a contract. That constraint is written into the tool's own output and into the MCP tool description, not just here.
 
 <details>
 <summary><strong>Federal procurement vocabulary used below</strong></summary>
@@ -178,11 +181,25 @@ I'm recording that because it's a durable boundary, not a bug to fix later: **th
 
 The provocation idea isn't dead, though — it just needed sources that carry intent and detail. Which is exactly what the plans and audit layers turned out to be.
 
+## Who's already in the room
+
+The lobbying registry is the earliest source here and the one I was most careful with. Every month, lobbyists file a report for each arranged oral communication with a designated public office holder: the date, the office holders present, the client, and the subject matters it was filed under. `Government Procurement` is one of the 54 subjects on that list.
+
+Filtered to Shared Services Canada and that subject, the recent window returns TECHNATION, Oracle, Tenable, Pure Storage, VMware, HPE, Palo Alto and ThinkOn — which is, recognizably, the set of firms that show up in the contracts data too. That's the join worth having: the ingest normalizes client names through the *same* function `contracts_ingest` uses for vendors, so an incumbent and a lobbying client compare equal or the join is wrong on both sides at once rather than quietly on one.
+
+Two things had to be got right before any of that was usable.
+
+**The institution field mixes five populations.** 162 distinct values, and only about half are federal departments the registry knows. The single largest is `House of Commons` — 106k of 339k office-holder rows, because MPs are designated office holders. An MP has no procurement authority. So every row is classified into exactly one population, and `dept_key` is populated only where naming a department is a true statement; the rest carry a note saying *why* there's no key. It's the same refusal the audit layer makes: an empty column reads as a coverage failure and invents a gap that was never there. Ministers' offices are tested *before* the registry, because `Rural Economic Development (Minister's Office)` contains a portfolio name and would otherwise resolve to the department whose officials were precisely not there.
+
+**Windowing it to three years fixed a problem I'd expected to have to solve by hand.** The file goes back to July 2008; the default window keeps 64k of 227k communications. The two messiest populations — predecessor departments whose mandate later *split*, and the free-text "Other" institution that the Office no longer accepts — drop to **zero rows** in the recent window. They're entirely historical. What's left is 71 real departments and a tail of Crown corporations and port authorities, correctly labelled as such.
+
+And the constraint that governs the whole layer: this is **evidence of presence, never of influence**. It says a department has been hearing from a set of firms on a subject, with a citable date and the registry's own communication number. It does not say anyone influenced anything, and the tool's output, the MCP tool description and the dossier's `how_to_read` all say so — because this is the only source in the project that names private companies and individual public servants who are doing nothing but complying with the law.
+
 ## Convergence
 
-There are four signals about any given federal department. Each is useful alone. The real payoff is when they **converge** — when the Auditor General has flagged a department, *and* its own plan says it intends to modernize that same system, *and* the incumbent's contract expires in five months. That's about as strong a pre-RFP case as public data can produce, and any live tender from that department should be read in that light.
+There are five signals about any given federal department. Each is useful alone. The real payoff is when they **converge** — when the Auditor General has flagged a department, *and* its own plan says it intends to modernize that same system, *and* the incumbent's contract expires in five months, *and* that incumbent has been filing procurement meetings with them all year. That's about as strong a pre-RFP case as public data can produce, and any live tender from that department should be read in that light.
 
-The shape is a department dossier: `dossier ircc` returns everything all four sources know, so a tender stops being an isolated notice and becomes *a tender from the department the AG flagged for processing backlogs, that plans to modernize case management, whose incumbent contract runs out in the spring.*
+The shape is a department dossier: `dossier ircc` returns everything all five sources know, so a tender stops being an isolated notice and becomes *a tender from the department the AG flagged for processing backlogs, that plans to modernize case management, whose incumbent contract runs out in the spring.*
 
 <details>
 <summary><strong>Running your first dossier</strong></summary>
@@ -195,7 +212,7 @@ something you type into the chat. To see the raw JSON yourself:
 python scripts/tender_tools.py dossier ircc
 ```
 
-Each of the four sections needs its own layer built, and the dossier renders
+Each of the five sections needs its own layer built, and the dossier renders
 with whatever you have:
 
 | Section | Needs | On a fresh clone |
@@ -204,6 +221,7 @@ with whatever you have:
 | `audits` | `python scripts/oag_ingest.py` | Empty until built |
 | `plans` | `python scripts/plans_ingest.py` | Empty until built |
 | `contracts` | `python scripts/contracts_ingest.py` (~630MB) | Empty until built |
+| `lobbying` | `python scripts/lobbying_ingest.py --source <zip>` | Empty until built |
 | `tenders` | `python scripts/ingest` | Empty until built |
 
 Every section carries a `state` field, and the states distinguish *no data* from
@@ -221,11 +239,11 @@ the sections and what each `state` means.
 
 </details>
 
-Before building it I found out why a naive version wouldn't work, which saved me a bad afternoon: **the four sources name departments differently.** The audits say "Immigration, Refugees and Citizenship Canada." The contracts say "National Defence | Défense nationale." The plans say "Department of Citizenship and Immigration." A naive join returns nothing at all, silently.
+Before building it I found out why a naive version wouldn't work, which saved me a bad afternoon: **the sources name departments differently.** The audits say "Immigration, Refugees and Citizenship Canada." The contracts say "National Defence | Défense nationale." The plans say "Department of Citizenship and Immigration." A naive join returns nothing at all, silently.
 
-So convergence needed a name-resolution layer underneath it first, and then the dossier on top — assembling the signals, not scoring them cleverly. I deleted a scoring formula at the start of this project and the dossier still has no score in it: it presents four sections and Claude judges. A number would have hidden the reasoning that makes the thing worth reading.
+So convergence needed a name-resolution layer underneath it first, and then the dossier on top — assembling the signals, not scoring them cleverly. I deleted a scoring formula at the start of this project and the dossier still has no score in it: it presents five sections and Claude judges. A number would have hidden the reasoning that makes the thing worth reading. There's a test that enforces it — every numeric field in the dossier has to be named on a whitelist with a note saying what it counts, which is how the lobbying section's two counts got read before they were allowed through.
 
-That layer is `vault/crosswalk/org_aliases.yaml`: one canonical key per organization, and all four signal tools take it, so the same `pspc` works in every one. The audits resolve against it too — a department on an audit is a registry key, not a string an extractor guessed.
+That layer is `vault/crosswalk/org_aliases.yaml`: one canonical key per organization, and all five signal tools take it, so the same `pspc` works in every one. The audits resolve against it too — a department on an audit is a registry key, not a string an extractor guessed.
 
 **The most valuable dossier has no tender in it.** A department with an audit finding, a stated plan, an expiring incumbent and no open notice is the pre-RFP position the whole project exists to find — the work is coming and nobody has been asked yet. So the tenders section is optional by construction and the dossier renders fully without it.
 
@@ -347,6 +365,9 @@ $EDITOR vault/profiles/my-company.md   # the filter reads from this — read its
 python scripts/ingest               # tender corpus, ~2 min
 python scripts/plans_ingest.py         # departmental-plan signal, ~1 min
 python scripts/oag_ingest.py           # Auditor General signal, ~1 min
+
+# lobbying signal — the zip is downloaded by hand, see below
+python scripts/lobbying_ingest.py --source ~/Downloads/communications_ocl_cal.zip
 ```
 
 Then either open Claude Code in the repo root and ask *"any good federal IT tenders for us this week?"*, or wire it into Claude Desktop as an MCP server.
@@ -361,6 +382,10 @@ Fresh tender data arrives on its own — a GitHub Action re-runs the tender inge
 
 The contracts and plans refresh workflows are manual-dispatch only. They rebuilt databases that are no longer committed, so on a schedule they would run and commit nothing — rebuild those locally when you want fresh data.
 
+The lobbying layer can't be automated at all, and the reason is worth writing down rather than rediscovering. The Office of the Commissioner of Lobbying publishes its bulk files on `lobbycanada.gc.ca`, which sits behind a Cloudflare **interactive** challenge: every request from a non-browser client comes back `403` with `cf-mitigated: challenge`, no matter what headers it carries, because passing the challenge means executing JavaScript. A GitHub runner hits the same wall — datacenter IPs are challenged harder, not less. So `lobbying_ingest.py` requires `--source` pointing at a file you downloaded yourself, and it's the one ingest where `--source` is the normal path rather than a spot-check flag. The registry updates weekly; re-downloading monthly is plenty.
+
+Its test suite still runs on Monday, and still catches the thing most likely to break: two of its checks need no database at all, and assert that the institution mapping points at real registry entries and that no split-mandate predecessor has been quietly mapped to one successor.
+
 ## Files worth reading, in order
 
 1. [`vault/CLAUDE.md`](vault/CLAUDE.md) — the agent's instructions. The most important design document in the repo; everything else is plumbing.
@@ -374,7 +399,8 @@ The contracts and plans refresh workflows are manual-dispatch only. They rebuilt
 9. [`scripts/plans_ingest.py`](scripts/plans_ingest.py) — the two-pole scoring technique, with the docstring explaining why the forward-looking field beats the retrospective one.
 10. [`scripts/contracts_ingest.py`](scripts/contracts_ingest.py) — streaming filter over millions of rows into SQLite; the design notes are in the module docstring.
 11. [`scripts/oag_ingest.py`](scripts/oag_ingest.py) — the audit pull, relevance scoring, and department attribution.
-12. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how data stays fresh without me remembering.
+12. [`scripts/lobbying_ingest.py`](scripts/lobbying_ingest.py) — the lobbying registry, and the classification problem underneath it. The published institution field mixes five populations that look alike as strings and are nothing alike as evidence, and the biggest single value in the file is "House of Commons" — MPs are designated office holders and have no procurement authority whatever. The module docstring is mostly about what the data *can't* be used to say.
+13. [`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) — how data stays fresh without me remembering.
 
 ## What comes next
 
@@ -395,6 +421,7 @@ None of these need new infrastructure. That's mostly what the markdown-first des
 - [Proactive Publication of Contracts](https://open.canada.ca/data/en/dataset/d8f85d91-7dec-4fd1-8055-483b77225d8b) — awarded federal contracts over $10K
 - [GC InfoBase Departmental Plans / Results](https://open.canada.ca/data/en/dataset/b15ee8d7-2ac0-4656-8330-6c60d085cda8) — planned spending and forward-looking planning prose
 - [Office of the Auditor General](https://open.canada.ca/data/en/organization/oag-bvg) — performance audits, via the open.canada.ca CKAN API
+- [Monthly Communication Reports](https://open.canada.ca/data/en/dataset/a34eb330-7136-4f5e-9f5f-3ba41df58b06) — lobbyist communications with designated public office holders, from the Office of the Commissioner of Lobbying
 
 Contains information licensed under the [Open Government Licence – Canada](https://open.canada.ca/en/open-government-licence-canada). Code is MIT.
 

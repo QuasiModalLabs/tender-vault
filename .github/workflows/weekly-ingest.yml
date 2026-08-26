@@ -62,6 +62,16 @@ jobs:
         # Placed after the model cache and before ingest deliberately: this is
         # the step that catches a dependency that changed under us over the
         # weekend, and it should fail before we spend ten minutes embedding.
+        #
+        # test_lobbying_attribution.py is PARTIALLY exercised here and that is
+        # deliberate. Its database cannot be built on a runner: the Office of
+        # the Commissioner of Lobbying publishes the zip behind a Cloudflare
+        # interactive challenge, which answers 403 to anything that cannot run
+        # JavaScript, so there is no fetch step to add. Its two registry checks
+        # — that the institution alias table points at real org_aliases entries
+        # and that no split-mandate predecessor has been quietly mapped — run
+        # without a database and are the ones that catch a registry edit. The
+        # attribution checks skip until someone builds the DB locally.
         run: |
           failed=0
           for t in tests/test_*.py; do
@@ -84,7 +94,7 @@ jobs:
           mod = u.module_from_spec(spec)
           spec.loader.exec_module(mod)
           tools = asyncio.run(mod.mcp.list_tools())
-          assert len(tools) >= 17, f"expected >=17 tools, got {len(tools)}"
+          assert len(tools) >= 19, f"expected >=19 tools, got {len(tools)}"
           print(f"MCP server imports cleanly: {len(tools)} tools registered")
           PY
 

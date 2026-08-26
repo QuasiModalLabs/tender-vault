@@ -29,6 +29,20 @@ chroma_db.old/
 data/contracts.db
 data/plans.db
 data/oag.db
+# Not profile-scored — the lobbying registry is the same for everyone — but
+# ignored anyway on size: a three-year window is ~38MB, and the source cannot
+# be re-fetched by CI (Cloudflare challenge), so a committed copy would rot
+# with nothing able to refresh it. Rebuild locally from the downloaded zip.
+data/lobbying.db
+data/registrations.db
+# Quarantined builds: a database built from a development or archived copy
+# rather than an official download, renamed so nothing serves it as current.
+data/*UNOFFICIAL
+# Hand-acquired source archives. data/source/ is the documented drop path for
+# input artifacts that the ingests cannot fetch themselves — currently the OCL
+# lobbying zip, which lobbycanada.gc.ca serves only to browsers. Ignored because
+# it is bulk upstream data, not something this repo should redistribute.
+data/source/
 vault/intel/agencies/
 
 # Working state — private. The reference material in vault/reference/ is

@@ -136,6 +136,13 @@ imminent_within_days: 10
 # falls within the last N years (captures recent awards + still-active work)
 contracts_window_years: 3
 
+# How far back the lobbying registry is ingested, in years. Same default as the
+# contracts window and the same idea — a meeting from 2011 is not evidence
+# about who is in the room now. Raising it grows data/lobbying.db roughly
+# linearly (~38MB at 3 years, ~133MB for all of 2008 onward) and drags in
+# institutions that no longer exist.
+lobbying_window_years: 3
+
 # Opportunity-shaping: minimum contract value for the expiring-contracts scan.
 # A future re-procurement below this isn't worth a proactive BD conversation.
 # Tune per company — a boutique might set this low, a large firm high.
