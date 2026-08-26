@@ -2259,8 +2259,8 @@ def cmd_expiring_contracts(args) -> dict:
 # ---------------------------------------------------------------------------
 # The department dossier — convergence
 # ---------------------------------------------------------------------------
-# One query, four sources. This ASSEMBLES; it does not score. There is
-# deliberately no convergence number and no cross-signal ranking: weighting four
+# One query, five sources. This ASSEMBLES; it does not score. There is
+# deliberately no convergence number and no cross-signal ranking: weighting five
 # incommensurable signals into one figure buries the reasoning that makes the
 # dossier worth reading, and the reader is a model that can weigh them itself.
 # Nothing here may combine a value from one section with a value from another.
@@ -3390,7 +3390,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     do = sub.add_parser(
         "dossier",
-        help="Everything all four sources know about one department — the "
+        help="Everything all five sources know about one department — the "
              "convergence view. Assembles; does not score",
     )
     do.add_argument("department", help=_DEPT_HELP)

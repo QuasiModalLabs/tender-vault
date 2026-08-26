@@ -10,9 +10,9 @@ fresh clone without a network fetch still passes.
 
 WHAT THIS GUARDS. The dossier is the convergence view, and the two ways it can
 quietly stop being worth reading are (a) growing a score, and (b) blurring a
-distinction one of the four sources took real work to establish.
+distinction one of the five sources took real work to establish.
 
-The scoring one is deliberate architecture: four incommensurable signals
+The scoring one is deliberate architecture: five incommensurable signals
 weighted into one number would bury the reasoning the dossier exists to show,
 and the reader is a model that can weigh them itself. test_no_convergence_score
 is the assertion that keeps a helpful-looking total from appearing later.
@@ -442,7 +442,7 @@ def test_qualification_notices_are_not_shown_as_work():
 
 def test_every_registry_key_renders():
     """
-    The dossier takes the same identifier as the other four tools, so every key
+    The dossier takes the same identifier as the other five tools, so every key
     in the registry has to produce a document — including the organizations with
     no plans, no contracts, or no audits at all.
     """

@@ -115,26 +115,28 @@ they're the government's.
 
 </details>
 
-The last one is the most useful and the least obvious. When the Auditor General publicly reports that a department's systems are failing, that department is going to spend money. It's the most citable pre-RFP signal there is, because it's an independent authority saying the quiet part in public.
+The audit layer is the most useful and the least obvious. When the Auditor General publicly reports that a department's systems are failing, that department is going to spend money. It's the most citable pre-RFP signal there is, because it's an independent authority saying the quiet part in public.
 
 ```
- OPPORTUNITY         OUTCOME            INTENT            SCRUTINY
-what's asked        who won          what's planned    what's flagged
-     │                  │                  │                  │
-CanadaBuys       Proactive contract   Departmental      Auditor General
-tender feed        disclosure            Plans              audits
-     │                  │                  │                  │
-     ▼                  ▼                  ▼                  ▼
-filter to your    filter, dedupe,    score for         score for
-profile, embed    aggregate by       modernization     IT relevance,
-for search        procurement        intent            tag department
-     │                  │                  │                  │
-     └────────┬─────────┴─────────┬────────┴─────────┬────────┘
-              ▼                   ▼                  ▼
-     ┌──────────────────────────────────────────────────┐
-     │  Claude — reads the vault, calls the tools,      │
-     │  and does the actual thinking                    │
-     └──────────────────────────────────────────────────┘
+    OPPORTUNITY         OUTCOME           INTENT           SCRUTINY          PRESENCE
+   what's asked         who won       what's planned    what's flagged   who's in the room
+         │                 │                 │                 │                 │
+    CanadaBuys         Proactive       Departmental     Auditor General   Lobbying comms
+    tender feed        contract            Plans            audits       and registrations
+                      disclosure
+         │                 │                 │                 │                 │
+         ▼                 ▼                 ▼                 ▼                 ▼
+ filter to your    filter, dedupe,   score for         score for         window, classify
+ profile, embed    aggregate by      modernization     IT relevance,     office holders,
+ for search        procurement       intent            tag department    key on department
+         │                 │                 │                 │                 │
+         └─────────────────┴─────────────────┴─────────────────┴─────────────────┘
+                                             │
+                                             ▼
+                      ┌──────────────────────────────────────────────┐
+                      │  Claude — reads the vault, calls the tools,  │
+                      │  and does the actual thinking                │
+                      └──────────────────────────────────────────────┘
 ```
 
 Two storage choices worth explaining, because they're the same decision made twice in opposite directions.

@@ -2,7 +2,7 @@
 Build the department name-resolution crosswalk between the contracts dataset
 and the Departmental Plans dataset.
 
-WHY THIS EXISTS. The four sources name the same department differently. The
+WHY THIS EXISTS. The five sources name the same department differently. The
 contracts file says "Immigration, Refugees and Citizenship Canada | Immigration,
 Refugies et Citoyennete Canada". The plans file says "Department of Citizenship
 and Immigration" — the legal name from the enabling statute, which in several

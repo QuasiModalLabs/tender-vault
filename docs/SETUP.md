@@ -390,4 +390,4 @@ cleanly when the data isn't there, so you don't need to ingest anything first â€
 though the skips mean a green run before ingest is weaker evidence than a green
 run after.
 
-The lifecycle tests cover promote/park/archive, the code most likely to quietly corrupt vault files during a refactor. The classification tests lock the notice-kind directions and assert that construction survives the prose rules. The dossier tests guard the two ways the convergence view degrades: growing a composite score, and blurring a distinction one of the four sources took real work to establish.
+The lifecycle tests cover promote/park/archive, the code most likely to quietly corrupt vault files during a refactor. The classification tests lock the notice-kind directions and assert that construction survives the prose rules. The dossier tests guard the two ways the convergence view degrades: growing a composite score, and blurring a distinction one of the five sources took real work to establish.
