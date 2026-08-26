@@ -90,13 +90,25 @@ Python scripts in `scripts/tender_tools.py`, run as `python scripts/tender_tools
 - `list-attachments <tender_id>` — what's in the folder, extracting anything new or changed. There's no watcher, so this call is what notices new files.
 - `read-attachment <tender_id> <filename> [--offset N] [--limit N]` — a window of one document's text, in lines.
 
-**Signals** — all four take `--department`, and all take the same canonical key. See [[dossier]].
+**Signals** — all five take `--department`, and all take the same canonical key. See [[dossier]].
 - `contracts-intel <keyword> [--department KEY]` — who won similar work, from which departments, at what values. Always mention the as_of date; the data is unaudited and vendor names aren't normalized, so treat it as directional. If it errors that the DB isn't built, tell me to run `python scripts/contracts_ingest.py`.
 - `expiring-contracts [--department KEY]` — incumbent contracts approaching expiry.
 - `program-signals [--department KEY]` — departmental plan intent and strain.
 - `oag-signals [--department KEY] [--vendor NAME] [--direct-only]` — Auditor General findings.
-- `resolve-department <name>` — what a department string actually means. Use it *before* the signal tools when a name is uncertain, so you can tell "no signal for this department" from "that isn't a department."
-- `dossier <department>` — all four sources on one department in one call. It assembles and presents; it does **not** score, and neither should you.
+- `lobbying-signals [--department KEY] [--subject S] [--client SUBSTR] [--vendor NAME] [--since DATE] [--list-subjects]` — who has been meeting a department, filed under which subject. **Presence, never influence** — see below. If it errors that the DB isn't built, don't just report the error: give me the download steps in *The lobbying archive*, below.
+- `registrations-signals --as-of DATE [--department KEY] [--client SUBSTR] [--vendor NAME]` — who was *registered* to lobby a department **as of a given date**. `--as-of` is required and has no default; pass `--as-of today` if you want current state. That is deliberate: 53% of amended registrations change which departments they name, so a default meaning "latest" would answer a time-ordered question with present-tense data. Every row carries `version_id` — cite it for any claim about a point in time. A registration is a *declaration of intent to lobby*, not evidence a meeting happened; pair it with `lobbying-signals` for that, and the presence-not-influence rule applies to both.
+- `resolve-department <name>` — what a department string actually means. Use it *before* the signal tools when a name is uncertain, so you can tell "no signal for this department" from "that isn't a department." It takes the entity strings the corpus carries, not just registry names: the parenthetical acronym tail is stripped, so `Department of Employment and Social Development (ESDC)` resolves, and `matched_via` says whether it was exact or needed that. A string naming two departments is refused with both keys listed rather than guessed — pick one.
+- `dossier <department>` — all five sources on one department in one call. It assembles and presents; it does **not** score, and neither should you.
+
+### Lobbying data is evidence of presence, never of influence
+
+This constrains what you may write, and it is not boilerplate. Filing a monthly communication report is what **compliance** with the Lobbying Act looks like — the organizations named are the ones following the law, and the office holders named are doing their jobs.
+
+You may write: *"SSC has been taking procurement meetings with these four firms since 2024, per the lobbying registry."*
+
+You may **not** write, imply, or hint that any firm shaped, steered, or won anything through those meetings, and you must not offer a meeting as the explanation for a contract award, a requirement's wording, or an audit finding. If I ask you to, decline and say why: the data cannot support it, and the claim is defamatory about named real companies and named real public servants. This holds even when the lobbying section sits next to four sources that *do* support inference — that adjacency is the trap.
+
+Coverage is partial **by law**: only *arranged oral* communications with *designated* office holders are reportable. A written submission, an unarranged conversation, or a meeting with an official below the DPOH threshold generates no record. So never read an empty result as "nobody lobbied them" — say "no reportable communications in the window." The database is also windowed at ingest (three years by default); check the `window` block before reading a zero.
 
 ## Reference files — read these when the situation calls for it
 
@@ -127,6 +139,33 @@ Create the folder when I say I'm actually working a tender — not on every prom
 Read what you need, not the whole file. These run to dozens of pages and `read-attachment` is paginated on purpose. The folder moves with the note on park and archive, so a `tender_id` keeps working afterwards.
 
 **Nothing from these documents goes into the corpus.** They're third-party material from a commercial platform, they stay out of git, and the ChromaDB corpus is rebuilt weekly with no survival exemptions.
+
+### The lobbying archive, and why you can't fetch it
+
+Same shape as the tender documents above: the data is public, and the download is mine to do. `lobbycanada.gc.ca` returns **403** to every automated client with `Cf-Mitigated: challenge` — a Cloudflare interstitial — while downloading normally in a browser. There is no fetcher for it anywhere in this project, and **browser automation was tried and rejected**; don't propose it, don't propose a workaround, and don't propose scraping the interactive registry.
+
+So when `lobbying-signals` or a dossier's `lobbying` section reports the database isn't built, **don't just relay the error — hand me the steps**:
+
+> The lobbying layer needs a source archive that has to be downloaded by hand — `lobbycanada.gc.ca` blocks automated downloads. Two files, both linked from the Open Government Portal:
+>
+> 1. **Monthly Communication Reports** (this is the one the ingest reads) —
+>    `https://lobbycanada.gc.ca/media/mqbbmaqk/communications_ocl_cal.zip`
+> 2. **Lobbying Registrations** (sibling dataset, nothing reads it yet — worth grabbing in the same trip) —
+>    `https://lobbycanada.gc.ca/media/zwcjycef/registrations_enregistrements_ocl_cal.zip`
+>
+> Save the first to `data/source/lobbying/communications_ocl_cal.zip`, then tell me and I'll run the ingest.
+
+Then run `python scripts/lobbying_ingest.py` once I confirm. Details are in `docs/SETUP.md`.
+
+Three things to get right when this comes up:
+
+**Say why, in one line.** "Cloudflare blocks automated download" is enough. It stops me wondering whether the project is broken.
+
+**Never report it as an absence of data.** *"No lobbying data available"* is false and is the worst thing you could say here — the registry is published, current and updated weekly. The correct sentence is *"we haven't downloaded the archive yet."* The ingest itself refuses to fall back to an older database for exactly this reason; don't undo that in prose.
+
+**Offer it proactively at the right moment.** If I'm working a department seriously — a dossier, a pre-bid workup, a question about who the incumbent is — and the lobbying section is the only empty one, mention that it's one download away. Don't raise it on every dossier, and don't nag.
+
+If the archive is there but stale, the database records the source URL, its SHA-256 and when it was acquired (`SELECT key, value FROM meta WHERE key LIKE 'source%'`). Tell me the acquisition date if we're relying on recency; a three-month-old archive is fine for *who has been in the room for two years* and misleading for *who met them last month*.
 
 ## Tender lifecycle — when to suggest moving between states
 
@@ -181,6 +220,8 @@ If the profile is ambiguous for a given tender — it says we lack federal exper
 - **Don't reformat existing tender files.** The ingest owns their structure.
 - **Don't invent tender IDs or details.** If a search doesn't return it, it isn't in the corpus.
 - **Don't default to SWOT analyses or structured frameworks** when I've asked which tenders to look at today.
+- **Don't say "no lobbying data available."** If the archive isn't downloaded, say that — it's a missing download, not a fact about the world. And never explain any award, requirement or finding by who was in the room.
+- **Don't offer to download the lobbying archive or the RFP packages.** Neither is fetchable from here. Offer the URL and the path; the download is mine.
 
 ## Saving a useful search
 

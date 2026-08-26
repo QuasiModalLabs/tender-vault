@@ -43,7 +43,7 @@ from difflib import get_close_matches
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from crosswalk import load_aliases, normalize_org  # noqa: E402
+from crosswalk import load_aliases, normalize_org, observed_variants  # noqa: E402
 
 # The publisher of every OAG record. Present in 254 of 364 titles and never the
 # audited body, so it is excluded from the scan index rather than filtered from
@@ -280,6 +280,60 @@ def default_resolver() -> OrgResolver:
     return _DEFAULT
 
 
+def resolve_identifier(value: str) -> tuple[str | None, str, list[str]]:
+    """
+    Resolve a department identifier, falling back to the entity-field variants.
+
+    Returns (key, how, keys_seen) where `how` is one of exact | variant |
+    ambiguous | unresolved.
+
+    WHY THE FALLBACK EXISTS. `resolve()` is exact after normalization, which is
+    right when the caller hands over a complete name — but the strings this
+    project actually carries are entity fields, and they do not look like that.
+    `list-corpus` reports an agency as "Department of Employment and Social
+    Development (ESDC)" and "Canada Revenue Agency - (Administered Activities)
+    (CRA)". Neither resolves exactly, so every tool that says "check the name
+    before querying" was answering "not a known organization" for departments
+    the registry knows perfectly well.
+
+    `crosswalk.observed_variants` already solves this at ingest — it strips the
+    parenthetical acronym tail and splits slash-delimited multi-department
+    values, and `ingest.entity_org_keys` reports the difference as 47 of 896
+    rows resolving raw against 767 resolving through variants. This routes the
+    same splitting through the same registry so a query filter and the ingest
+    agree on what a string means.
+
+    AMBIGUITY IS REFUSED, NOT GUESSED. One entity field can legitimately name
+    several departments ("Department of Transport (TC) / Department of Fisheries
+    and Oceans (DFO)"). That is a real multi-department value at ingest and a
+    meaningless filter here, so it returns `ambiguous` with every key found
+    rather than picking the first — the registry's rule throughout.
+    """
+    resolver = default_resolver()
+    if not value or not str(value).strip():
+        return None, "unresolved", []
+    try:
+        key = resolver.resolve(value)
+    except AmbiguousOrganization:
+        key = None
+    if key:
+        return key, "exact", [key]
+
+    found: list[str] = []
+    for variant in observed_variants(str(value)):
+        try:
+            candidate = resolver.resolve(variant)
+        except AmbiguousOrganization:
+            continue
+        if candidate and candidate not in found:
+            found.append(candidate)
+    if len(found) == 1:
+        return found[0], "variant", found
+    if len(found) > 1:
+        return None, "ambiguous", found
+    return None, "unresolved", []
+
+
 def resolve_department_arg(value: str | None, flag: str = "--department") -> str | None:
     """
     Resolve a user-supplied department identifier, or exit with a useful error.
@@ -291,10 +345,13 @@ def resolve_department_arg(value: str | None, flag: str = "--department") -> str
     if value is None:
         return None
     resolver = default_resolver()
-    try:
-        key = resolver.resolve(value)
-    except AmbiguousOrganization as exc:
-        sys.stderr.write(f"{flag}: {exc}\n")
+    key, how, found = resolve_identifier(value)
+    if how == "ambiguous":
+        sys.stderr.write(
+            f"{flag}: {value!r} names more than one organization: "
+            f"{', '.join(found)}.\n"
+            "  A filter has to mean one department. Pass one of those keys.\n"
+        )
         sys.exit(2)
     if key:
         return key

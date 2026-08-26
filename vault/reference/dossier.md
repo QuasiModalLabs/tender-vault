@@ -1,10 +1,10 @@
 # Reading a dossier
 
-`dossier <department>` is what the four signal tools were built toward. One query, four sources, one canonical key.
+`dossier <department>` is what the five signal tools were built toward. One query, five sources, one canonical key.
 
 ## Two rules that govern the whole thing
 
-**There is no score in it, and you should not compute one.** The four signals are incommensurable; any weighting would be invented, and a single number hides the reasoning that makes the dossier worth reading. Say what converges and why, in words — *"the AG flagged their IT modernization in 2023, their own plan names the same systems, and the incumbent's contract runs out in February"* — never "convergence: 8/10." This is the whole architecture of the tool.
+**There is no score in it, and you should not compute one.** The five signals are incommensurable; any weighting would be invented, and a single number hides the reasoning that makes the dossier worth reading. Say what converges and why, in words — *"the AG flagged their IT modernization in 2023, their own plan names the same systems, and the incumbent's contract runs out in February"* — never "convergence: 8/10." This is the whole architecture of the tool.
 
 **Tenders are not required, and their absence is the most valuable case.** A department with an audit finding, a stated plan, an expiring incumbent and no open tender is the pre-RFP position worth acting on: the work is coming and nobody has been asked yet. An empty tenders section never weakens the case. Say so out loud rather than treating it as a miss.
 
@@ -36,6 +36,26 @@ Top vendors by value, and `expiry_timeline`. An incumbent contract ending in 6�
 
 **Always check `identity.records_folded_in` before quoting a total.** Where a predecessor or absorbed organization is folded in, the registry's note says what the figure actually covers — an IRCC contract total includes Passport Canada, which is one program inside a much larger department.
 
+### lobbying
+
+Who has been meeting this department, from the lobbying registry. **The one section with a rule about what you may write from it.**
+
+It is evidence of **presence, never influence**. Filing a monthly communication report is what compliance with the Lobbying Act looks like — the organizations named are following the law, and the office holders named are doing their jobs. You may say *"they have been hearing from these four firms about procurement since 2024."* You may not say, imply or hint that a meeting shaped a requirement, explained an award, or caused an audit finding. Sitting next to four sources that *do* support inference is exactly what makes this easy to get wrong.
+
+`top_clients` is ranked by how many disclosed communications name this department, each with `first`, `latest`, and `on_government_procurement` — the subset filed under that subject specifically, which is the one bearing on a coming requirement. `subjects_filed` is what the department is being talked to about at all.
+
+`communications` is the department total. Both counts are distinct communications, so the procurement subset can never exceed the total it belongs to.
+
+**Coverage is partial by law.** Only *arranged oral* communications with *designated* office holders are reportable — a written submission or a meeting below the DPOH threshold leaves no record. `state: no_communications_in_window` therefore means "nothing reportable in the window," never "nobody lobbied them." Check the `window` block before reading a zero: the database is windowed at ingest, three years by default.
+
+`state: source_archive_not_acquired` is a different thing again — the archive hasn't been downloaded. That is a missing file, not a fact about the department. The response carries the URL and the path; give them to the user rather than relaying the error.
+
+The strongest cross-read is against `contracts` and `plans`: a firm meeting a department about procurement, while that department plans to modernize a system that firm already holds the contract for, is an incumbent defending a renewal.
+
+**Office-holder titles are free text and drift badly. Don't count on them, and don't read a career from them.** Measured at SSC: 49 real people appear as 101 distinct name+title combinations, so any per-person tally built on name+title undercounts by roughly half. Resolve on person name and report the variants — *"filed variously as CTO, Acting CTO and Deputy CTO"* — rather than choosing one. Names are sometimes transposed too (`Dunne Brendan` among rows that are otherwise First Last), so where a person can't be resolved confidently, name the role and skip the number.
+
+The tempting inference is a promotion sequence, and it does not survive checking. One SSC official's eleven variants have heavily overlapping date ranges, with `CTO` first appearing *before* `Acting CTO` and both running concurrently with the full spelling — because different filers describe the same period differently. Deputy → Acting → substantive is a plausible arc and the start dates hint at it, but this data cannot establish it. A role change needs a source that publishes appointments.
+
 ### tenders
 
 `entity_source` says how each notice reached this department. `end_user` means it named them as the customer; anything else means they are the contracting entity with the end user unstated — which for SSC and PSPC frequently means they are buying for somebody else.
@@ -44,11 +64,11 @@ A null `closing_date` with a `date_note` is a sentinel, not a deadline.
 
 `opportunity_kind` is the instrument — see `notice-kinds.md`.
 
-## One department identifier, across all four signal tools
+## One department identifier, across all five signal tools
 
-`contracts-intel`, `expiring-contracts`, `program-signals` and `oag-signals` all take `--department`, and all take the same thing: a canonical key from `vault/crosswalk/org_aliases.yaml` (`pspc`, `ircc`, `dnd`) or an organization's registered name.
+`contracts-intel`, `expiring-contracts`, `program-signals`, `oag-signals` and `lobbying-signals` all take `--department`, and all take the same thing: a canonical key from `vault/crosswalk/org_aliases.yaml` (`pspc`, `ircc`, `dnd`) or an organization's registered name.
 
-That is what makes convergence a real join. The same key works in all four, so "OAG flagged them, they plan to modernize it, and the incumbent contract expires next year" is one department rather than three lookups that might not be the same body.
+That is what makes convergence a real join. The same key works in all five, so "OAG flagged them, they plan to modernize it, and the incumbent contract expires next year" is one department rather than three lookups that might not be the same body.
 
 Matching is exact after normalization. **Fragments are refused rather than guessed**, because substring matching is how one department's name lands on another's dossier — "Immigration and Refugee Board" is an independent tribunal and must never answer to IRCC. If a name doesn't resolve you get an error with the closest candidates, not an empty result. Use `resolve-department` to check.
 

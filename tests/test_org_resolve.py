@@ -241,6 +241,75 @@ def test_observed_names_reach_their_key(resolver):
         check(key in scanned(resolver, text), f"{text[:52]!r} -> {key}")
 
 
+def test_entity_field_strings_resolve_through_variants(resolver):
+    """
+    The strings this project actually carries, which are not registry names.
+
+    `list-corpus` reports an agency with its acronym in a tail, and sometimes a
+    qualifier as well. Exact resolution answers "not a known organization" for
+    every one of them, which made `resolve-department` — the tool whose whole
+    job is checking a name before you query with it — useless on the output of
+    the tool it is meant to check.
+    """
+    cases = [
+        ("Department of Employment and Social Development (ESDC)", "esdc"),
+        ("Canada Revenue Agency - (Administered Activities) (CRA)", "cra"),
+        ("Shared Services Canada (SSC)", "ssc"),
+        ("Department of National Defence (DND)", "dnd"),
+    ]
+    for value, expected in cases:
+        key, how, _ = orx.resolve_identifier(value)
+        check(key == expected and how == "variant",
+              f"{value[:46]!r} -> {expected} via variant (got {key}/{how})")
+
+
+def test_exact_resolution_is_still_exact(resolver):
+    """The fallback must not displace the exact path, or `how` stops meaning
+    anything and a registry name starts reporting as a lucky variant match."""
+    for value, expected in (("ircc", "ircc"),
+                            ("Shared Services Canada", "ssc"),
+                            ("Treasury Board", "tbs")):
+        key, how, _ = orx.resolve_identifier(value)
+        check(key == expected and how == "exact",
+              f"{value!r} -> {expected} via exact (got {key}/{how})")
+
+
+def test_variants_do_not_defeat_the_refusals(resolver):
+    """
+    THE risk in widening resolution. The `not:` lists are the registry's
+    guarantee that one organization never answers to another's name, and the
+    variant path has to honour them exactly as the exact path does — including
+    when the acronym tail is what made the string non-exact in the first place.
+    """
+    for value, expected in (("Immigration and Refugee Board", "irb"),
+                            ("Immigration and Refugee Board of Canada (IRB)", "irb"),
+                            ("Immigration, Refugees and Citizenship Canada (IRCC)", "ircc")):
+        key, _how, _ = orx.resolve_identifier(value)
+        check(key == expected, f"{value[:46]!r} -> {expected} (got {key})")
+
+
+def test_multi_department_values_refuse_rather_than_pick(resolver):
+    """
+    One entity field can legitimately name several departments. That is real
+    data at ingest and a meaningless filter here, so it must refuse — picking
+    the first would silently file a two-department notice under one of them.
+    """
+    value = "Department of Transport (TC) / Department of Fisheries and Oceans (DFO)"
+    key, how, found = orx.resolve_identifier(value)
+    check(key is None and how == "ambiguous",
+          f"a two-department value refuses (got {key}/{how})")
+    check(set(found) == {"transport-canada", "dfo"},
+          f"both departments are reported back (got {found})")
+
+
+def test_unresolvable_stays_unresolvable(resolver):
+    """A widened matcher that starts resolving junk is worse than a narrow one."""
+    for value in ("", "   ", "Ministry of Silly Walks", "Government of Alberta"):
+        key, how, _ = orx.resolve_identifier(value)
+        check(key is None and how == "unresolved",
+              f"{value!r} does not resolve (got {key}/{how})")
+
+
 def main() -> int:
     resolver = orx.OrgResolver()
     if not resolver.aliases:

@@ -18,6 +18,24 @@ against a query and returns n, which answers a different question — and
 don't read ChromaDB directly. Read the `provenance` block it returns
 before anything else, and report it (see Rules).
 
+`list-corpus` is the only corpus call. The one signal tool this briefing
+uses is `lobbying-signals`, and only for departments already appearing in
+sections 3 and 6 — never as a survey.
+
+It takes the `agency` string from `list-corpus` directly: the parenthetical
+acronym tail is stripped before matching, so
+`Department of Employment and Social Development (ESDC)` resolves to
+`esdc`. Two cases still need you. An agency naming **two** departments —
+`Department of Transport (TC) / Department of Fisheries and Oceans (DFO)` —
+is refused rather than guessed, because a filter has to mean one
+department; run `resolve-department` to see both keys and pick the one the
+notice is actually about. An agency that resolves to **nothing** is usually
+a Crown corporation with no registry entry, which is not a reason to skip
+the notice — see the `unrecognised` rule below.
+
+Query **once per distinct department**, not once per notice; sections 3
+and 6 together are a handful of departments most weeks.
+
 ## Structure
 
 Open with an H1 naming the week, then two lines summarising what needs
@@ -63,6 +81,24 @@ clearance, set-asides, incumbency, Canadian content weighting. If a
 tender stretches the profile, name which capability it stretches and
 quote the profile against the notice.
 
+One optional line per tender on **the buyer, never the notice**:
+
+> ESDC has taken 41 communications on procurement subjects in the
+> window, across 19 organizations.
+
+**No vendor names and no office-holder names in this section.** Naming a
+firm beside a specific notice invites the reader to connect the two, and
+nothing in the data connects them: `Government Procurement` is a subject
+code covering everything the department buys, so a named firm here is
+category-level overlap dressed as context for this requirement. Vendor
+names belong in section 6, where the claim is about the department rather
+than about a solicitation.
+
+It is context on the buyer, **not** a reason to bid or not bid. It may
+not change this section's ordering or which tenders appear in it. Omit it
+entirely when nothing informative comes back — a tender with no lobbying
+context reads normally, and there is no "none found" line.
+
 **4. Vehicles**
 Cross-reference `vault/reference/vehicles.md`. Report qualification
 notices open now, and how many notices this week were gated behind a
@@ -83,6 +119,30 @@ non-federal. One line each. Collapsed.
 Closed RFIs and summary reports. Nothing to submit, but they name
 requirements that haven't been competed yet. Say which department and
 which program.
+
+Also the department's **disclosed lobbying activity**, which is a pre-RFP
+signal by definition — who has been in the room while a requirement was
+still being decided. This section is department-level, so vendor names and
+office-holder roles are legitimate here in a way they are not in section 3:
+
+> **ESDC** — three digital-services signals in the corpus this week. In
+> the same window the department logged 41 communications on procurement
+> subjects, most frequently with the ADM, Digital Services Branch. The
+> organizations appearing most often are TECHNATION (9), Oracle (6) and
+> ThinkOn (4).
+>
+> This is disclosed contact, not influence: it says who has been in the
+> room with the department, and nothing about any specific requirement.
+
+**Say when two signals converge.** An RFI or summary report from a
+department that is also taking procurement meetings is two independent
+pre-RFP signals landing on one buyer, and that is the strongest thing this
+section can report. Name it as convergence; don't compute anything from it.
+
+**Say when the archive is missing.** If `lobbying-signals` returns
+`state: source_archive_not_acquired`, the layer has no data because nobody
+has downloaded it — give me the download line rather than dropping the
+content silently. That is a missing file, never an absence of activity.
 
 ## Presentation
 
@@ -219,3 +279,42 @@ so and update the file. Don't work around it silently.
 **Say what you didn't cover.** Uncoded source systems, notices with no
 description, a section with nothing in it: state it rather than
 leaving a silent gap. An empty section should say why it's empty.
+
+**Lobbying is presence, never influence.** Filing a monthly communication
+report is what *compliance* with the Lobbying Act looks like — the
+organizations named are following the law, and the office holders named
+are doing their jobs. Never offer a meeting as the explanation for an
+award, a requirement's wording, or an audit finding. Not directly, not by
+adjacency, not under a deadline. This binds harder at office-holder level
+than at firm level, because the subject is then a named public servant.
+
+**Never rank or colour by lobbying.** It is neither an instrument state
+nor a score input, so it gets no callout type of its own and never orders
+a section. Both rules above already say this — *never rank by a composite
+score*, and *colour by instrument state, never by fit* — and a meeting
+count is exactly the kind of number that looks like it wants to be a
+ranking.
+
+**Absence of lobbying is not evidence.** Only *arranged oral*
+communications with *designated* office holders are reportable; a written
+submission, an unarranged conversation, or a meeting below the DPOH
+threshold leaves no record. The database is windowed at ingest as well,
+three years by default — check the `window` block. Write "no reportable
+communications in the window," never "nobody lobbied them."
+
+**Never print a lobbying count over an unresolved person.** Office-holder
+titles are filer-entered free text and drift badly: at SSC, 49 real people
+appear as 101 distinct name+title combinations, so counting on name+title
+undercounts by roughly half. Resolve on person name, not name+title, and
+report the title variants rather than picking one — *"the Chief Technology
+Officer (filed variously as CTO, Acting CTO and Deputy CTO)."* Names
+themselves are sometimes transposed (`Dunne Brendan` where every other row
+is First Last), so where a person can't be resolved confidently, name the
+role and skip the number.
+
+**Never infer a promotion or portfolio change from title sequence.** It
+looks recoverable and isn't: one SSC official's eleven title variants have
+heavily overlapping date ranges, with `CTO` appearing *before* `Acting
+CTO` and both running concurrently with the full form. Different filers
+write the same period differently. A role change needs a source that
+publishes appointments.

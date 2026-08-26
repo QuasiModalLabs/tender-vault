@@ -45,6 +45,7 @@ import org_resolve  # noqa: E402
 # ingest filter. Imported rather than reimplemented: when the dossier and the
 # corpus disagree about whether an "RFP against Supply Arrangement" is work,
 # one of them is lying to the reader, and it is not obvious which.
+from contracts_ingest import normalize_vendor  # noqa: E402
 from ingest import classify_notice as _classify_notice  # noqa: E402
 from ingest import entity_org_keys as _entity_org_keys  # noqa: E402
 
@@ -1611,6 +1612,459 @@ def cmd_oag_signals(args) -> dict:
     }
 
 
+def _lobbying_rows(con, where: list, params: list, limit: int) -> tuple[list, dict, dict]:
+    """
+    Fetch matching communications and their two child tables in three queries.
+
+    Per-communication follow-ups would be a query per row; the office holders
+    and subjects come back in one pass each, keyed by comlog_id.
+    """
+    rows = con.execute(f"""
+        SELECT c.comlog_id, c.comm_date, c.client_name, c.client_norm,
+               c.reg_type_label, c.registrant_first, c.registrant_last,
+               c.posted_date, c.client_num
+        FROM communications c
+        WHERE {' AND '.join(where)}
+        ORDER BY c.comm_date DESC
+        LIMIT ?
+    """, params + [limit]).fetchall()
+    if not rows:
+        return [], {}, {}
+
+    marks = ",".join("?" * len(rows))
+    ids = [r[0] for r in rows]
+    dpohs: dict[int, list] = {}
+    for comlog, last, first, title, institution, kind, key in con.execute(
+        f"SELECT comlog_id, dpoh_last, dpoh_first, dpoh_title, institution, "
+        f"institution_kind, dept_key FROM communication_dpohs "
+        f"WHERE comlog_id IN ({marks}) ORDER BY institution, dpoh_last", ids
+    ):
+        entry = {"name": " ".join(x for x in (first, last) if x),
+                 "title": title, "institution": institution, "kind": kind}
+        if key:
+            entry["department"] = key
+        dpohs.setdefault(comlog, []).append(entry)
+
+    subjects: dict[int, list] = {}
+    for comlog, subject, other in con.execute(
+        f"SELECT comlog_id, subject, other_subject FROM communication_subjects "
+        f"WHERE comlog_id IN ({marks}) ORDER BY subject", ids
+    ):
+        subjects.setdefault(comlog, []).append(
+            f"{subject}: {other}" if other else subject)
+    return rows, dpohs, subjects
+
+
+def cmd_lobbying_signals(args) -> dict:
+    """
+    Who has been in the room with a department, about what, and when — the
+    earliest signal in the corpus.
+
+    Where oag-signals says what an independent authority found a department
+    failing at and program-signals says what it plans, this says who has been
+    talking to it while the requirement was still being decided. A monthly
+    communication report is filed under the Lobbying Act when a lobbyist has an
+    arranged oral communication with a designated public office holder, and
+    "Government Procurement" is one of the 54 subject matters they file under.
+
+    THIS IS EVIDENCE OF PRESENCE, NOT OF INFLUENCE, and the distinction is not
+    a disclaimer — it governs how the output may be used. Filing is what
+    COMPLIANCE looks like: the firms here are the ones following the rules, and
+    a meeting is not a finding about anybody. What the record supports is that a
+    department has been hearing from a particular set of firms on a particular
+    subject, with a citable date. Never write it up as anything stronger.
+
+    Read it two ways. Down the client column it is competitive intelligence —
+    who is cultivating the department you are about to bid into, and for how
+    long. Down the department column it is a pre-RFP signal: a department taking
+    procurement meetings on a capability, whose plan says it intends to
+    modernize that capability and whose incumbent contract expires next year, is
+    the convergence case the dossier exists to show.
+
+    Filters:
+      --department KEY  : meetings with that department's office holders
+      --subject STR     : one of the filed subject matters (see --list-subjects)
+      --client SUBSTR   : client organization name contains this
+      --vendor NAME     : client matched the way contracts.db matches vendors,
+                          so a contract holder and a lobbying client compare
+                          equal without the caller normalizing by hand
+      --since YYYY-MM-DD: only communications on or after this date
+      --limit N         : how many to return (default 25)
+    """
+    import sqlite3
+
+    db = PROJECT_ROOT / "data" / "lobbying.db"
+    if not db.exists():
+        return _lobbying_not_built()
+
+    con = sqlite3.connect(db)
+    meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
+
+    if getattr(args, "list_subjects", False):
+        subjects = [
+            {"subject": s, "communications": n}
+            for s, n in con.execute(
+                "SELECT subject, COUNT(DISTINCT comlog_id) c "
+                "FROM communication_subjects GROUP BY 1 ORDER BY c DESC")
+        ]
+        con.close()
+        return {"as_of": meta.get("ingest_date"), "subjects": subjects,
+                "note": "The filed subject matter is a controlled list chosen "
+                        "by the filer. 'Government Procurement' is the direct "
+                        "signal; 'Industry', 'Science and Technology' and "
+                        "'Telecommunications' carry IT requirements too."}
+
+    where, params = ["1=1"], []
+    dept = org_resolve.resolve_department_arg(getattr(args, "department", None))
+    if dept:
+        # A canonical key, joined on — never a substring of the published
+        # institution name. dept_key is set only where naming a department is a
+        # true statement, so this filter cannot pick up the 31k parliamentary
+        # rows or a Crown corporation that happens to share a word.
+        where.append("EXISTS (SELECT 1 FROM communication_dpohs d "
+                     "WHERE d.comlog_id = c.comlog_id AND d.dept_key = ?)")
+        params.append(dept)
+    subject = getattr(args, "subject", None)
+    if subject:
+        where.append("EXISTS (SELECT 1 FROM communication_subjects s "
+                     "WHERE s.comlog_id = c.comlog_id AND lower(s.subject) = ?)")
+        params.append(subject.lower())
+    client = getattr(args, "client", None)
+    if client:
+        where.append("lower(c.client_name) LIKE ?")
+        params.append(f"%{client.lower()}%")
+    vendor = getattr(args, "vendor", None)
+    if vendor:
+        # The contracts-side normalizer, applied to the query rather than
+        # re-implemented, so "HP Canada Co." and "HP CANADA LTD" reach the same
+        # client_norm the ingest stored.
+        where.append("c.client_norm = ?")
+        params.append(normalize_vendor(vendor))
+    since = getattr(args, "since", None)
+    if since:
+        where.append("c.comm_date >= ?")
+        params.append(since)
+
+    limit = getattr(args, "limit", None) or 25
+    rows, dpohs, subjects = _lobbying_rows(con, where, params, limit)
+
+    # Counted over everything that MATCHED, not over the page returned: "who
+    # turns up most" is the question this data answers best, and answering it
+    # from 25 rows would just describe the sort order.
+    totals = con.execute(
+        f"SELECT COUNT(*) FROM communications c WHERE {' AND '.join(where)}",
+        params).fetchone()[0]
+    top_clients = [
+        {"client": name, "communications": n}
+        for name, n in con.execute(
+            f"SELECT c.client_name, COUNT(*) n FROM communications c "
+            f"WHERE {' AND '.join(where)} AND c.client_name != '' "
+            f"GROUP BY c.client_norm ORDER BY n DESC LIMIT 15", params)
+    ]
+    top_departments = [
+        {"department": key, "communications": n}
+        for key, n in con.execute(
+            f"SELECT d.dept_key, COUNT(DISTINCT c.comlog_id) n "
+            f"FROM communications c JOIN communication_dpohs d "
+            f"ON d.comlog_id = c.comlog_id "
+            f"WHERE {' AND '.join(where)} AND d.dept_key IS NOT NULL "
+            f"GROUP BY 1 ORDER BY n DESC LIMIT 15", params)
+    ]
+    con.close()
+
+    if not rows:
+        return {"as_of": meta.get("ingest_date"), "communications": 0,
+                "window": _lobbying_window(meta),
+                "note": "Nothing matched. Check --subject against "
+                        "--list-subjects, and remember the database holds only "
+                        f"the window described above ({meta.get('window_cutoff')} "
+                        "onward) — an older meeting is not absent, it is out of "
+                        "scope."}
+
+    results = []
+    for (comlog, date, client_name, _norm, reg_type,
+         reg_first, reg_last, posted, client_num) in rows:
+        results.append({
+            "date": date,
+            "client": client_name,
+            "lobbyist": " ".join(x for x in (reg_first, reg_last) if x),
+            "registration": reg_type,
+            "subjects": subjects.get(comlog, []),
+            "office_holders": dpohs.get(comlog, []),
+            "posted": posted,
+            # The registry's own composite identifier, not a URL. The published
+            # data dictionary defines the communication number as the client
+            # number followed by the comlog id, and that is the string the
+            # Registry of Lobbyists search takes. No deep link is offered
+            # because the registry has none: its report views are reached
+            # through a session-scoped search form, so any per-communication
+            # URL built here would be invented rather than cited.
+            "communication_number": f"{client_num}-{comlog}"
+            if client_num is not None else str(comlog),
+        })
+
+    return {
+        "as_of": meta.get("ingest_date"),
+        "window": _lobbying_window(meta),
+        "matched": totals,
+        "returned": len(results),
+        "filters": {"department": dept, "subject": subject, "client": client,
+                    "vendor": vendor, "since": since},
+        "top_clients": top_clients,
+        "top_departments": top_departments,
+        "communications": results,
+        "how_to_read": (
+            "Each row is one disclosed meeting: who met which office holders, "
+            "on what date, filed under which subject matters. This is evidence "
+            "of PRESENCE and nothing more — filing is what compliance with the "
+            "Lobbying Act looks like, and no row here is a finding about "
+            "anyone. Do not write it up as influence over a procurement. "
+            "top_clients answers the question the page cannot: who turns up "
+            "most across everything that matched. The registration type "
+            "matters — consultant means a hired lobbyist and the client is who "
+            "paid, in_house means the organization's own staff. Coverage is "
+            "partial by law: only ARRANGED ORAL communications with designated "
+            "office holders are reportable, so absence is not evidence that "
+            "nobody was in the room. communication_number is the registry's "
+            "own identifier, for looking a record up at "
+            "lobbycanada.gc.ca — cite it rather than a URL. "
+            "The pre-RFP read is convergence — take a "
+            "department that is taking procurement meetings and check "
+            "program-signals and expiring-contracts for the same capability."
+        ),
+    }
+
+
+def cmd_registrations_signals(args) -> dict:
+    """
+    Who was REGISTERED to lobby a department, as of a given date.
+
+    The standing declaration behind the meetings. `lobbying-signals` says a
+    communication happened; this says who was on the record as working that
+    department at a point in time, and which registration version says so.
+
+    AS-OF IS MANDATORY AND HAS NO DEFAULT. Not an oversight — the whole reason
+    this database stores versions is that 53% of amended registrations change
+    their institution list, and a default meaning "latest" is how flattened
+    behaviour returns through a different door. A caller who never thinks about
+    time would silently get the present tense and build a time-ordered claim on
+    it. Wanting current state is fine; saying so is the requirement. Pass
+    --as-of today for that.
+
+    EVERY ROW CARRIES ITS VERSION so a claim can be traced back to the exact
+    registration version it rests on: `reg_id` is the version id, `reg_num`
+    ends in the version sequence, and `effective`/`ends` are the window that
+    made it match. A briefing line citing this data can name the version.
+
+    A null `ends` means still in force, measured rather than assumed — every
+    open-ended version in the archive is the latest-effective of its own chain.
+
+    Filters:
+      --as-of YYYY-MM-DD : REQUIRED. 'today' is accepted as an explicit request
+                           for current state.
+      --department KEY   : registrations naming that department
+      --client SUBSTR    : client organization name contains this
+      --vendor NAME      : client matched the way contracts.db matches vendors
+      --limit N          : how many to return (default 25)
+    """
+    import sqlite3
+
+    # The as-of contract is checked BEFORE the database, deliberately. A caller
+    # who omitted it has made a malformed request, and telling them the
+    # database is missing sends them to install something instead of fixing
+    # their query — and worse, hides the requirement until the day the data
+    # exists, which is the day a defaulted answer would start being believed.
+    as_of = getattr(args, "as_of", None)
+    if not as_of:
+        return {
+            "error": "--as-of is required and has no default.",
+            "why": "This database stores every registration version because "
+                   "53% of amended registrations change which departments they "
+                   "name. A default meaning 'latest' would quietly answer a "
+                   "time-ordered question with present-tense data.",
+            "how": "Pass --as-of YYYY-MM-DD for a point in time, or "
+                   "--as-of today if you genuinely want current state.",
+        }
+    if str(as_of).lower() in ("today", "now", "current"):
+        as_of = datetime.now().strftime("%Y-%m-%d")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(as_of)):
+        return {"error": f"--as-of must be YYYY-MM-DD or 'today', got {as_of!r}"}
+
+    db = PROJECT_ROOT / "data" / "registrations.db"
+    if not db.exists():
+        return {
+            "error": "Registrations DB not built.",
+            "state": "source_archive_not_acquired",
+            "why": "lobbycanada.gc.ca returns 403 to automated clients "
+                   "(Cloudflare challenge), so the archive is downloaded by "
+                   "hand. This is NOT an absence of data.",
+            "download": "https://lobbycanada.gc.ca/media/zwcjycef/"
+                        "registrations_enregistrements_ocl_cal.zip",
+            "save_to": "data/source/lobbying/"
+                       "registrations_enregistrements_ocl_cal.zip",
+            "then_run": "python scripts/registrations_ingest.py",
+        }
+
+    con = sqlite3.connect(db)
+    meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
+
+    where = ["1=1"]
+    params: dict = {"as_of": as_of}
+    dept = org_resolve.resolve_department_arg(getattr(args, "department", None))
+    if dept:
+        where.append("EXISTS (SELECT 1 FROM registration_institutions i "
+                     "WHERE i.reg_id = v.reg_id AND i.dept_key = :dept)")
+        params["dept"] = dept
+    client = getattr(args, "client", None)
+    if client:
+        where.append("lower(v.client_name) LIKE :client")
+        params["client"] = f"%{client.lower()}%"
+    vendor = getattr(args, "vendor", None)
+    if vendor:
+        where.append("v.client_norm = :vendor")
+        params["vendor"] = normalize_vendor(vendor)
+
+    limit = getattr(args, "limit", None) or 25
+    params["limit"] = limit
+    sql_where = " AND ".join(where) + " AND " + _registrations_as_of_clause()
+    rows = con.execute(f"""
+        SELECT v.reg_id, v.reg_num, v.version_seq, v.effective_date, v.end_date,
+               v.client_name, v.reg_type_label, v.registrant_first,
+               v.registrant_last, v.firm_name
+        FROM registration_versions v
+        WHERE {sql_where}
+        ORDER BY v.effective_date DESC
+        LIMIT :limit
+    """, params).fetchall()
+
+    total = con.execute(
+        f"SELECT COUNT(*) FROM registration_versions v WHERE {sql_where}",
+        params).fetchone()[0]
+
+    departments = [
+        {"department": key, "registrations": n}
+        for key, n in con.execute(f"""
+            SELECT i.dept_key, COUNT(DISTINCT v.reg_base) n
+            FROM registration_versions v
+            JOIN registration_institutions i ON i.reg_id = v.reg_id
+            WHERE {sql_where} AND i.dept_key IS NOT NULL
+            GROUP BY 1 ORDER BY n DESC LIMIT 15
+        """, params)
+    ]
+
+    results = []
+    for (reg_id, reg_num, seq, eff, end, client_name, reg_type,
+         r_first, r_last, firm) in rows:
+        insts = [
+            r[0] for r in con.execute(
+                "SELECT DISTINCT dept_key FROM registration_institutions "
+                "WHERE reg_id = ? AND dept_key IS NOT NULL ORDER BY 1", (reg_id,))
+        ]
+        results.append({
+            "client": client_name,
+            "registration": reg_num,
+            # The version this claim rests on. Anything time-ordered built from
+            # this row must cite it — that is what makes the claim checkable.
+            "version_id": reg_id,
+            "version_seq": seq,
+            "effective": eff,
+            "ends": end,
+            "still_in_force": end is None,
+            "registration_type": reg_type,
+            "registrant": " ".join(x for x in (r_first, r_last) if x),
+            "firm": firm,
+            "departments": insts,
+        })
+    con.close()
+
+    return {
+        "as_of": as_of,
+        "ingest_date": meta.get("ingest_date"),
+        "source_sha256": meta.get("source_sha256"),
+        "matched_versions": total,
+        "returned": len(results),
+        "filters": {"department": dept, "client": client, "vendor": vendor},
+        "departments": departments,
+        "registrations": results,
+        "corpus": {
+            "versions": meta.get("versions"),
+            "registrations": meta.get("registrations"),
+            "open_ended_versions": meta.get("open_ended_versions"),
+            "chain_breaks_midchain": meta.get("chain_breaks_midchain"),
+        },
+        "how_to_read": (
+            f"Every row was in force on {as_of} — that date selected them, and "
+            "a different date returns a different answer, which is the point. "
+            "version_id is the registration version the row rests on; cite it "
+            "for any claim about a point in time. A null `ends` means still in "
+            "force. This is a DECLARATION of intent to lobby, not evidence any "
+            "meeting occurred — pair it with lobbying-signals for that — and "
+            "like all of this data it is presence, never influence."
+        ),
+    }
+
+
+def _registrations_as_of_clause() -> str:
+    """The one as-of predicate, imported from the ingest so there is a single
+    definition of the half-open interval rather than a copy that drifts."""
+    sys.path.insert(0, str(Path(__file__).parent))
+    from registrations_ingest import as_of_clause
+    return as_of_clause("v")
+
+
+def _lobbying_not_built() -> dict:
+    """
+    The "no database" response, written to be ACTED ON rather than relayed.
+
+    This is the one signal layer whose source cannot be fetched by anything in
+    this project, so the error a reader gets has to carry the whole remedy: the
+    two official URLs, where the file goes, and the command. An error that only
+    says "not built" gets repeated to the user verbatim and leaves them to go
+    find all three.
+
+    `state` is deliberately not "no data". A caller that cannot distinguish an
+    unbuilt layer from an empty one will eventually report that no lobbying
+    happened, which is false — the registry is published and updated weekly.
+    """
+    return {
+        "error": "Lobbying DB not built.",
+        "state": "source_archive_not_acquired",
+        "why": "lobbycanada.gc.ca returns 403 to automated clients "
+               "(Cloudflare challenge), so the archive is downloaded by hand. "
+               "This is NOT an absence of data — the registry is published, "
+               "current and updated weekly.",
+        "download": {
+            "communications (required)":
+                "https://lobbycanada.gc.ca/media/mqbbmaqk/"
+                "communications_ocl_cal.zip",
+            "registrations (optional, not yet ingested)":
+                "https://lobbycanada.gc.ca/media/zwcjycef/"
+                "registrations_enregistrements_ocl_cal.zip",
+        },
+        "save_to": "data/source/lobbying/communications_ocl_cal.zip",
+        "then_run": "python scripts/lobbying_ingest.py",
+        "tell_the_user": (
+            "Give them the communications URL and the save path, say in one "
+            "line that Cloudflare blocks automated download, and offer to run "
+            "the ingest once the file is in place. Do not report this as 'no "
+            "lobbying data available'."
+        ),
+    }
+
+
+def _lobbying_window(meta: dict) -> dict:
+    """What the database covers, so a zero can be read correctly."""
+    return {
+        "communications_in_db": meta.get("communications"),
+        "communications_published": meta.get("communications_published"),
+        "window_years": meta.get("window_years") or "all",
+        "earliest": meta.get("earliest_communication"),
+        "latest": meta.get("latest_communication"),
+        "note": "The database is windowed at ingest. A department with no rows "
+                "may simply have had no reportable meetings inside the window.",
+    }
+
+
 def cmd_resolve_department(args) -> dict:
     """
     What does this string mean, as a department identifier?
@@ -1625,11 +2079,17 @@ def cmd_resolve_department(args) -> dict:
     "Immigration and Refugee Board" resolves to the tribunal and never to IRCC.
     """
     resolver = org_resolve.default_resolver()
-    try:
-        key = resolver.resolve(args.name)
-    except org_resolve.AmbiguousOrganization as exc:
-        return {"query": args.name, "resolved": None, "error": str(exc)}
+    key, how, found = org_resolve.resolve_identifier(args.name)
 
+    if how == "ambiguous":
+        return {
+            "query": args.name,
+            "resolved": None,
+            "names": found,
+            "note": "This string names more than one organization — a real "
+                    "multi-department entity value, and a meaningless filter. "
+                    "Pass one of the keys listed in `names`.",
+        }
     if not key:
         return {
             "query": args.name,
@@ -1647,6 +2107,10 @@ def cmd_resolve_department(args) -> dict:
     return {
         "query": args.name,
         "resolved": key,
+        # exact = the string is a registry name or key. variant = it resolved
+        # only after the parenthetical acronym tail was stripped, which is what
+        # every entity field in this project looks like.
+        "matched_via": how,
         "name": resolver.display_name(key),
         "also_known_as": entry.get("observed_names") or [],
         "never_matches": entry.get("not") or [],
@@ -2410,6 +2874,97 @@ def _dossier_contracts(dept: str, slugs: list, rows_by_slug: dict,
     }
 
 
+def _dossier_lobbying(dept: str, limit: int) -> dict:
+    """
+    Who has been in the room with this department, and on what subject.
+
+    The earliest section, and the one most easily misread, so it returns two
+    things rather than a list of meetings: WHO turns up (ranked by how many
+    disclosed communications name this department) and WHAT they filed under.
+    A dossier reader wants the pattern — this department has been hearing from
+    these firms about procurement for two years — not twenty individual dates.
+
+    Procurement-subject counts are reported separately from the total for the
+    same reason the audit section splits direct from bundle-attached: a firm
+    that meets a department about Health and a firm that meets it about
+    Government Procurement are not the same signal, and one list merges them.
+    """
+    import sqlite3
+    db = PROJECT_ROOT / "data" / "lobbying.db"
+    if not db.exists():
+        return _lobbying_not_built()
+
+    con = sqlite3.connect(db)
+    try:
+        meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
+        # Both counts are COUNT(DISTINCT comlog_id), and the second one has to
+        # be: the join to communication_dpohs emits a row per office holder, so
+        # a meeting with three SSC officials appears three times. A SUM(CASE)
+        # over that counts the duplicates and reports a procurement subset
+        # LARGER than the total it is a subset of.
+        clients = con.execute("""
+            SELECT c.client_name, COUNT(DISTINCT c.comlog_id) n,
+                   MIN(c.comm_date), MAX(c.comm_date),
+                   COUNT(DISTINCT CASE WHEN EXISTS (
+                       SELECT 1 FROM communication_subjects s
+                       WHERE s.comlog_id = c.comlog_id
+                         AND s.subject = 'Government Procurement')
+                       THEN c.comlog_id END) procurement
+            FROM communications c
+            JOIN communication_dpohs d ON d.comlog_id = c.comlog_id
+            WHERE d.dept_key = ? AND c.client_name != ''
+            GROUP BY c.client_norm
+            ORDER BY n DESC
+            LIMIT ?
+        """, (dept, limit)).fetchall()
+        subjects = con.execute("""
+            SELECT s.subject, COUNT(DISTINCT s.comlog_id) n
+            FROM communication_subjects s
+            JOIN communication_dpohs d ON d.comlog_id = s.comlog_id
+            WHERE d.dept_key = ?
+            GROUP BY 1 ORDER BY n DESC LIMIT ?
+        """, (dept, limit)).fetchall()
+        total = con.execute(
+            "SELECT COUNT(DISTINCT d.comlog_id) FROM communication_dpohs d "
+            "WHERE d.dept_key = ?", (dept,)).fetchone()[0]
+    finally:
+        con.close()
+
+    section = {
+        "communications": total,
+        "top_clients": [
+            {"client": name, "communications": n, "first": first, "latest": last,
+             "on_government_procurement": proc}
+            for name, n, first, last, proc in clients
+        ],
+        "subjects_filed": [{"subject": s, "communications": n} for s, n in subjects],
+        "window": _lobbying_window(meta),
+    }
+    if not total:
+        section["state"] = "no_communications_in_window"
+        section["note"] = (
+            f"No disclosed communication in the window names {dept!r}. That is "
+            "not evidence that nobody met them: only ARRANGED ORAL "
+            "communications with designated public office holders are "
+            "reportable, and the database is windowed at ingest."
+        )
+    else:
+        section["state"] = "present"
+    section["how_to_read"] = (
+        "Evidence of PRESENCE, never of influence, and never a finding about "
+        "any firm named — filing these reports is what compliance with the "
+        "Lobbying Act looks like. Read it as: this department has been hearing "
+        "from these organizations, on these subjects, over this period. "
+        "on_government_procurement is the subset filed under that subject "
+        "specifically, which is the one that bears directly on a coming "
+        "requirement. Cross-read against the plans and contracts sections: a "
+        "firm meeting a department about procurement while that department "
+        "plans to modernize a system it already holds the contract for is an "
+        "incumbent defending a renewal."
+    )
+    return section
+
+
 def _dossier_tenders(dept: str, limit: int) -> dict:
     """
     Open notices, if any — and the absence is the interesting case.
@@ -2562,24 +3117,34 @@ def _dossier_tenders(dept: str, limit: int) -> dict:
 
 def cmd_department_dossier(args) -> dict:
     """
-    Everything all four sources know about one department, in one query.
+    Everything all five sources know about one department, in one query.
 
     The convergence view. Each signal is useful alone; the payoff is when they
     line up — the Auditor General flagged a department, its own plan says it
-    intends to modernize that system, and the incumbent's contract expires in
-    five months. That is about as strong a pre-RFP case as public data can
-    produce, and a live tender from that department should be read in its light.
+    intends to modernize that system, the incumbent's contract expires in five
+    months, and the incumbent has been filing procurement meetings with them all
+    year. That is about as strong a pre-RFP case as public data can produce, and
+    a live tender from that department should be read in its light.
 
     This tool ASSEMBLES AND PRESENTS. It does not score. There is no convergence
-    number, no weighting of the four signals into one figure, and no ranking of
-    departments by it — deliberately. The four signals are incommensurable, any
+    number, no weighting of the five signals into one figure, and no ranking of
+    departments by it — deliberately. The five signals are incommensurable, any
     weighting would be invented, and a single number would hide the reasoning
     that makes the dossier worth reading in the first place. Claude reads the
-    four sections and judges. That is the architecture.
+    five sections and judges. That is the architecture.
 
     Sections are ordered by their own native logic and never against each other:
     audits by year, plans by intent within the most recent scored year,
-    contracts by soonest expiry, tenders by soonest close.
+    contracts by soonest expiry, lobbying by who appears most often, tenders by
+    soonest close.
+
+    THE LOBBYING SECTION IS THE ONE THAT CAN BE MISUSED. It records who has been
+    in the room, which is exactly what makes it valuable and exactly what makes
+    a careless reading defamatory. It supports "this department has been hearing
+    from these firms about procurement" and never "this firm influenced a
+    procurement." The section carries that constraint in its own how_to_read;
+    it is repeated here because this is the tool that puts it next to four
+    sources that DO support inference.
 
     TENDERS ARE NOT REQUIRED. The highest-value output of this tool is a
     department with an audit finding, a stated plan, an expiring incumbent and
@@ -2608,14 +3173,18 @@ def cmd_department_dossier(args) -> dict:
         "plans": _dossier_plans(dept, scope["plan_ids"], limit),
         "contracts": _dossier_contracts(dept, scope["contract_slugs"], rows_by_slug,
                                         months_min, months_max, min_value, limit),
+        "lobbying": _dossier_lobbying(dept, limit),
         "tenders": _dossier_tenders(dept, limit),
         "how_to_read": (
-            "Four independent sources on one department. Read them together and "
+            "Five independent sources on one department. Read them together and "
             "form your own judgement — there is no score here on purpose. What "
             "you are looking for is agreement between sections: an audit finding "
             "and a plan and an expiring incumbent that are all about the same "
             "system. An empty section is information too, and each one says "
-            "which kind of empty it is — no data, or no signal. Check "
+            "which kind of empty it is — no data, or no signal. The lobbying "
+            "section is the exception to 'read them together': it is evidence "
+            "of who was present, never of influence, and it may not be used to "
+            "explain why any other section says what it says. Check "
             "identity.records_folded_in before quoting any total: where a "
             "predecessor or absorbed organization has been folded in, the "
             "registry's note says what the number actually covers."
@@ -2770,6 +3339,47 @@ def build_parser() -> argparse.ArgumentParser:
     og.add_argument("--since", type=int, default=None, help="Only audits from this year onward")
     og.add_argument("--limit", type=int, default=20, help="How many to return (default 20)")
     og.set_defaults(func=cmd_oag_signals)
+
+    lb = sub.add_parser(
+        "lobbying-signals",
+        help="Who has been meeting a department, on what subject — the "
+             "earliest pre-RFP signal. Presence, never influence",
+    )
+    lb.add_argument("--department", help=_DEPT_HELP)
+    lb.add_argument("--subject",
+                    help="One filed subject matter, e.g. 'Government "
+                         "Procurement'. See --list-subjects for the list")
+    lb.add_argument("--client", help="Client organization name contains this")
+    lb.add_argument("--vendor",
+                    help="Client matched the way contracts.db matches vendors, "
+                         "so an incumbent and a lobbying client compare equal")
+    lb.add_argument("--since", help="Only communications on or after YYYY-MM-DD")
+    lb.add_argument("--list-subjects", action="store_true",
+                    help="Print the filed subject matters and their counts, "
+                         "then stop")
+    lb.add_argument("--limit", type=int, default=25,
+                    help="How many to return (default 25)")
+    lb.set_defaults(func=cmd_lobbying_signals)
+
+    rg = sub.add_parser(
+        "registrations-signals",
+        help="Who was REGISTERED to lobby a department, as of a date. "
+             "--as-of is required and has no default",
+    )
+    rg.add_argument("--as-of", dest="as_of", required=True,
+                    help="REQUIRED, YYYY-MM-DD, or 'today' for current state. "
+                         "There is no default: this database stores every "
+                         "registration version because 53%% of amended "
+                         "registrations change which departments they name, "
+                         "and a default meaning 'latest' would answer a "
+                         "time-ordered question with present-tense data")
+    rg.add_argument("--department", help=_DEPT_HELP)
+    rg.add_argument("--client", help="Client organization name contains this")
+    rg.add_argument("--vendor",
+                    help="Client matched the way contracts.db matches vendors")
+    rg.add_argument("--limit", type=int, default=25,
+                    help="How many to return (default 25)")
+    rg.set_defaults(func=cmd_registrations_signals)
 
     rd = sub.add_parser(
         "resolve-department",

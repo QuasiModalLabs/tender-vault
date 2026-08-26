@@ -109,6 +109,135 @@ This ingest also generates the per-department summaries in `vault/intel/agencies
 
 **It does not create department nodes, and that is deliberate.** `vault/agencies/<key>.md` — the file a tender's `[[pspc]]` link actually resolves to — is created by `promote` and never overwritten. Keeping the two apart means the vault graph works whether or not you ever run this optional 630MB ingest, and means nothing here can overwrite a file you wrote by hand. The generator refuses to write over anything in `vault/intel/agencies/` that doesn't carry its own frontmatter marker, and says so loudly rather than skipping in silence.
 
+### 4. Lobbying — optional, and the archive is acquired by hand
+
+This is the only layer whose source file cannot be downloaded by the script. The
+acquisition is a deliberate **out-of-band step**, and the ingest treats the
+archive as an **input artifact** rather than something it fetches.
+
+**Step 1 — download the archive in a browser.** The Office of the Commissioner
+of Lobbying publishes two bulk archives, both linked from the Open Government
+Portal:
+
+| Dataset | URL |
+|---|---|
+| Monthly Communication Reports (**this is the one the ingest reads**) | `https://lobbycanada.gc.ca/media/mqbbmaqk/communications_ocl_cal.zip` |
+| Lobbying Registrations (not yet ingested) | `https://lobbycanada.gc.ca/media/zwcjycef/registrations_enregistrements_ocl_cal.zip` |
+
+**Step 2 — put it at the documented path:**
+
+```
+data/source/lobbying/communications_ocl_cal.zip
+```
+
+**Step 3 — build:**
+
+```bash
+python scripts/lobbying_ingest.py                 # reads the documented path
+python scripts/lobbying_ingest.py --source <path> # or point at it explicitly
+```
+
+#### Why the download is manual
+
+Every one of those URLs returns **HTTP 403** to an automated client, with the
+header `Cf-Mitigated: challenge` and a Cloudflare "Just a moment..." interstitial
+as the body. Measured against all four published resources — both archives and
+both data dictionaries — on 2026-08-26. The same files download normally in a
+browser.
+
+Two things follow, and both matter:
+
+- **This is not a permissions problem.** `lobbycanada.gc.ca/robots.txt` carries
+  a permissive `User-agent: * / Allow: /`, and the data is Open Government
+  Licence material published expressly for bulk download. The challenge is
+  blanket DDoS protection on the whole hostname, which happens to catch the
+  `/media/` bulk files along with the interactive registry.
+- **There is no mirror to fall back on.** The Portal links to these resources
+  but does not host them, and both are `datastore_active: false`, so there is no
+  CKAN Datastore dump either — unlike the Departmental Plans dataset, which
+  `plans_ingest.py` fetches that way.
+
+Browser automation is **not** the answer and should not be attempted. Three
+Playwright configurations were tested and all three were refused, including the
+two usually suggested as fixes — running headed, and using real Chrome with a
+persistent profile. Cloudflare fingerprints the automation itself. Going further
+would mean anti-detection tooling that breaks on every Cloudflare update, which
+is a worse failure mode than a monthly manual download: it rots silently
+underneath the pipeline. The registry updates weekly; re-downloading monthly is
+ample.
+
+#### What the ingest guarantees once the file exists
+
+- **The archive is validated as a real ZIP** before anything is read. The common
+  failure here is a saved challenge page renamed `.zip` — 5.8KB of HTML starting
+  `<!DO` — and it is rejected with that diagnosis rather than surfacing later as
+  a confusing missing-member error.
+- **Members are listed** with size and compression, and headers are resolved
+  against the expected schema. A column renamed upstream exits with the real
+  header list instead of ingesting blanks.
+- **Provenance is recorded in the database**: the official source URL, the
+  archive's SHA-256, its byte count, when it was acquired, and the member
+  filenames. A hand-acquired input carries no request log, so the hash is what
+  distinguishes a genuine rebuild from a re-run against a stale copy still
+  sitting in the drop directory. Read it with:
+
+  ```bash
+  sqlite3 data/lobbying.db "SELECT key, value FROM meta WHERE key LIKE 'source%'"
+  ```
+- **Nothing is ever silently substituted.** With no archive present the ingest
+  exits non-zero with instructions and builds nothing. It does not fall back to
+  a previously built database, because a stale corpus served as current is the
+  one outcome worse than no corpus — and "we could not fetch it" must never be
+  reported as "nobody lobbied them."
+
+`data/source/` is gitignored. The archive is ~11MB and the built database is
+~38MB at the default three-year window.
+
+### 5. Lobbying registrations — optional, versioned, same manual acquisition
+
+The sibling dataset: who is *registered* to lobby which institution, rather than
+who met whom. Download
+`https://lobbycanada.gc.ca/media/zwcjycef/registrations_enregistrements_ocl_cal.zip`
+in a browser, drop it beside the other archive, and build:
+
+```bash
+python scripts/registrations_ingest.py
+```
+
+**This database stores every registration version, and every query takes an
+as-of date with no default.** That is the whole design, and it comes from a
+measurement: of the 27,704 registrations with more than one version, **14,779 —
+53% — change which institutions they name between versions.** One chain drops
+from eight institutions in 2001 to one in 2005, so a flattened read asserts it
+never targeted the other seven.
+
+```bash
+python scripts/tender_tools.py registrations-signals --as-of 2019-06-01 --department ssc
+python scripts/tender_tools.py registrations-signals --as-of today --department ssc
+```
+
+Omitting `--as-of` is an error rather than a shortcut to "latest": a default is
+how flattened behaviour returns for callers who never considered time. Every
+returned row carries `version_id`, so a claim about a point in time can be
+traced to the version it rests on.
+
+Three measured facts the ingest documents and tests enforce: a null end date
+means **still in force** (all 7,331 open-ended versions are the latest in their
+own chain, zero mid-chain); the as-of interval is **half-open**, so a version
+and its successor never both match a changeover date; and versions with a
+missing predecessor pointer are **kept and counted**, never dropped — 30 genuine
+mid-chain breaks out of 170,281.
+
+The archive is ~81MB and the built database ~262MB, so it is gitignored. Note
+that the registrations CSVs are **CP1252**, not UTF-8 like the communications
+ones — the shared decoder tries both, because decoding one as the other mangles
+every accented French name and silently breaks the client/vendor join.
+
+Deliberately **not** ingested: the free-prose `SubjectMatterDetails` descriptions
+and the `Codes_*` vocabularies. That is the "what were they registered to
+pursue" layer, and what free prose can reliably support needs deciding before it
+reaches any output.
+
 ## Using it with Claude Code
 
 ```bash
