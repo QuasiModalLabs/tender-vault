@@ -151,7 +151,7 @@ Plans and audits sit in between: prose with structure. Their text gets scored on
 
 Research that spans weeks needs to know how old its evidence is, so every `list-corpus` and `get` carries a `provenance` block rather than leaving that to inference.
 
-There are **two stamps, because they answer different questions.** `feed_downloaded_at` is how old the data is; `corpus_built_at` is when it was last processed. A rebuild off an unchanged feed moves the second and not the first — so if corpus membership changes across that, it's a filter or profile effect rather than new notices. The block also carries the same two stamps from the newest committed digest, which makes a local corpus running behind the weekly CI run say so out loud, with the fix (`git pull`, then re-ingest).
+There are **two stamps, because they answer different questions.** `feed_downloaded_at` is how old the data is; `corpus_built_at` is when it was last processed. A rebuild off an unchanged feed moves the second and not the first — so if corpus membership changes across that, it's a filter or profile effect rather than new notices. The block also carries the same two stamps from the newest committed digest, which makes a local corpus running behind the daily CI run say so out loud, with the fix (`git pull`, then re-ingest).
 
 Stamps rather than file timestamps, because ChromaDB rewrites its segment files whenever anything *loads* the collection: `chroma_db/` mtimes report when the corpus was last queried, not when it was built. Read them and you're describing your own read.
 
@@ -207,11 +207,11 @@ The shape is a department dossier: `dossier ircc` returns everything all five so
 <summary><strong>Running your first dossier</strong></summary>
 
 In Claude Code you just ask — *"give me the full dossier on IRCC"* — and Claude
-calls the tool. `dossier` is a subcommand of `scripts/tender_tools.py`, not
+calls the tool. `dossier` is a subcommand of `scripts/tender_tools`, not
 something you type into the chat. To see the raw JSON yourself:
 
 ```bash
-python scripts/tender_tools.py dossier ircc
+python scripts/tender_tools dossier ircc
 ```
 
 Each of the five sections needs its own layer built, and the dossier renders
@@ -329,7 +329,7 @@ The presentation rules turned out to carry design weight, because a template is 
 
 **The tender documents themselves are off-limits to the code.** The notice is public; the RFP package it points at is not. Those live on commercial platforms — Ariba, MERX — behind account walls that exist to know who took the document, and getting past one programmatically means holding a credential and behaving like a browser. This project deliberately doesn't scrape them, and there's no fetcher anywhere in it to quietly grow into one. This paragraph is the whole record of that decision; the diagnostic that established it was a throwaway and wasn't kept.
 
-**Attachments are a manual drop, and that is the same decision rather than a reversal of it.** `attach <tender_id>` creates a folder beside the tender note and prints its path. A human opens MERX or Ariba in a browser, signs in, downloads the package, and drops the files there; `list-attachments` extracts the text and `read-attachment` pages through it. Nothing in that path touches the platform — the code reads a directory. The extracted text stays out of git and out of the ChromaDB corpus, because it's third-party content from a commercial platform and the extraction is that same content in another encoding. The corpus exclusion is also structural: it's rebuilt from scratch weekly with no survival exemptions, and a document that outlived a rebuild would be the first thing to break that.
+**Attachments are a manual drop, and that is the same decision rather than a reversal of it.** `attach <tender_id>` creates a folder beside the tender note; a human opens MERX or Ariba in a browser, signs in, downloads the package and drops the files there, and `list-attachments` extracts the text while `read-attachment` pages through it. Nothing in that path touches the platform — the code reads a directory, and the extracted text stays out of git and out of the ChromaDB corpus because it is third-party content from a commercial platform.
 
 ## The profile
 
@@ -394,7 +394,7 @@ Its test suite still runs on Monday, and still catches the thing most likely to 
 2. [`vault/profiles/my-company.md`](vault/profiles/my-company.md) — how user context is stored, and the key-by-key filter spec in its own comments. [`docs/PROFILE.md`](docs/PROFILE.md) is the companion on tuning it.
 3. [`vault/reference/vehicles.md`](vault/reference/vehicles.md) — the gating series above, as it was actually recorded: dated observations, what each count excludes, and an open question left as a question rather than rounded into a number.
 4. [`.claude/skills/tender-briefing/SKILL.md`](.claude/skills/tender-briefing/SKILL.md) — the briefing skill. The presentation layer is where "don't produce a score" has to be enforced concretely, so this is more design document than template.
-5. [`scripts/tender_tools.py`](scripts/tender_tools.py) — the retrieval layer, and the clean line between retrieval and reasoning.
+5. [`scripts/tender_tools/`](scripts/tender_tools) — the retrieval layer, and the clean line between retrieval and reasoning.
 6. [`scripts/attachments.py`](scripts/attachments.py) — reading the RFP package a human downloaded by hand, and the module docstring is most of why it's here. A dispatch table rather than a chain of special cases, so a new format is one function; a per-file hash, because MERX posts addenda mid-solicitation and stale text that looks current is worse than no text; and the argument about spreadsheets, which was never that they're unreadable but that flattening a grid detaches a figure from its line item. The extractor that eventually read them keeps every value addressable instead.
 7. [`vault/crosswalk/org_aliases.yaml`](vault/crosswalk/org_aliases.yaml) — the department registry. Ninety-odd hand-checked assertions about what the Government of Canada calls itself. Its `observed_names` are the ones seen in real source data, and `vault/crosswalk/attestation.yaml` records where and when each was seen — written by `python scripts/crosswalk.py --attest`, and committed because the evidence itself expires. The tender feed carries only notices open on the day it was downloaded, so an agency with nothing open drops out of it; without a durable record, a correct alias starts looking invented.
 8. [`scripts/org_resolve.py`](scripts/org_resolve.py) — resolving organizations named in free text against that registry, and the one department identifier every signal tool takes.
