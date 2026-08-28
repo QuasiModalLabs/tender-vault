@@ -207,6 +207,39 @@ length.
 
 ## Rules
 
+**Never substitute a hand-written query for a tool that won't run.** If a
+sanctioned command is slow, hangs, errors, or returns something you did
+not expect, that is a finding and it goes in the briefing. It is never
+quietly replaced with SQL against the same database, a read of the
+underlying file, or a number carried over from last week's file. The
+substitute is usually *correct*, which is exactly the problem: the page
+then contains a figure nobody can re-derive by running the command it
+appears to have come from, and the reader has no way to tell which
+figures those are.
+
+This has happened once. `lobbying-signals` took ~80 seconds a department
+because of a missing composite index; the briefing's ISED and ESDC lines
+were filled in from direct SQLite queries and shipped unmarked. The
+numbers were right. Nothing on the page said where they came from.
+
+So: **every figure carries the path that produced it.** `lobbying-signals`
+returns a `produced_by` block — command, database, source hash, ingest
+date — and a number quoted from it should be traceable to that. A number
+with no such provenance is unciteable; leave it out and say why the
+section is short. **A section that says "this could not be produced" is
+worth more than a section that quietly worked around it.**
+
+**A subject-filtered lobbying result must carry its own effective date
+range, and no lobbying line ships without it.** `window.latest` is the
+newest communication in the database, which is *not* the newest one
+carrying a subject code — the two have been twenty-three months apart.
+`lobbying-signals` returns `subject_coverage` with `effective_earliest`,
+`effective_latest`, `matched_earliest`, `matched_latest` and a `state`.
+When `state` is `truncated`, quote the effective range beside the count
+and never present it as current; the `window` block's `note` says it is
+superseded. A count whose period is wrong is not a caveat problem, it is
+a wrong number.
+
 **Report corpus provenance, and never infer it from file timestamps.**
 `list-corpus` returns a `provenance` block: `corpus_built_at` and
 `feed_downloaded_at` as recorded by the ingest, the same two from the
