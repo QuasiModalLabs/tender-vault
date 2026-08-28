@@ -398,6 +398,60 @@ def test_built_database_carries_its_provenance(con):
           "the recorded hash is a full sha256")
 
 
+def test_subject_coverage_is_compared_not_assumed():
+    """
+    The window must say how far SUBJECTS run, not only how far communications
+    run, and must never let the two be confused.
+
+    THE BUG THIS LOCKS. The Registry moved subject matters into a second export
+    at 2024-09-30. The ingest read only the first, so 65% of the windowed
+    database carried no subject while this block reported full currency, and
+    every --subject answer described a period ending two years earlier. Nothing
+    raised: the two dates existed and nothing compared them.
+
+    No database needed - the window is a pure function of the meta mapping.
+    """
+    from tender_tools.signals import _lobbying_window
+
+    current = _lobbying_window({"latest_communication": "2026-08-21",
+                                "subject_coverage_latest": "2026-08-21"})
+    check(current["subject_coverage_state"] == "current",
+          "subjects reaching the last communication read as current")
+    check("subject_coverage_shortfall_days" not in current,
+          "no shortfall is reported when there is none")
+
+    lagging = _lobbying_window({"latest_communication": "2026-08-21",
+                                "subject_coverage_latest": "2024-09-30"})
+    check(lagging["subject_coverage_state"] == "lagging",
+          "subjects stopping earlier read as lagging")
+    check(lagging["subject_coverage_shortfall_days"] == 690,
+          "the shortfall is stated in days (690)")
+    check("2024-09-30" in lagging["note"] and "NOT the window above" in lagging["note"],
+          "the note names the real end date and disclaims the window")
+
+    # Absent and unreadable are the same answer, and it is NOT `current`.
+    for label, meta in (("absent", {"latest_communication": "2026-08-21"}),
+                        ("empty", {"latest_communication": "2026-08-21",
+                                   "subject_coverage_latest": ""}),
+                        ("unreadable", {"latest_communication": "2026-08-21",
+                                        "subject_coverage_latest": "not-a-date"})):
+        w = _lobbying_window(meta)
+        check(w["subject_coverage_state"] == "unknown",
+              f"an {label} stamp reads as unknown, never as current")
+
+    # The string-comparison trap: 'not-a-date' sorts ABOVE any ISO date, so a
+    # naive `>=` would call a corrupt stamp current and pass silently.
+    check(_lobbying_window({"latest_communication": "2026-08-21",
+                            "subject_coverage_latest": "zzzz"}
+                           )["subject_coverage_state"] != "current",
+          "a stamp sorting above the date is not mistaken for current")
+
+    # Every caller gets the field, not just the one that remembered to ask.
+    for w in (current, lagging):
+        check("subject_coverage_state" in w and "subject_coverage_latest" in w,
+              "both fields are always present, in every state")
+
+
 def main() -> int:
     global SKIPPED
     print(__doc__.strip().splitlines()[0])
@@ -413,6 +467,7 @@ def main() -> int:
     test_valid_archive_lists_its_members()
     test_schema_is_validated_against_the_archive()
     test_provenance_identifies_the_exact_bytes()
+    test_subject_coverage_is_compared_not_assumed()
 
     if not DB.exists():
         SKIPPED = 1

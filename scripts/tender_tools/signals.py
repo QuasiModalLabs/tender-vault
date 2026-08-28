@@ -420,16 +420,95 @@ def cmd_resolve_department(args) -> dict:
 
 
 def _lobbying_window(meta: dict) -> dict:
-    """What the database covers, so a zero can be read correctly."""
-    return {
+    """
+    What the database covers, so a zero can be read correctly.
+
+    TWO CURRENCIES, NOT ONE, and the difference is load-bearing. `latest` is the
+    last communication in the database. `subject_coverage_latest` is the last one
+    that carries a subject, and it is the real end date of every subject-derived
+    number the callers report - the Government Procurement counts, subjects_filed,
+    and any --subject filter.
+
+    They were nearly two years apart once. The Registry moved subjects into a
+    second export at 2024-09-30, the ingest read only the first, and 65% of the
+    windowed database had no subject while this block went on reporting full
+    currency. Nothing raised, because nothing compared the two dates.
+
+    So the comparison happens HERE, once, inside the block all three callers
+    already emit - rather than in each caller, which is the arrangement that
+    failed. `subject_coverage_state` is the field to read:
+
+      current   subjects run to the last communication
+      lagging   they stop earlier. `subject_coverage_latest` is the true end of
+                every subject-derived count, and the shortfall is given in days
+      unknown   the database predates the stamp. NOT a synonym for `current`:
+                an absent stamp is a question nobody answered, and reading
+                absence as agreement is the original bug in miniature
+
+    The warning also goes into `note`, which is the one field every consumer
+    already prints, so a reader who checks nothing else still cannot miss it.
+    """
+    latest = str(meta.get("latest_communication") or "")
+    subject_latest = str(meta.get("subject_coverage_latest") or "")
+
+    def _as_date(value: str):
+        """The stamp as a date, or None when it is absent or unreadable."""
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return None
+
+    subject_on = _as_date(subject_latest)
+    latest_on = _as_date(latest)
+
+    shortfall = None
+    if subject_on is None:
+        # Absent AND unreadable both land here, deliberately. Comparing the raw
+        # strings instead would be shorter and wrong: 'not-a-date' sorts above
+        # '2026-08-21', so a corrupt stamp would read as `current` - a silent
+        # pass, which is the failure mode this whole block exists to prevent.
+        # Unreadable is a question nobody can answer, so it fails to `unknown`.
+        state = "unknown"
+    elif latest_on is not None and subject_on < latest_on:
+        state = "lagging"
+        shortfall = (latest_on - subject_on).days
+    else:
+        state = "current"
+
+    note = ("The database is windowed at ingest. A department with no rows "
+            "may simply have had no reportable meetings inside the window.")
+    if state == "lagging":
+        gap = f", {shortfall:,} days earlier" if shortfall is not None else ""
+        note += (
+            f" SUBJECT COVERAGE STOPS AT {subject_latest}{gap} than the last "
+            f"communication ({latest}). Every subject-derived count reported "
+            f"alongside this window - procurement counts, subjects_filed, any "
+            f"--subject filter - describes the period ending {subject_latest}, "
+            f"NOT the window above. Re-run the lobbying ingest before quoting "
+            f"any of them.")
+    elif state == "unknown":
+        note += (
+            " Subject coverage is UNSTAMPED: this database was built before the "
+            "stamp existed, so how far subjects actually run is unknown and no "
+            "subject-derived count here can be dated. Re-run the lobbying "
+            "ingest. Unknown is not the same as current.")
+
+    window = {
         "communications_in_db": meta.get("communications"),
         "communications_published": meta.get("communications_published"),
         "window_years": meta.get("window_years") or "all",
         "earliest": meta.get("earliest_communication"),
-        "latest": meta.get("latest_communication"),
-        "note": "The database is windowed at ingest. A department with no rows "
-                "may simply have had no reportable meetings inside the window.",
+        "latest": latest,
+        # Always present, all three states, including `current`. An absent key
+        # would make "subjects are up to date" indistinguishable from "nobody
+        # measured", which is the distinction this whole block exists to keep.
+        "subject_coverage_latest": subject_latest or None,
+        "subject_coverage_state": state,
+        "note": note,
     }
+    if shortfall is not None:
+        window["subject_coverage_shortfall_days"] = shortfall
+    return window
 
 
 def _lobbying_not_built() -> dict:
