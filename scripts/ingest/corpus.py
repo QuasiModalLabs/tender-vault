@@ -6,6 +6,7 @@ new one is complete, so a failure part-way leaves you with the corpus you had.
 """
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from datetime import datetime
@@ -39,6 +40,147 @@ def _feed_mtime_iso(feed_path: Optional[Path]) -> Optional[str]:
         return None
     return datetime.fromtimestamp(
         feed_path.stat().st_mtime).isoformat(timespec="seconds")
+
+
+# ---------------------------------------------------------------------------
+# Chunking
+# ---------------------------------------------------------------------------
+# Budgets are expressed in CHARACTERS, not tokens, on purpose: this module is
+# driven directly by tests that never load a model, and importing a tokenizer
+# here to count exactly would make chunking untestable without one. The ratio
+# below is measured on this corpus, not assumed.
+
+CHARS_PER_TOKEN = 4.94       # measured across the retained corpus
+CHUNK_TOKENS = 200           # comfortably inside the model's 256-token window
+OVERLAP_TOKENS = 40          # so a match spanning a boundary survives in one piece
+CHUNK_CHARS = int(CHUNK_TOKENS * CHARS_PER_TOKEN)
+OVERLAP_CHARS = int(OVERLAP_TOKENS * CHARS_PER_TOKEN)
+
+
+# Joins paragraphs within a chunk and the overlap tail onto the next chunk. Named
+# because its length is subtracted from the chunk budget in _chunk_document.
+_SEP = "\n\n"
+
+
+def _split_oversized(text: str, budget: int) -> list[str]:
+    """Break a single paragraph too long for one chunk, preferring sentence
+    ends, falling back to a hard slice when one sentence exceeds the budget."""
+    parts, buf = [], ""
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        while len(sentence) > budget:
+            # A single sentence larger than the budget: hard-slice it. Rare, but
+            # tender prose contains run-on requirement lists with no terminator.
+            if buf:
+                parts.append(buf)
+                buf = ""
+            parts.append(sentence[:budget])
+            sentence = sentence[budget:]
+        if not buf:
+            buf = sentence
+        elif len(buf) + 1 + len(sentence) <= budget:
+            buf = f"{buf} {sentence}"
+        else:
+            parts.append(buf)
+            buf = sentence
+    if buf:
+        parts.append(buf)
+    return parts
+
+
+def _chunk_document(title: str, desc: str) -> list[str]:
+    """
+    Split one notice into overlapping windows that each fit the embedding model.
+
+    WHY THIS EXISTS — this fixes a silent, systematic retrieval failure, and the
+    measurement is recorded here because the fix looks arbitrary without it.
+
+    `all-MiniLM-L6-v2` reports `max_seq_length: 256`. sentence-transformers
+    DISCARDS everything past that without raising, so before this change the
+    corpus was embedded from roughly its first 1,265 characters and no warning
+    was ever emitted.
+
+    Measured twice on 2026-08-28, either side of a feed refresh. The truncation
+    rate is stable across both, which is the point of recording both: it is a
+    property of federal tender prose, not of one day's corpus.
+
+      * 71-tender corpus, 68 with English descriptions, joined back to the raw
+        feed for untruncated text: 24/68 = 35% exceeded the 256-token window.
+      * 66-tender corpus after the refresh, measured on the stored documents
+        directly: 23/66 = 35% exceeded it. Those had a MEDIAN 51% of their text
+        embedded; the longest notice, 17,389 chars / 3,350 tokens, had 7.6%.
+        Corpus-wide tokens: median 176, p90 910, max 3,350.
+
+    THE MEDIAN IS 51%, NOT THE 63% FIRST RECORDED HERE. The 63% was computed
+    against documents the old `[:2000]` cap had ALREADY shortened, so the
+    denominator was the truncated text rather than the real description and the
+    loss came out flattering. Measured against full text it is 51%. A figure
+    quantifying a truncation must not be derived from the truncated artefact.
+
+    Do not confuse either number with the share of notices that CHUNK into more
+    than one piece - 33/66 = 50% on the same corpus. The chunk budget is about
+    756 characters of body text, well under the ~1,265 the window allows, so ten
+    notices split without ever having been truncated. Every truncated notice is
+    in the split set; the reverse does not hold.
+
+    A longer-context model does not resolve this: 512 tokens covers ~2,530 chars
+    and still misses the top 10% of descriptions. The text is genuinely long, so
+    it has to be chunked rather than fitted into a bigger window.
+
+    The title is prepended to EVERY chunk. A chunk taken from the middle of a
+    description carries no trace of which notice it belongs to, and a query that
+    names the kind of work would otherwise miss it. It is prepended ONCE, not
+    doubled as in the single-document format - repeating it across twenty-one
+    chunks of one long notice would drown the body text it is meant to label.
+
+    Returns [] only when the notice has no title and no description at all;
+    any text at all yields at least one chunk. Callers rely on that: a tender
+    with text is never absent from the chunk collection, and a blank document
+    is never written into it.
+    """
+    title = (title or "").strip()
+    desc = (desc or "").strip()
+    if not title and not desc:
+        return []
+
+    prefix = f"{title}{_SEP}" if title else ""
+    # The title, the carried-over overlap AND the separator between them all
+    # cost budget in every chunk, so all three are subtracted here rather than
+    # added on afterwards - otherwise a chunk silently grows to prefix + overlap
+    # + separator + budget and drifts back over the window this function exists
+    # to stay inside. Every term is accounted for because the omitted one is
+    # always the one that puts a chunk over. The floor keeps a very long title
+    # from squeezing the body down to nothing.
+    budget = max(CHUNK_CHARS - len(prefix) - OVERLAP_CHARS - len(_SEP), 200)
+
+    segments: list[str] = []
+    for para in re.split(r"\n\s*\n", desc):
+        para = para.strip()
+        if not para:
+            continue
+        segments.extend(
+            _split_oversized(para, budget) if len(para) > budget else [para])
+
+    if not segments:
+        return [prefix.strip()] if prefix.strip() else []
+
+    bodies: list[str] = []
+    buf = ""
+    for seg in segments:
+        if not buf:
+            buf = seg
+        elif len(buf) + len(_SEP) + len(seg) <= budget:
+            buf = f"{buf}{_SEP}{seg}"
+        else:
+            bodies.append(buf)
+            # Overlap: carry the tail of the chunk we just closed into the next
+            # one, cut at a word boundary so we never start mid-token.
+            tail = buf[-OVERLAP_CHARS:]
+            tail = tail[tail.find(" ") + 1:] if " " in tail else ""
+            buf = f"{tail}{_SEP}{seg}".strip() if tail else seg
+    if buf:
+        bodies.append(buf)
+
+    return [f"{prefix}{b}" for b in bodies]
 
 
 def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
@@ -134,15 +276,36 @@ def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
         embedding_function=embedder,
         metadata={"hnsw:space": "cosine", **provenance},
     )
+    # A SIBLING collection, not a reshaping of `tenders`. One row per chunk here;
+    # `tenders` keeps its one row per tender, because that shape is load-bearing
+    # in tender_tools - doc_index, the BM25 corpus, get_tender, list_corpus and
+    # the digest snapshot all assume it. Chunking in place would return chunks
+    # from _collection.get() and break every one of them. Both collections live
+    # under the same db_path, so build_chroma's move-aside rollback already
+    # covers them as a single unit.
+    chunk_collection = client.create_collection(
+        name="tender_chunks",
+        embedding_function=embedder,
+        metadata={"hnsw:space": "cosine", **provenance},
+    )
 
     documents, metadatas, ids = [], [], []
+    chunk_docs, chunk_metas, chunk_ids = [], [], []
     for _, row in df.iterrows():
         tender_id = str(row.get(cols["tender_id"], ""))
         if not tender_id or tender_id == "nan":
             continue
 
         title = str(row.get(cols["title"], ""))[:300]
-        desc = str(row.get(cols["description"], ""))[:2000]
+        # NOT truncated. The former [:2000] here cut 21% of the corpus before
+        # BM25 ever indexed it, while the embedding model was separately and
+        # silently cutting 35% of it at 256 tokens - see _chunk_document. The
+        # long text is the point: it is where requirements and evaluation
+        # criteria live. Chunking handles the embedding side; BM25 and
+        # get_tender want the whole thing.
+        desc = str(row.get(cols["description"], ""))
+        if desc == "nan":
+            desc = ""
         # We embed title + description — weighting title higher by repeating it
         document = f"{title}\n{title}\n\n{desc}"
 
@@ -201,6 +364,14 @@ def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
         metadatas.append(metadata)
         ids.append(tender_id)
 
+        # Chunk ids are derived, never sourced: "{tender_id}#{i}". The pooling in
+        # tender_tools splits on the LAST '#' to recover the tender, so a
+        # tender_id that itself contains '#' is still resolvable.
+        for i, chunk in enumerate(_chunk_document(title, desc)):
+            chunk_docs.append(chunk)
+            chunk_metas.append({"tender_id": tender_id, "chunk_index": i})
+            chunk_ids.append(f"{tender_id}#{i}")
+
     # Batch insert (ChromaDB handles this fine up to several thousand at a time)
     batch = 200
     for i in range(0, len(documents), batch):
@@ -211,4 +382,14 @@ def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
         )
         print(f"  Embedded {min(i + batch, len(documents)):,} / {len(documents):,}")
 
-    print(f"\nChromaDB written to {db_path} ({collection.count():,} tenders)")
+    for i in range(0, len(chunk_docs), batch):
+        chunk_collection.add(
+            documents=chunk_docs[i:i + batch],
+            metadatas=chunk_metas[i:i + batch],
+            ids=chunk_ids[i:i + batch],
+        )
+        print(f"  Embedded chunk {min(i + batch, len(chunk_docs)):,} / "
+              f"{len(chunk_docs):,}")
+
+    print(f"\nChromaDB written to {db_path} ({collection.count():,} tenders, "
+          f"{chunk_collection.count():,} chunks)")

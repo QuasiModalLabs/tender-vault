@@ -338,11 +338,12 @@ def test_digest_roundtrip(tmp: Path) -> None:
 
     digests = tmp / "digests-rt"
     digests.mkdir(parents=True, exist_ok=True)
-    original = (tt._collection, tt._bm25, tt.doc_index, tt.DIGESTS,
+    original = (tt.DIGESTS,
                 digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT, tt.DB_PATH)
     try:
         tt.DB_PATH = db
-        tt._collection, tt._bm25, tt.doc_index = None, None, []
+        # One call, not a hand-listed tuple of globals: see _reset_corpus_state.
+        tt._reset_corpus_state()
         tt.DIGESTS = digests
         digest_mod.DIGEST_DIR = digests
         digest_mod.CORPUS_SNAPSHOT = digests / "corpus-latest.txt"
@@ -386,7 +387,8 @@ def test_digest_roundtrip(tmp: Path) -> None:
         except ImportError:
             print("        (PyYAML absent -- skipped the YAML coercion check)")
     finally:
-        (tt._collection, tt._bm25, tt.doc_index, tt.DIGESTS,
+        tt._reset_corpus_state()
+        (tt.DIGESTS,
          digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT,
          tt.DB_PATH) = original
 
@@ -428,11 +430,10 @@ def test_digest_from_unstamped_corpus(tmp: Path) -> None:
 
     digests = tmp / "digests-unstamped"
     digests.mkdir(parents=True, exist_ok=True)
-    original = (tt._collection, tt._bm25, tt.doc_index,
-                digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT, tt.DB_PATH)
+    original = (digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT, tt.DB_PATH)
     try:
         tt.DB_PATH = db
-        tt._collection, tt._bm25, tt.doc_index = None, None, []
+        tt._reset_corpus_state()
         digest_mod.DIGEST_DIR = digests
         digest_mod.CORPUS_SNAPSHOT = digests / "corpus-latest.txt"
 
@@ -442,8 +443,8 @@ def test_digest_from_unstamped_corpus(tmp: Path) -> None:
         check("no empty '---\\n---' emitted",
               "---\n---" not in content, content[:60])
     finally:
-        (tt._collection, tt._bm25, tt.doc_index,
-         digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT,
+        tt._reset_corpus_state()
+        (digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT,
          tt.DB_PATH) = original
 
 

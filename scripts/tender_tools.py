@@ -137,9 +137,28 @@ class BM25:
 # ---------------------------------------------------------------------------
 
 _collection = None
+_chunk_collection = None   # None when the corpus predates chunking - see _do_load
 _bm25 = None
 doc_index: list[dict] = []  # Parallel to BM25 corpus, for ID lookup
 _load_lock = __import__("threading").Lock()
+
+
+def _reset_corpus_state() -> None:
+    """
+    Clear every cached corpus global, in ONE place.
+
+    Tests that swap in a temporary corpus have to reset this module's caches, and
+    they used to do it by listing the globals at each call site. That list is a
+    silent trap: adding a global (as `_chunk_collection` did) leaks state between
+    tests everywhere the new name was not added, and the symptom is a test
+    passing against the previous test's corpus. Resetting through one function
+    makes the next global impossible to forget.
+    """
+    global _collection, _chunk_collection, _bm25, doc_index
+    _collection = None
+    _chunk_collection = None
+    _bm25 = None
+    doc_index = []
 
 
 def load_collection():
@@ -160,7 +179,7 @@ def load_collection():
 
 
 def _do_load():
-    global _collection, _bm25, doc_index
+    global _collection, _chunk_collection, _bm25, doc_index
 
     # Imported here rather than at module level so that SQLite-only commands
     # (contracts-intel) and vault-only commands (list-watching, park, archive)
@@ -180,6 +199,16 @@ def _do_load():
         model_name="all-MiniLM-L6-v2"
     )
     _collection = client.get_collection("tenders", embedding_function=embedder)
+
+    # OPTIONAL. A corpus built before chunking has no `tender_chunks`, and
+    # test_provenance assembles a `tenders` collection by hand with no sibling.
+    # Absent means semantic search falls back to the tender-level collection
+    # rather than failing to load the corpus at all.
+    try:
+        _chunk_collection = client.get_collection(
+            "tender_chunks", embedding_function=embedder)
+    except Exception:
+        _chunk_collection = None
 
     # Pull everything once to build BM25 (this is fine at our scale)
     all_data = _collection.get()
@@ -381,6 +410,87 @@ def _corpus_provenance() -> dict:
     return out
 
 
+def _pool_chunk_hits(results: dict, exclude_tender_id: str | None = None
+                     ) -> list[tuple[str, float]]:
+    """
+    Collapse chunk hits into one ranked score per tender, taking the MAX.
+
+    MAX, NOT MEAN — and this is the whole point, not a detail. Mean pooling
+    divides a strong single-chunk match by the number of chunks the notice
+    happens to have, so the longer the document the more a real match is
+    diluted. Long documents are exactly the case chunking exists to serve: a
+    forty-chunk notice with one perfectly matching requirements section would
+    score near zero under mean and rank top under max. Mean would
+    reintroduce the very bug this fixes, wearing a different hat.
+
+    `exclude_tender_id` drops self-matches for find_similar. It is matched on
+    the TENDER, not the chunk id, because every one of a notice's own chunks
+    matches itself and excluding a single chunk id would leave all its others.
+    """
+    best: dict[str, float] = {}
+    ids = (results.get("ids") or [[]])[0]
+    if not ids:
+        return []
+    distances = (results.get("distances") or [[]])[0] or [0] * len(ids)
+    metadatas = (results.get("metadatas") or [[]])[0] or [{}] * len(ids)
+    for chunk_id, distance, meta in zip(ids, distances, metadatas):
+        # Prefer the recorded tender_id; fall back to the id's stem. rsplit, not
+        # split: a tender_id containing '#' still resolves.
+        tender_id = (meta or {}).get("tender_id") or str(chunk_id).rsplit("#", 1)[0]
+        if exclude_tender_id is not None and tender_id == exclude_tender_id:
+            continue
+        score = 1 / (1 + distance)
+        if score > best.get(tender_id, -1.0):
+            best[tender_id] = score
+    return sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+
+
+def _semantic_ranked(query_text: str, n_pool: int,
+                     exclude_tender_id: str | None = None
+                     ) -> list[tuple[str, float]]:
+    """
+    Tender-level semantic ranking.
+
+    Reads the chunk collection when there is one and max-pools it back to
+    tenders, so the caller receives the same (tender_id, score) shape it always
+    did and the RRF fusion downstream is untouched. Feeding chunk-level ranks
+    into RRF would let one long notice occupy several rank slots and outvote
+    everything else.
+
+    Falls back to the tender-level collection when `tender_chunks` is absent —
+    a corpus built before this change, or a collection assembled by hand in a
+    test. Degraded, not broken: that path truncates at the model's window, which
+    is the behaviour this fix replaced.
+    """
+    if _chunk_collection is None:
+        results = _collection.query(query_texts=[query_text], n_results=n_pool)
+        return _pool_chunk_hits(results, exclude_tender_id)
+
+    # Ask for more chunks than the caller's tender budget: chunks collapse into
+    # tenders, so k chunk hits yield at most k tenders and usually far fewer.
+    #
+    # The headroom matters when a tender is being excluded. Every one of the
+    # target's own chunks scores near-perfectly against its own text, so they
+    # occupy the top of the chunk ranking as a block - forty of them for the
+    # longest notice in the current corpus. Without room to clear that block,
+    # find_similar asks for n*3 chunks, discards every one as a self-match and
+    # returns nothing.
+    #
+    # The block is MEASURED, not guessed at. A constant sized against today's
+    # longest notice silently under-provisions the day a longer one arrives -
+    # the feed already carries a 33k-character description, which chunks well
+    # past any round number worth hard-coding. Silent under-provisioning is the
+    # exact failure mode this change exists to remove, so it is not reintroduced
+    # here in miniature.
+    want = n_pool * 3
+    if exclude_tender_id is not None:
+        own = _chunk_collection.get(where={"tender_id": exclude_tender_id})
+        want += len(own.get("ids") or [])
+    want = min(want, max(_chunk_collection.count(), 1))
+    results = _chunk_collection.query(query_texts=[query_text], n_results=want)
+    return _pool_chunk_hits(results, exclude_tender_id)
+
+
 # ---------------------------------------------------------------------------
 # Reciprocal Rank Fusion — combine BM25 + semantic without tuning weights
 # ---------------------------------------------------------------------------
@@ -411,16 +521,9 @@ def cmd_search(args) -> dict:
     load_collection()
     n_pool = max(args.n * 3, 30)  # Pull more for fusion, then trim
 
-    # Semantic side — ChromaDB
-    semantic_results = _collection.query(query_texts=[args.query], n_results=n_pool)
-    semantic: list[tuple[str, float]] = []
-    if semantic_results["ids"] and semantic_results["ids"][0]:
-        for doc_id, distance in zip(
-            semantic_results["ids"][0],
-            semantic_results.get("distances", [[]])[0] or [0] * len(semantic_results["ids"][0]),
-        ):
-            # Convert cosine distance to a similarity-ish score
-            semantic.append((doc_id, 1 / (1 + distance)))
+    # Semantic side — ChromaDB, max-pooled from chunks back to tenders so that
+    # what reaches the fusion below is one entry per tender, exactly as before.
+    semantic = _semantic_ranked(args.query, n_pool)
 
     # Keyword side — BM25
     bm25_hits = _bm25.search(args.query, top_k=n_pool)
@@ -495,27 +598,22 @@ def cmd_similar(args) -> dict:
     if not target:
         return {"error": f"Tender {args.tender_id} not found"}
 
-    results = _collection.query(
-        query_texts=[target["document"][:1000]],
-        n_results=args.n + 1,  # +1 because the target itself will match
-    )
+    # The query text is still capped: this one is a genuine cap, not a silent
+    # truncation of stored data. A query longer than the model's window is
+    # pointless, and the target's opening is what characterises it.
+    ranked = _semantic_ranked(target["document"][:1000], args.n + 1,
+                              exclude_tender_id=args.tender_id)
     similar = []
-    if results["ids"] and results["ids"][0]:
-        for doc_id, distance in zip(
-            results["ids"][0],
-            results.get("distances", [[]])[0] or [0] * len(results["ids"][0]),
-        ):
-            if doc_id == args.tender_id:
-                continue  # Skip self-match
-            doc = id_to_doc.get(doc_id)
-            if not doc:
-                continue
-            similar.append({
-                "tender_id": doc_id,
-                "title": doc["metadata"].get("title", ""),
-                "agency": _display_agency(doc["metadata"]),
-                "similarity": round(1 / (1 + distance), 4),
-            })
+    for doc_id, score in ranked:
+        doc = id_to_doc.get(doc_id)
+        if not doc:
+            continue
+        similar.append({
+            "tender_id": doc_id,
+            "title": doc["metadata"].get("title", ""),
+            "agency": _display_agency(doc["metadata"]),
+            "similarity": round(score, 4),
+        })
     return {"target": args.tender_id, "similar": similar[:args.n]}
 
 
