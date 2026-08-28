@@ -8,9 +8,12 @@ the more often the ingest runs.
 """
 from __future__ import annotations
 
+import gzip
 import json
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import requests
@@ -37,6 +40,50 @@ def _load_validators(cache_path: Path) -> dict:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _snapshot_dir(cache_path: Path) -> Path:
+    """Where snapshots live, derived from the cache so `--cache` takes its own."""
+    return cache_path.parent / "snapshots"
+
+
+def _snapshot_feed(cache_path: Path) -> Optional[Path]:
+    """
+    Copy the feed we are about to overwrite into .cache/snapshots/, gzipped.
+
+    The open-notice feed is a snapshot of what was open on the day it was read,
+    and this file has been overwritten on every download since the repo existed
+    — so which notices were in the feed on any past day is simply gone, and the
+    filter audit has to say so in every replay it prints. This is the smallest
+    thing that stops that being true of every FUTURE day.
+
+    NAMED FROM THE OUTGOING FILE'S MTIME, not from today. A snapshot named
+    2026-08-17 holds the feed as it was published on 2026-08-17; naming it by
+    the download date that replaced it would put every snapshot one day after
+    the data it describes. Same reading of mtime as `_feed_mtime_iso` — when the
+    data last arrived, not when we last asked.
+
+    DELIBERATELY DUMB, and this is the whole specification: no dedup, no
+    pruning, no index, no retention policy, no manifest. A same-named file is
+    overwritten. Every one of those would be a policy about which past days are
+    worth keeping, and there is no basis for one yet — the point is to have the
+    days at all. Compressed because the feed is ~6.7MB of CSV and gzips to
+    roughly a tenth of that, which is the difference between a year of daily
+    snapshots being unremarkable and being a problem.
+
+    Returns the snapshot path, or None when there was nothing to copy. A first
+    run has no cached feed and that is not an error.
+    """
+    if not cache_path.exists():
+        return None
+    stamp = datetime.fromtimestamp(cache_path.stat().st_mtime).strftime("%Y-%m-%d")
+    target = _snapshot_dir(cache_path) / f"{cache_path.stem}-{stamp}.csv.gz"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("rb") as source, gzip.open(target, "wb") as sink:
+        shutil.copyfileobj(source, sink)
+    print(f"  snapshotted the outgoing feed to {target.name} "
+          f"({target.stat().st_size:,} bytes)")
+    return target
+
+
 def download_tenders(cache_path: Path, force: bool = False) -> pd.DataFrame:
     """
     Download the tender CSV, revalidating against the PUBLISHER rather than a clock.
@@ -57,6 +104,10 @@ def download_tenders(cache_path: Path, force: bool = False) -> pd.DataFrame:
     A failed request RAISES rather than falling back to the cache. Serving stale
     bytes under a fresh build stamp is the one outcome the provenance states
     downstream cannot represent.
+
+    The outgoing file is snapshotted before it is overwritten — see
+    `_snapshot_feed`, which is what makes any past day's feed membership
+    recoverable at all.
     """
     validators = {} if force else _load_validators(cache_path)
     headers = dict(REQUEST_HEADERS)
@@ -84,6 +135,10 @@ def download_tenders(cache_path: Path, force: bool = False) -> pd.DataFrame:
 
     response.raise_for_status()
     cache_path.parent.mkdir(parents=True, exist_ok=True)
+    # BEFORE the overwrite, and only here: this is the one line in the repo that
+    # destroys feed state. The 304 branch above returns without writing, so it
+    # needs no snapshot.
+    _snapshot_feed(cache_path)
     cache_path.write_bytes(response.content)
 
     # Recorded only on a body we actually stored, so the validators can never

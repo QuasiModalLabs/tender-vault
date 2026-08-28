@@ -1,0 +1,19 @@
+# Filter versions, append-only.
+#
+# A version is a triple, not one hash - see scripts/filter_audit/version.py.
+# `predicates_sha256` is the identity key and is coarse on purpose (a comment
+# edit bumps it). `stage_manifest_sha256` is the comparability key and moves
+# only when the funnel changes shape.
+#
+# NEVER edit or remove an entry. Audit records reference these labels, and a
+# rewritten entry retroactively changes what a past run claims to have been.
+versions:
+- label: fv-63a09dc4
+  profile_sha256: 1b42819a48566dc1199b1e6b4ad93d6c9509c4419b27f08c5e3b12e506477934
+  predicates_sha256: 5eab55bb36afe494f258128a8e278ef05795a2cdac718ee39b260c857ab9f88e
+  stage_manifest_sha256: 11e1c82f191db85284c921e2c6920d6db4798508984f6a5155578df36c1e6084
+  profile_path: vault/profiles/my-company.md
+  declared: '2026-08-20'
+  note: Baseline. Working tree at the time the audit package was built, including
+    the uncommitted directed-contract mapping (33 notices change which gate stops
+    them; net admission change measured at zero across all 30,527 archive rows).

@@ -70,6 +70,48 @@ No result was computed under the original clause: the first run raised
 ZeroDivisionError on an empty department universe, which is how the error was
 found. Nothing was fitted, ranked or read.
 
+A FROZEN LITERAL IS NOT A FROZEN MEANING
+----------------------------------------
+Clause 5 names five `opportunity_kind` strings. The strings are frozen here;
+what they DENOTE is decided by ingest.classify_notice, three modules away, and
+that moved: "Directed Contract" was mapped to `pre_awarded` in 6aea2d0, so 25
+archive notices that clause 5 admitted as `solicitation` or `product` are
+excluded by it once notices.db is rebuilt. Nothing was edited here and the
+predicate changed anyway.
+
+So the meaning is recorded, not just the words. `FROZEN_KIND_MANIFEST` holds the
+literals that produce each of the five kinds, and `non_procurement_kinds()` —
+the only way to read the frozen set — refuses to return it when the live
+manifest disagrees, naming the kinds whose membership moved. It does not
+auto-resolve and does not re-derive: re-deriving would be the predicate agreeing
+with whatever the classifier now says, which is the fitting this rule exists to
+prevent.
+
+PREDICATE REVISION 2 — 2026-08-21, re-frozen against the current classifier
+--------------------------------------------------------------------------
+The manifest was re-frozen to include "directed contract" under `pre_awarded`,
+deliberately, and this is the record of why it did not require discarding the
+2026-08-15 run.
+
+Measured before deciding, against the 30,527-row archive: of the 25 notices
+whose membership moves, **none passes clause 3**. Not one is relevant IT work,
+so not one was ever a hit, and the label is identical either side of the change
+— 168 department-year hits before, 168 after, with no department-year gained or
+lost. The extension of clause 5 changed; the extension of the PREDICATE, which
+is clauses 3-6 together, did not.
+
+The check was still right to fire. It can see that a meaning moved; it cannot
+see whether the moved notices were ever admitted, because that depends on the
+other clauses and on the corpus. Only a measurement can say that, and firing is
+what forced the measurement to be made rather than assumed. A re-freeze without
+that measurement would have been the predicate quietly agreeing with the
+classifier, which is exactly what the mechanism exists to prevent.
+
+`vault/reference/backtest-2026-08-15.md` therefore stands as computed, and
+carries a dated note saying so. Nothing was re-run: the predictive line is
+stopped as of 2026-08-16, and re-running to confirm a number that provably
+cannot move would be theatre.
+
 ------------------------------------------------------------------------------
 LEAKAGE — WHY EACH FEATURE IS KNOWABLE AT T
 ------------------------------------------------------------------------------
@@ -143,10 +185,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import math
 import sqlite3
 import sys
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 
@@ -154,6 +199,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from ingest import (  # noqa: E402
     DEFAULT_PROFILE,
+    kind_manifest,
     matched_competencies,
     matches_unspsc_families,
     parse_profile,
@@ -176,9 +222,177 @@ IT_GSIN_PREFIXES = ("D0", "D1", "D2", "D3", "7030", "7A")
 # opportunity_kind values that are not a new requirement reaching the market.
 # `unknown` is deliberately NOT here: it means the classifiers could not decide,
 # which is not the same as deciding the notice buys nothing.
-NON_PROCUREMENT_KINDS = frozenset({
+#
+# PRIVATE, and reachable only through non_procurement_kinds(). See that function:
+# the set is frozen and its EXTENSION is not, so every read of it has to pass the
+# drift check first. A module-level public constant would be a fourth way to
+# reach it that remembers nothing.
+_NON_PROCUREMENT_KINDS = frozenset({
     "construction", "results_notice", "pre_awarded", "information", "call_up",
 })
+
+# What those five words denote, from ingest.kind_manifest().
+#
+# THIS IS THE POINT OF THE WHOLE BLOCK. Clause 5 froze five kind STRINGS. Commit
+# 6aea2d0 added "Directed Contract" to ingest._NOTICE_KINDS, and `pre_awarded`
+# kept its spelling while changing its meaning: 25 archive notices — 14 typed
+# *SRV that classified as `solicitation`, 11 typed *GD that classified as
+# `product` — become `pre_awarded` once notices.db is rebuilt, and clause 5 then
+# excludes them. The other 34 Directed Contract notices are *CNST and were
+# already `construction`, so they do not move.
+#
+# The frozen predicate at the top of this module says a predicate that has to
+# change means the run is DISCARDED AND RESTARTED, not patched. That rule
+# assumed the predicate could only change by someone editing it. It can also
+# change by someone editing a table three modules away, which is what happened,
+# and this manifest is what makes that visible instead of silent.
+#
+# RE-FROZEN 2026-08-21 against the current classifier, deliberately, after
+# measuring that none of the 25 passes clause 3 — none was ever a hit, and the
+# label is byte-identical either side of the change. See PREDICATE REVISION 2 in
+# the module docstring; that measurement is the reason no run was discarded, and
+# it exists because the check refused to run until someone made it.
+#
+# RESTRICTED TO THE FIVE FROZEN KINDS on purpose. A literal moving between two
+# kinds that are both outside the set — say a new notice type joining
+# `qualification` — cannot change which notices clause 5 excludes, and a check
+# that fired on it would be an alarm with no consequence behind it.
+FROZEN_KIND_MANIFEST = {
+    "call_up": [
+        "notice_type:rfp against supply arrangement",
+        "prose_arrangement_number:EN537-05IT01",
+        "prose_arrangement_number:EN578-150229",
+        "prose_arrangement_number:EN578-170432",
+        "prose_arrangement_number:EN578-172870",
+        "prose_arrangement_number:EN578-201407",
+        "prose_arrangement_number:EN578-232335",
+        r"prose_vehicle_name:\b(tbips|sbips)\b",
+    ],
+    "construction": ["procurement_category:*CNST"],
+    "information": ["notice_type:request for information"],
+    "pre_awarded": [
+        "notice_type:advance contract award notice",
+        # Added by the 2026-08-21 re-freeze. A directed contract is the same
+        # shape as an ACAN — a sole-source already decided — so this is the
+        # classifier getting more right, not the predicate getting looser.
+        "notice_type:directed contract",
+    ],
+    "results_notice": [
+        "prose_results_phrase:following the itq",
+        "prose_results_phrase:have been selected as qualified",
+        "prose_results_phrase:itq result",
+        "prose_results_phrase:no solicitation document",
+        "prose_results_phrase:results notification",
+        "prose_results_phrase:this is a notice only",
+    ],
+}
+
+# Recorded, not computed at import. A hash derived from the dict beside it would
+# agree with it by construction and prove nothing; written down, it is a second
+# statement of the same fact, and editing the frozen membership without
+# re-recording this is itself caught — see _check_frozen_manifest.
+#
+# 27db5c7af97b.. was the freeze-time value and is kept here as the record of what
+# this predicate was frozen against before 2026-08-21. It is a comment and not a
+# list: a second live value would invite a check that accepts either.
+FROZEN_KIND_MANIFEST_SHA256 = (
+    "785e2db9e9769ab861a44bfd8db7e0727f0ee2d2e41cfb6bbd0ed65c9ff0ae25")
+
+
+class FrozenPredicateDrift(RuntimeError):
+    """The frozen predicate's words still parse; what they denote has moved."""
+
+
+def _manifest_sha256(manifest: dict[str, list[str]]) -> str:
+    """Canonical hash of a kind manifest. Sorted, so key order cannot matter."""
+    return hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _live_kind_manifest() -> dict[str, list[str]]:
+    """Today's manifest, narrowed to the kinds the frozen predicate reads."""
+    live = kind_manifest()
+    return {kind: live.get(kind, []) for kind in FROZEN_KIND_MANIFEST}
+
+
+def _check_frozen_manifest() -> None:
+    """
+    Raise unless the five frozen kinds still denote what they denoted.
+
+    Two failures, kept apart because they call for different responses. The
+    first is a bookkeeping error in this file — the recorded hash and the
+    recorded manifest disagree, so one was edited without the other and neither
+    can be trusted as the record. The second is the real finding: the classifier
+    moved underneath a predicate that was frozen against it.
+
+    NEITHER AUTO-RESOLVES, and the set is never re-derived from the live
+    manifest. Re-deriving it would be the predicate quietly agreeing with
+    whatever the classifier now says, which is the fitting-to-results this
+    module exists to refuse. The resolution is a human one: re-freeze
+    deliberately and discard the runs made under the old meaning, or revert the
+    classifier change.
+    """
+    if _manifest_sha256(FROZEN_KIND_MANIFEST) != FROZEN_KIND_MANIFEST_SHA256:
+        raise FrozenPredicateDrift(
+            "FROZEN_KIND_MANIFEST_SHA256 does not describe FROZEN_KIND_MANIFEST. "
+            "One was edited without the other, so neither is a record of "
+            "anything. Recompute it with backtest._manifest_sha256("
+            "backtest.FROZEN_KIND_MANIFEST) only after deciding, deliberately, "
+            "that the new membership is what the predicate should have been "
+            "frozen on.")
+
+    live = _live_kind_manifest()
+    if _manifest_sha256(live) == FROZEN_KIND_MANIFEST_SHA256:
+        return
+
+    lines = []
+    for kind in sorted(FROZEN_KIND_MANIFEST):
+        was, now = set(FROZEN_KIND_MANIFEST[kind]), set(live.get(kind, []))
+        if was == now:
+            continue
+        gained = sorted(now - was)
+        lost = sorted(was - now)
+        detail = []
+        if gained:
+            detail.append("gained " + ", ".join(repr(g) for g in gained))
+        if lost:
+            detail.append("lost " + ", ".join(repr(item) for item in lost))
+        lines.append(f"  {kind}: {'; '.join(detail)}")
+
+    raise FrozenPredicateDrift(
+        "The frozen target predicate reads five opportunity_kind strings whose "
+        "meaning has changed since they were frozen.\n"
+        + "\n".join(lines)
+        + f"\n  recorded manifest {FROZEN_KIND_MANIFEST_SHA256[:12]}.. / "
+        f"live {_manifest_sha256(live)[:12]}..\n"
+        "The literals are frozen; their extension is not. Notices that were "
+        "outside clause 5 when the run was made now fall inside it, so a "
+        "notices.db rebuilt today and the frozen predicate no longer describe "
+        "the same experiment.\n"
+        "This does not auto-resolve and does not re-derive the frozen set. Per "
+        "the rule at the top of this module, a predicate that has to change "
+        "means the run is discarded and restarted — update FROZEN_KIND_MANIFEST "
+        "and its recorded hash only as that deliberate act, and record why.")
+
+
+@lru_cache(maxsize=1)
+def non_procurement_kinds() -> frozenset[str]:
+    """
+    The frozen set, once the classifier has been checked against it.
+
+    The check lives here rather than at import or in main() because this is the
+    only door: `is_target_notice` is the sole reader, and nothing can consult
+    the set without passing through. An invariant enforced at one call site is
+    an invariant until someone adds a second call site.
+
+    Cached because it is read once per archive row — the check is arithmetic
+    over a small dict, but 30,527 of them is not free. An exception is not
+    cached by lru_cache, so a drifting classifier raises on every call rather
+    than on the first.
+    """
+    _check_frozen_manifest()
+    return _NON_PROCUREMENT_KINDS
 
 # The base-rate stability gate. Measured on the award-side proxy during
 # planning: department x calendar half-year swung 27.7%-68.1% (40.4pp) and is
@@ -344,7 +558,7 @@ def is_target_notice(row: dict, families: list[str], competencies: list[str]) ->
     revision note in the module docstring records. It lives in
     `target_solicitations`.
     """
-    if row.get("opportunity_kind") in NON_PROCUREMENT_KINDS:
+    if row.get("opportunity_kind") in non_procurement_kinds():
         return False
     return is_relevant(row, families, competencies)
 
@@ -1194,6 +1408,15 @@ def main() -> int:
 
     if not NOTICES_DB.exists():
         sys.stderr.write(f"{NOTICES_DB} not built. Run scripts/notices_ingest.py\n")
+        return 2
+
+    # Checked here as well as at the accessor, so the refusal arrives as a
+    # sentence rather than as a traceback out of the middle of a panel build.
+    # The accessor is still the enforcement — this only decides how it reads.
+    try:
+        _check_frozen_manifest()
+    except FrozenPredicateDrift as drift:
+        sys.stderr.write(f"\nFROZEN PREDICATE DRIFT\n\n{drift}\n")
         return 2
 
     cohorts = build_panel(args.gap_months)

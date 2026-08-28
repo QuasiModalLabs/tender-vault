@@ -41,6 +41,8 @@ from ingest_common import (  # noqa: E402,F401
 
 from . import paths  # noqa: E402,F401  (the path owner — read via paths.X)
 from .classify import (  # noqa: E402,F401
+    _QUALIFICATION_NOTES,
+    kind_manifest,
     _CATEGORY_CONSTRUCTION,
     _CATEGORY_GOODS,
     _CATEGORY_SERVICES,
@@ -71,7 +73,7 @@ from .dates import (  # noqa: E402,F401
     body_date_conflict,
     closing_window,
 )
-from .feed import download_tenders  # noqa: E402,F401
+from .feed import _snapshot_feed, download_tenders  # noqa: E402,F401
 from .filters import (  # noqa: E402,F401
     _source_system,
     contains_excluded,

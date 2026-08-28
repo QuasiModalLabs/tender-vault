@@ -32,9 +32,35 @@ _NOTICE_KINDS = {
     # Work competed among suppliers already on a vehicle.
     "rfp against supply arrangement": "call_up",
     # Not biddable. Market research, or an award already intended for a named
-    # supplier with a challenge window.
+    # supplier with a challenge window. "Directed Contract" is the same shape as
+    # an ACAN - a sole-source already decided - and was landing in the
+    # `solicitation` residual, which reads as open work.
     "request for information": "information",
     "advance contract award notice": "pre_awarded",
+    "directed contract": "pre_awarded",
+}
+# All three qualification instruments put a supplier through a gate before any
+# work is competed, but they do not open the same door, and one note for all
+# three asserted a vehicle that a stage-1 ITQ does not have. Keyed on the same
+# controlled-vocabulary literals as _NOTICE_KINDS, so this is a second lookup on
+# a string the publisher filed — NOT a prose rule, and it adds no new way to be
+# wrong that the notice type is not already wrong about.
+_QUALIFICATION_NOTES = {
+    "request for supply arrangement": (
+        "A supply arrangement puts a supplier on a vehicle; it is not itself "
+        "work. Work is competed later as call-ups against it, often with no "
+        "public notice. Cross-reference vehicles.md."),
+    "request for standing offer": (
+        "A standing offer puts a supplier on a vehicle; it is not itself work. "
+        "Work is drawn down later as call-ups against it, often with no public "
+        "notice. Cross-reference vehicles.md."),
+    "invitation to qualify": (
+        "Qualifies a supplier through a gate; not itself work. Which gate is "
+        "not in any structured field, and the two differ: an ITQ onto a vehicle "
+        "or source list leads to call-ups over its life, while a stage-1 or "
+        "phase-1 ITQ qualifies only for ONE named project's later stage — no "
+        "vehicle, no call-ups, and nothing in vehicles.md to cross-reference. "
+        "Read the notice to tell which."),
 }
 
 # procurementCategory is the only classification field populated on 100% of
@@ -183,11 +209,11 @@ def classify_notice(notice_type, procurement_category, text=None) -> dict:
     if kind:
         result = {"opportunity_kind": kind, "kind_basis": "notice_type"}
         if kind == "qualification":
-            result["kind_note"] = (
+            result["kind_note"] = _QUALIFICATION_NOTES.get(nt, (
                 "A supply arrangement, standing offer or invitation to qualify "
                 "puts a supplier on a vehicle; it is not itself work. Work is "
                 "competed later as call-ups against it, often with no public "
-                "notice.")
+                "notice."))
         elif kind == "call_up":
             result["kind_note"] = (
                 "A call-up competed among suppliers already on a vehicle. This "
@@ -260,3 +286,53 @@ def classify_notice(notice_type, procurement_category, text=None) -> dict:
         "kind_note": ("Neither a notice type nor a usable procurement category "
                       "was filed. Shape unknown — read the description."),
     }
+
+
+def kind_manifest() -> dict[str, list[str]]:
+    """
+    Which literals produce each opportunity kind — the EXTENSION of the labels.
+
+    `classify_notice` returns kind strings, and code downstream freezes sets of
+    those strings. A frozen set of strings is only as stable as what the strings
+    denote, and that is decided here, by the tables above. When "Directed
+    Contract" was added to `_NOTICE_KINDS`, `pre_awarded` kept its spelling and
+    changed its meaning: 25 archive notices that classified as `solicitation` or
+    `product` became `pre_awarded`, and any predicate frozen on that word
+    silently started excluding them. Nothing raised, because nothing had a way
+    to notice.
+
+    So the tables are exposed as data. A consumer that freezes a kind can record
+    this manifest's hash beside its frozen set and refuse to run when the two
+    disagree — see backtest.non_procurement_kinds, which is the one doing it.
+
+    Each entry is `basis:literal`, naming the field the literal is read from,
+    because a literal moving from the notice type to the prose is a real change
+    in how confidently the kind is assigned and should not look like a no-op.
+
+    WHAT THIS DOES NOT COVER, stated rather than implied: the ORDER the bases are
+    checked in. Results phrases outrank the notice type, which outranks the
+    category, and reordering them would move notices between kinds without
+    changing any membership here. A consumer of this manifest is protected
+    against a changed vocabulary, not against a changed precedence.
+
+    `unknown` is absent on purpose — it is the residual, produced by no literal.
+    """
+    manifest: dict[str, list[str]] = {}
+    for literal, kind in _NOTICE_KINDS.items():
+        manifest.setdefault(kind, []).append(f"notice_type:{literal}")
+    for phrase in _RESULTS_NOTICE_PHRASES:
+        manifest.setdefault("results_notice", []).append(
+            f"prose_results_phrase:{phrase}")
+    for arrangement in _KNOWN_SUPPLY_ARRANGEMENTS:
+        manifest.setdefault("call_up", []).append(
+            f"prose_arrangement_number:{arrangement}")
+    manifest.setdefault("call_up", []).append(
+        f"prose_vehicle_name:{_VEHICLE_TOKENS.pattern}")
+    manifest.setdefault("construction", []).append(
+        f"procurement_category:{_CATEGORY_CONSTRUCTION}")
+    manifest.setdefault("product", []).append(
+        f"procurement_category:{_CATEGORY_GOODS}")
+    for category in _CATEGORY_SERVICES:
+        manifest.setdefault("solicitation", []).append(
+            f"procurement_category_residual:{category}")
+    return {kind: sorted(literals) for kind, literals in sorted(manifest.items())}

@@ -122,6 +122,13 @@ def _collection_metadata(db_path: Path) -> dict:
         .get_collection("tenders").metadata or {})
 
 
+def _collection_count(db_path: Path) -> int:
+    """Rows the corpus actually holds, as opposed to what it says it holds."""
+    import chromadb
+    return (chromadb.PersistentClient(path=str(db_path))
+            .get_collection("tenders").count())
+
+
 # ---------------------------------------------------------------------------
 # 1 — the ingest stamps, and never writes None
 # ---------------------------------------------------------------------------
@@ -522,6 +529,167 @@ def test_dossier_feed_stamp() -> None:
           repr(stamp))
 
 
+# ---------------------------------------------------------------------------
+# 8 — the funnel's admitted count reconciled against what was written
+# ---------------------------------------------------------------------------
+
+def test_write_delta_is_reported(tmp: Path) -> None:
+    """
+    Stage 7 runs inside _write_chroma, AFTER filter_tenders has returned and
+    after the funnel has counted the row. So the funnel's final number is an
+    upper bound on the corpus, and the gap belongs in the corpus's own
+    provenance rather than in nobody's.
+
+    Reported at ZERO as well, which is the whole reason the keys are
+    unconditional: an absent key would make "nothing was lost" read the same as
+    "this build never measured it".
+    """
+    print("\nFunnel / corpus reconciliation")
+    df, cols = _one_row_frame()
+
+    db = tmp / "chroma-delta-zero"
+    ingest.build_chroma(df, db, cols)
+    meta = _collection_metadata(db)
+    for key in ("funnel_admitted", "corpus_written", "funnel_write_delta"):
+        check(f"{key} written", key in meta, str(meta))
+    check("funnel_admitted counts the frame",
+          meta.get("funnel_admitted") == 1, repr(meta.get("funnel_admitted")))
+    check("corpus_written counts the corpus",
+          meta.get("corpus_written") == 1, repr(meta.get("corpus_written")))
+    check("a clean build reports delta 0, not an absent key",
+          meta.get("funnel_write_delta") == 0,
+          repr(meta.get("funnel_write_delta")))
+    check("the counts sit beside corpus_built_at",
+          "corpus_built_at" in meta, str(meta))
+
+    # A row the funnel counted and stage 7 then dropped.
+    blank = df.copy()
+    blank.loc[0, cols["tender_id"]] = ""
+    two = pd.concat([df, blank], ignore_index=True)
+    db2 = tmp / "chroma-delta-one"
+    ingest.build_chroma(two, db2, cols)
+    meta2 = _collection_metadata(db2)
+    check("funnel_admitted counts the row stage 7 dropped",
+          meta2.get("funnel_admitted") == 2, repr(meta2.get("funnel_admitted")))
+    check("corpus_written does not",
+          meta2.get("corpus_written") == 1, repr(meta2.get("corpus_written")))
+    check("the delta names the gap",
+          meta2.get("funnel_write_delta") == 1,
+          repr(meta2.get("funnel_write_delta")))
+
+    # Two rows sharing a reference number would give a corpus smaller than the
+    # provenance claims. Asserted as the PROPERTY — the build must not produce
+    # such a corpus — rather than against a particular error: chromadb 1.5.9
+    # refuses duplicate ids itself with DuplicateIDError, so _write_chroma's own
+    # post-write count never gets to fire on this input. Both are the same
+    # guarantee, and which one catches it is Chroma's business.
+    dupe = pd.concat([df, df], ignore_index=True)
+    db3 = tmp / "chroma-duplicate-ids"
+    raised = None
+    try:
+        ingest.build_chroma(dupe, db3, cols)
+    except BaseException as exc:  # noqa: BLE001 — any type is a finding here
+        raised = exc
+    check("duplicate ids fail the build rather than shrinking the corpus",
+          raised is not None, "the build succeeded")
+    if raised is None:
+        # If a future Chroma starts accepting duplicates, the guarantee must
+        # survive as the count check: the stored corpus_written has to describe
+        # the corpus that actually exists.
+        check("...or the corpus still matches its recorded provenance",
+              _collection_metadata(db3).get("corpus_written")
+              == _collection_count(db3),
+              "provenance and corpus disagree")
+
+
+# ---------------------------------------------------------------------------
+# 9 — the feed is snapshotted before it is overwritten
+# ---------------------------------------------------------------------------
+
+class _FakeResponse:
+    def __init__(self, status_code: int, content: bytes = b"", headers=None):
+        self.status_code = status_code
+        self.content = content
+        self.headers = headers or {}
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _FakeRequests:
+    """Stands in for the `requests` module inside ingest, with queued responses."""
+
+    def __init__(self, *responses):
+        self._responses = list(responses)
+        self.sent_headers: list[dict] = []
+
+    def get(self, url, headers=None, timeout=None):
+        self.sent_headers.append(dict(headers or {}))
+        return self._responses.pop(0)
+
+
+def test_feed_snapshot(tmp: Path) -> None:
+    """
+    The download must copy the outgoing feed before overwriting it.
+
+    Asserted through download_tenders rather than against _snapshot_feed alone,
+    because the placement of the call is the whole point: a snapshot function
+    nobody calls before the write preserves nothing. Only the real path can also
+    show that the 304 branch — which overwrites nothing — snapshots nothing.
+    """
+    print("\nFeed snapshots")
+    import gzip
+    import os
+
+    cache = tmp / "snapshot-case" / "tenders.csv"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    old_bytes = b"referenceNumber-numeroReference,title-titre\nOLD-1,yesterday\n"
+    cache.write_bytes(old_bytes)
+    # An mtime well in the past, so a snapshot named for today's date cannot
+    # pass this for the wrong reason.
+    outgoing = datetime(2026, 1, 2, 10, 20, 0).timestamp()
+    os.utime(cache, (outgoing, outgoing))
+
+    new_bytes = b"referenceNumber-numeroReference,title-titre\nNEW-1,today\n"
+    # PATCHED ON ingest.feed, NOT ON ingest. `ingest` is a package now, and the
+    # `requests` that download_tenders resolves is the one imported by the
+    # submodule that defines it. Binding the name on the package would patch
+    # nothing and let this test make a real HTTP request.
+    from ingest import feed as _feed
+    original = _feed.requests
+    _feed.requests = _FakeRequests(_FakeResponse(200, new_bytes, {"ETag": '"abc"'}))
+    try:
+        ingest.download_tenders(cache, force=True)
+        snapshots = sorted((cache.parent / "snapshots").glob("*.csv.gz"))
+        check("one snapshot written", len(snapshots) == 1,
+              str([p.name for p in snapshots]))
+        if snapshots:
+            check("named for the OUTGOING file's date, not today",
+                  snapshots[0].name == "tenders-2026-01-02.csv.gz",
+                  snapshots[0].name)
+            check("holds the bytes that were replaced",
+                  gzip.decompress(snapshots[0].read_bytes()) == old_bytes)
+        check("the cache now holds the new bytes", cache.read_bytes() == new_bytes)
+
+        # A 304 returns the cached file untouched, so there is nothing to
+        # preserve and a snapshot would only duplicate the live file.
+        _feed.requests = _FakeRequests(_FakeResponse(304))
+        ingest.download_tenders(cache, force=False)
+        after = sorted((cache.parent / "snapshots").glob("*.csv.gz"))
+        check("304 writes no snapshot", len(after) == 1,
+              str([p.name for p in after]))
+    finally:
+        _feed.requests = original
+
+    # A first run has no cached feed. That is not an error and not a snapshot.
+    missing = tmp / "snapshot-case" / "never-downloaded.csv"
+    check("no cache file is a no-op, not a failure",
+          ingest._snapshot_feed(missing) is None)
+    check("...and nothing is written for it",
+          not list((missing.parent / "snapshots").glob("never-downloaded-*")))
+
+
 def main() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="tender-vault-prov-test-"))
     try:
@@ -533,6 +701,8 @@ def main() -> None:
         test_digest_from_unstamped_corpus(tmp)
         test_no_verdict_field(tmp)
         test_dossier_feed_stamp()
+        test_write_delta_is_reported(tmp)
+        test_feed_snapshot(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

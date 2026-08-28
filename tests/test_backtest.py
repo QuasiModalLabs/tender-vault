@@ -5,8 +5,10 @@ Runs with plain Python — no pytest needed:
 
     python tests/test_backtest.py
 
-Exit code 0 = all passed. Skips cleanly when data/notices.db has not been built,
-so a fresh clone without a network fetch still passes.
+Exit code 0 = all passed. Without data/notices.db — which is 120MB and
+gitignored, so CI never has it — the checks that need a corpus are skipped BY
+NAME and counted, and the ones that need no data still run. See
+`runs_without_corpus` for why that is opt-in rather than opt-out.
 
 WHAT THIS GUARDS, and why it is the only test file that matters here. A backtest
 that leaks is worse than no backtest: it produces a confident number, the number
@@ -59,6 +61,28 @@ def skip(label: str) -> None:
     global SKIPPED
     SKIPPED += 1
     print(f"  skip  {label}")
+
+
+def runs_without_corpus(fn):
+    """
+    Mark a test as needing no database, so CI runs it.
+
+    data/notices.db is 120MB and gitignored, so it does not exist on a fresh
+    runner and every test here used to be skipped there — including the frozen
+    predicate guard, which is pure logic and is the one thing standing between a
+    rebuilt corpus and a silently changed predicate.
+
+    OPT IN, NOT OPT OUT, and the direction is the whole point. A test that
+    reaches a database and finds it empty does not fail; it passes over nothing.
+    `as_of` returning no rows dated after T is trivially true when it returns no
+    rows at all, and a green tick that means "there was nothing to check" is the
+    failure mode this repository refuses everywhere else - see the `vacuous`
+    verdict in filter_audit/equivalence.py. So a new test is assumed to need the
+    corpus and is skipped loudly without it; only a test that touches no data at
+    all says so here.
+    """
+    fn.runs_without_corpus = True
+    return fn
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +276,7 @@ def test_partial_years_are_excluded_from_the_panel(con):
           f"covered fiscal years are years: {covered}")
 
 
+@runs_without_corpus
 def test_split_point_handles_a_binary_feature():
     """
     A binary feature has median 1.0 among its non-zero values, so a naive
@@ -267,6 +292,7 @@ def test_split_point_handles_a_binary_feature():
           f"binary feature splits into 95 with-signal rows (got {len(selected)})")
 
 
+@runs_without_corpus
 def test_a_lift_on_thin_data_is_not_called_significant():
     """
     THE SECOND BUG THIS FILE EXISTS FOR. The first verdict function called a
@@ -295,6 +321,7 @@ def test_a_lift_on_thin_data_is_not_called_significant():
     check(not at_base.significant, "a lift of exactly 1.0 is never significant")
 
 
+@runs_without_corpus
 def test_wilson_interval_brackets_the_point_estimate():
     """A CI that does not contain its own estimate would silently invert every
     significance call above."""
@@ -307,21 +334,144 @@ def test_wilson_interval_brackets_the_point_estimate():
           "wilson on an empty sample is total ignorance, not a crash")
 
 
+@runs_without_corpus
+def test_the_frozen_predicate_refuses_a_moved_classifier():
+    """
+    Clause 5 freezes five kind STRINGS. When what those strings denote changes,
+    the predicate must refuse to run rather than quietly describe a different
+    experiment — and it must name what moved, because "something changed" is not
+    something a human can act on.
+
+    The drift is driven by a STAND-IN classifier rather than by the repository's
+    current state. It fired for real once — "Directed Contract" was mapped to
+    `pre_awarded` after the freeze, and the manifest was re-frozen against it on
+    2026-08-21 — and a test that asserted the live state would have passed only
+    until that decision was made. The mechanism is what has to keep working.
+    """
+    row = {"opportunity_kind": "solicitation", "unspsc": "*81111500"}
+
+    # The live classifier and the recorded manifest agree: the re-freeze holds,
+    # and the predicate runs.
+    bt.non_procurement_kinds.cache_clear()
+    check(bt._manifest_sha256(bt._live_kind_manifest())
+          == bt.FROZEN_KIND_MANIFEST_SHA256,
+          "the recorded manifest describes the live classifier")
+    check(bt.is_target_notice(row, ["8111"], []) is True,
+          "...so the frozen predicate runs")
+
+    # Now move a literal into one of the frozen kinds, as 6aea2d0 did.
+    moved = {kind: list(literals)
+             for kind, literals in bt.FROZEN_KIND_MANIFEST.items()}
+    moved["pre_awarded"] = moved["pre_awarded"] + ["notice_type:letter of interest"]
+    original_manifest = bt.kind_manifest
+    bt.kind_manifest = lambda: moved
+    bt.non_procurement_kinds.cache_clear()
+    raised = None
+    try:
+        bt.is_target_notice(row, ["8111"], [])
+    except bt.FrozenPredicateDrift as exc:
+        raised = exc
+    finally:
+        bt.kind_manifest = original_manifest
+        bt.non_procurement_kinds.cache_clear()
+
+    check(raised is not None,
+          "is_target_notice refuses to run under a moved classifier")
+    if raised is not None:
+        message = str(raised)
+        check("pre_awarded" in message,
+              "...naming the kind whose membership changed")
+        check("letter of interest" in message,
+              "...and the literal it gained")
+        check("construction" not in message,
+              "...and NOT a kind whose membership held still")
+        check("discarded and restarted" in message,
+              "...and what resolving it means, rather than how to silence it")
+
+    # A literal LOST from a frozen kind is the same class of change and must
+    # also fire: a notice type that stops meaning `information` starts being
+    # admitted by clause 5.
+    shrunk = {kind: list(literals)
+              for kind, literals in bt.FROZEN_KIND_MANIFEST.items()}
+    shrunk["information"] = []
+    bt.kind_manifest = lambda: shrunk
+    bt.non_procurement_kinds.cache_clear()
+    lost = None
+    try:
+        bt.non_procurement_kinds()
+    except bt.FrozenPredicateDrift as exc:
+        lost = str(exc)
+    finally:
+        bt.kind_manifest = original_manifest
+        bt.non_procurement_kinds.cache_clear()
+    check(lost is not None and "lost" in lost,
+          "a literal LOST from a frozen kind fires too, and says so")
+
+    # The manifest is restricted to the kinds the predicate actually reads. A
+    # literal joining `qualification` cannot change what clause 5 excludes, and
+    # an alarm with no consequence behind it trains people to ignore alarms.
+    check(set(bt.FROZEN_KIND_MANIFEST) == set(bt._NON_PROCUREMENT_KINDS),
+          "the frozen manifest covers exactly the frozen kinds")
+
+    # The recorded hash must describe the recorded manifest. Editing one without
+    # the other leaves neither as a record, and that is a different failure from
+    # the classifier moving.
+    original_hash = bt.FROZEN_KIND_MANIFEST_SHA256
+    bt.FROZEN_KIND_MANIFEST_SHA256 = "0" * 64
+    bt.non_procurement_kinds.cache_clear()
+    bookkeeping = None
+    try:
+        bt.non_procurement_kinds()
+    except bt.FrozenPredicateDrift as exc:
+        bookkeeping = str(exc)
+    finally:
+        bt.FROZEN_KIND_MANIFEST_SHA256 = original_hash
+        bt.non_procurement_kinds.cache_clear()
+    check(bookkeeping is not None and "does not describe" in bookkeeping,
+          "a recorded hash that does not match its manifest is its own failure")
+
+    # And the guard is a gate, not a wall: with the classifier back where it was
+    # frozen, the accessor returns the frozen set unchanged. Asserted by
+    # standing in a manifest, never by re-deriving the set from the live one —
+    # which is the thing the module refuses to do.
+    original_manifest = bt.kind_manifest
+    bt.kind_manifest = lambda: dict(bt.FROZEN_KIND_MANIFEST)
+    bt.non_procurement_kinds.cache_clear()
+    try:
+        check(bt.non_procurement_kinds() == bt._NON_PROCUREMENT_KINDS,
+              "an unmoved classifier returns the frozen set unchanged")
+        check(bt.is_target_notice(row, ["8111"], []) is True,
+              "...and the predicate runs again")
+    finally:
+        bt.kind_manifest = original_manifest
+        bt.non_procurement_kinds.cache_clear()
+
+
 def main() -> int:
-    if not NOTICES_DB.exists():
-        print(f"no {NOTICES_DB.name}; run python scripts/notices_ingest.py — skipping")
-        return 0
-    con = sqlite3.connect(NOTICES_DB)
+    have_corpus = NOTICES_DB.exists()
+    if not have_corpus:
+        print(f"no {NOTICES_DB.name} (build it with python scripts/notices_ingest.py).\n"
+              f"Running the checks that need no corpus; the rest are SKIPPED, "
+              f"which is NOT the same as passing.")
+    con = sqlite3.connect(NOTICES_DB) if have_corpus else None
 
     for name, fn in sorted(globals().items()):
         if not (name.startswith("test_") and callable(fn)):
+            continue
+        # A test taking `con` needs the corpus by construction; a test with no
+        # arguments needs it unless it declared otherwise. See runs_without_corpus.
+        needs_corpus = bool(fn.__code__.co_argcount) or not getattr(
+            fn, "runs_without_corpus", False)
+        if needs_corpus and not have_corpus:
+            skip(f"{name} - needs {NOTICES_DB.name}")
             continue
         print(f"\n{name}")
         if fn.__code__.co_argcount:
             fn(con)
         else:
             fn()
-    con.close()
+    if con is not None:
+        con.close()
 
     print(f"\n{PASSED} passed, {FAILED} failed, {SKIPPED} skipped")
     return 1 if FAILED else 0
