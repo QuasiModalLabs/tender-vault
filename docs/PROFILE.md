@@ -20,12 +20,12 @@ needs a rebuild:
 | Key | Read by | Effect | After editing |
 |---|---|---|---|
 | `unspsc_families`, `competencies`, `exclude` | `scripts/ingest/` | Which notices enter the corpus at all | Re-run `python scripts/ingest` (~2 min) |
-| `imminent_within_days` | `scripts/tender_tools.py`, at query time | Which notices are labelled `imminent`. **Excludes nothing** | **Nothing — takes effect on the next query** |
+| `imminent_within_days` | `scripts/tender_tools/company_profile.py`, at query time | Which notices are labelled `imminent`. **Excludes nothing** | **Nothing — takes effect on the next query** |
 | `value_min` / `value_max` | `scripts/ingest/` | Nothing, unless run with `--extract-values` | Re-run `python scripts/ingest --extract-values` |
 | `plan_themes` | `plans_ingest.py` | How departmental-plan prose is ranked | Re-run `plans_ingest.py` (~1 min) |
 | `oag_themes` | `oag_ingest.py` | How audits are ranked for IT relevance | Re-run `oag_ingest.py` (~1 min) |
 | `contracts_categories`, `contracts_window_years` | `contracts_ingest.py` | Which contracts are persisted | Re-run `contracts_ingest.py` (~630MB, 5–10 min) |
-| `expiry_min_value` | `scripts/tender_tools.py`, at query time | Value floor on `expiring-contracts` and the dossier expiry timeline | **Nothing — takes effect on the next query** |
+| `expiry_min_value` | `scripts/tender_tools/company_profile.py`, at query time | Value floor on `expiring-contracts` and the dossier expiry timeline | **Nothing — takes effect on the next query** |
 | Prose below the frontmatter | Claude, at conversation start | Judgement: capabilities, constraints, what not to bid | **Nothing — takes effect immediately** |
 
 Two of those are worth internalizing. `expiry_min_value` is the only

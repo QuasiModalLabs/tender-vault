@@ -1,7 +1,7 @@
 """
 MCP server exposing tender tools to Claude Desktop (and any MCP client).
 
-Reuses all the logic from tender_tools.py. This file just adapts it to
+Reuses all the logic from tender_tools. This file just adapts it to
 the MCP protocol via the SDK's MCPServer (called FastMCP before mcp 2.0).
 
 To use with Claude Desktop, add to your claude_desktop_config.json:

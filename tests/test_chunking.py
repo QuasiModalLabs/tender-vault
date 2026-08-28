@@ -141,11 +141,11 @@ def test_pooling_takes_max_not_mean() -> None:
         "metadatas": [[{"tender_id": "A"}, {"tender_id": "A"}, {"tender_id": "A"},
                        {"tender_id": "A"}, {"tender_id": "B"}]],
     }
-    ranked = tt._pool_chunk_hits(results)
+    ranked = tt.corpus._pool_chunk_hits(results)
     check("one entry per tender", len(ranked), 2)
     check("the strong single chunk wins", ranked[0][0], "A")
 
-    excluded = tt._pool_chunk_hits(results, exclude_tender_id="A")
+    excluded = tt.corpus._pool_chunk_hits(results, exclude_tender_id="A")
     check("exclusion drops every chunk of that tender",
           [t for t, _ in excluded], ["B"])
 
@@ -154,7 +154,7 @@ def test_chunk_id_without_metadata_still_resolves() -> None:
     print("\nA chunk id resolves to its tender even with metadata missing")
     results = {"ids": [["REF#99#3"]], "distances": [[0.1]], "metadatas": [[{}]]}
     check("id splits on the last separator",
-          tt._pool_chunk_hits(results)[0][0], "REF#99")
+          tt.corpus._pool_chunk_hits(results)[0][0], "REF#99")
 
 
 # ---------------------------------------------------------------------------
@@ -233,10 +233,10 @@ def test_collection_invariants(tmp_db: Path, rows, cols) -> None:
 def test_search_returns_each_tender_once(tmp_db: Path) -> None:
     """Pooling must collapse chunks; a long notice must not fill the results."""
     print("\nSearch returns each tender at most once")
-    original = tt.DB_PATH
+    original = tt.paths.DB_PATH
     try:
-        tt.DB_PATH = tmp_db
-        tt._reset_corpus_state()
+        tt.paths.DB_PATH = tmp_db
+        tt.corpus._reset_corpus_state()
 
         class Args:
             query = "deliverable due within thirty days of contract award"
@@ -248,8 +248,8 @@ def test_search_returns_each_tender_once(tmp_db: Path) -> None:
         check("the chunked notice is reachable by its tail text",
               len(ids) >= 1, True)
     finally:
-        tt.DB_PATH = original
-        tt._reset_corpus_state()
+        tt.paths.DB_PATH = original
+        tt.corpus._reset_corpus_state()
 
 
 def main() -> int:

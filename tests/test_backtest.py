@@ -1,0 +1,331 @@
+"""
+Leakage and predicate invariants for the backtest.
+
+Runs with plain Python — no pytest needed:
+
+    python tests/test_backtest.py
+
+Exit code 0 = all passed. Skips cleanly when data/notices.db has not been built,
+so a fresh clone without a network fetch still passes.
+
+WHAT THIS GUARDS, and why it is the only test file that matters here. A backtest
+that leaks is worse than no backtest: it produces a confident number, the number
+is wrong in the optimistic direction, and nothing about it looks broken. Every
+other property of this module — the fit, the intervals, the report layout — is
+inspectable by reading the output. Leakage is not.
+
+So the assertions below are almost all one shape: NOTHING `as_of(T)` RETURNS MAY
+BE DATED AFTER T. They check the gate against each source table directly rather
+than trusting that the SQL says `<= ?`, because the failure being guarded
+against is someone adding a sixth accessor and forgetting the bound.
+
+The second group guards the frozen predicate, which was already wrong once —
+see the revision note in backtest.py's module docstring — and cost a discarded
+run. `test_amendments_do_not_multiply_a_procurement` is that specific bug,
+written down so it cannot come back.
+"""
+from __future__ import annotations
+
+import sqlite3
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import conftest  # noqa: E402,F401  — import-time vault guard, same as every suite
+import backtest as bt  # noqa: E402
+
+NOTICES_DB = ROOT / "data" / "notices.db"
+PASSED = FAILED = SKIPPED = 0
+
+# A date late enough that every source has rows before it and rows after it. A
+# gate only proves something when both sides are non-empty: `as_of` over a date
+# before all the data trivially returns nothing and leaks nothing.
+PROBE_DATE = "2024-04-01"
+
+
+def check(cond: bool, label: str) -> None:
+    global PASSED, FAILED
+    if cond:
+        PASSED += 1
+        print(f"  ok    {label}")
+    else:
+        FAILED += 1
+        print(f"  FAIL  {label}")
+
+
+def skip(label: str) -> None:
+    global SKIPPED
+    SKIPPED += 1
+    print(f"  skip  {label}")
+
+
+# ---------------------------------------------------------------------------
+# The gate
+# ---------------------------------------------------------------------------
+
+def test_as_of_returns_nothing_dated_after_t():
+    """
+    The core invariant, checked per accessor against the accessor's own date
+    column. Each is listed explicitly rather than discovered by reflection: a
+    new accessor should fail this file by being absent from the list, which is a
+    visible omission, rather than pass by being skipped, which is not.
+    """
+    ev = bt.as_of(PROBE_DATE)
+    cases = [
+        ("audits", ev.audits, "date_published"),
+        ("award_notices", ev.award_notices, "publication_date"),
+        ("notices", ev.notices, "publication_date"),
+        ("contracts", ev.contracts, "contract_date"),
+    ]
+    for name, accessor, column in cases:
+        rows = accessor()
+        if not rows:
+            skip(f"{name}: no rows at {PROBE_DATE} (source not built?)")
+            continue
+        late = [r[column] for r in rows if r[column] and r[column] > PROBE_DATE]
+        check(not late,
+              f"{name}: none of {len(rows):,} rows dated after {PROBE_DATE} "
+              f"({len(late)} leaked{', e.g. ' + late[0] if late else ''})")
+
+
+def test_plans_are_bounded_by_tabling_year():
+    """
+    Plans carry a fiscal year, not a date. The gate admits `year <= FY(T)`,
+    which is conservative under either reading of that column — see
+    Evidence.plans. A plan for a year that has not opened has not been tabled.
+    """
+    ev = bt.as_of(PROBE_DATE)
+    rows = ev.plans()
+    if not rows:
+        skip("plans: no rows (plans.db not built?)")
+        return
+    limit = bt.fiscal_year_of(PROBE_DATE)
+    late = [r["year"] for r in rows if r["year"] > limit]
+    check(not late, f"plans: no row later than FY{limit} ({len(late)} leaked)")
+
+
+def test_the_gate_is_actually_filtering():
+    """
+    A gate that returns everything passes every leak test above. This is the
+    control: an earlier date must return strictly fewer rows than a later one.
+    """
+    early, late = bt.as_of("2023-04-01"), bt.as_of("2025-04-01")
+    n_early, n_late = len(early.notices()), len(late.notices())
+    if not n_late:
+        skip("gate control: no notices at all")
+        return
+    check(n_early < n_late,
+          f"gate control: {n_early:,} notices at 2023-04-01 < {n_late:,} at "
+          f"2025-04-01")
+
+
+def test_evidence_hands_out_no_connection():
+    """
+    Feature functions get an Evidence and must not be able to reach around it.
+    An accessor returning a live cursor or connection would make the gate
+    advisory, which is the same as not having one.
+    """
+    ev = bt.as_of(PROBE_DATE)
+    leaked = [name for name in dir(ev)
+              if isinstance(getattr(ev, name, None),
+                            (sqlite3.Connection, sqlite3.Cursor))]
+    check(not leaked, f"Evidence exposes no connection or cursor ({leaked})")
+
+
+def test_every_feature_is_reachable_only_through_evidence():
+    """
+    Each registered feature must run against an Evidence alone and must carry a
+    written justification of why its inputs are knowable at T. The docstring
+    table is the argument; this is the check that no feature ships without one.
+    """
+    ev = bt.as_of(PROBE_DATE)
+    start, end = bt.fy_bounds(2024)
+    for feat in bt.FEATURES:
+        try:
+            value = feat.fn(ev, "ssc", start, end)
+            ran = isinstance(value, float)
+        except Exception as exc:                      # noqa: BLE001
+            ran = False
+            print(f"        {feat.name} raised {exc!r}")
+        check(ran, f"feature {feat.name} runs against Evidence alone")
+        check(bool(feat.knowable_because.strip()),
+              f"feature {feat.name} states why it is knowable at T")
+
+
+# ---------------------------------------------------------------------------
+# The frozen predicate
+# ---------------------------------------------------------------------------
+
+def test_amendments_do_not_multiply_a_procurement(con):
+    """
+    THE BUG THAT COST A RUN. The first version of clause 6 kept only rows whose
+    amendment_number was zero, on the assumption that an amendment arrives as an
+    extra row sharing a key. It does not: reference_number is unique on every
+    row, and each row carries the amendment count the notice had reached. That
+    filter dropped 83% of real procurements.
+
+    A solicitation that appears as several rows must be counted ONCE.
+    """
+    row = con.execute(
+        """SELECT solicitation_number FROM notices
+            WHERE solicitation_number NOT IN ('', '-')
+            GROUP BY solicitation_number HAVING COUNT(*) > 1 LIMIT 1"""
+    ).fetchone()
+    if not row:
+        skip("no multi-row solicitation in the archive to test against")
+        return
+    soln = row[0]
+    cur = con.execute(
+        """SELECT reference_number, solicitation_number, org_keys,
+                  publication_date FROM notices WHERE solicitation_number = ?""",
+        (soln,))
+    names = [c[0] for c in cur.description]
+    rows = [dict(zip(names, r)) for r in cur]
+    collapsed = bt.target_solicitations(rows)
+    check(len(collapsed) == 1,
+          f"solicitation {soln}: {len(rows)} rows collapse to "
+          f"{len(collapsed)} procurement")
+    if collapsed:
+        record = next(iter(collapsed.values()))
+        check(record["first_published"] == min(r["publication_date"] for r in rows),
+              "a procurement is dated to its EARLIEST publication, not its latest")
+
+
+def test_reference_numbers_are_unique(con):
+    """
+    The fact the original predicate got wrong, asserted so a future change to
+    notices_ingest's primary key cannot quietly restore the bad assumption.
+    """
+    total, distinct = con.execute(
+        "SELECT COUNT(*), COUNT(DISTINCT reference_number) FROM notices"
+    ).fetchone()
+    check(total == distinct,
+          f"reference_number is unique across all {total:,} notice rows "
+          f"({distinct:,} distinct)")
+
+
+def test_placeholder_solicitations_do_not_collide(con):
+    """
+    Three rows carry "-" as their solicitation number. Keying on it would merge
+    unrelated procurements; _solicitation_key falls back to reference_number.
+    """
+    rows = [{"reference_number": f"REF-{i}", "solicitation_number": "-",
+             "org_keys": "ssc", "publication_date": f"2023-0{i}-01"}
+            for i in (1, 2, 3)]
+    collapsed = bt.target_solicitations(rows)
+    check(len(collapsed) == 3,
+          f"three placeholder-solicitation notices stay three procurements "
+          f"(got {len(collapsed)})")
+
+
+def test_label_window_is_half_open(con):
+    """
+    A notice published exactly on 1 April belongs to the year that opens, not
+    the one that closes. Both-inclusive bounds would double-count it.
+    """
+    start, end = bt.fy_bounds(2024)
+    check((start, end) == ("2024-04-01", "2025-04-01"),
+          f"fiscal year 2024 spans [{start}, {end})")
+    check(bt.fiscal_year_of("2024-04-01") == 2024
+          and bt.fiscal_year_of("2024-03-31") == 2023,
+          "1 April opens a fiscal year and 31 March closes the previous one")
+
+
+def test_partial_years_are_excluded_from_the_panel(con):
+    """
+    A year missing four months cannot carry a label: a department with no hit in
+    it has been observed incompletely, not observed to abstain. FY2022-23 is
+    partial because CanadaBuys launched 2022-08-08.
+    """
+    try:
+        covered = bt.covered_fiscal_years(con)
+    except sqlite3.OperationalError:
+        skip("notices.db predates the sources table; re-run notices_ingest.py")
+        return
+    partial = {fy.split("-")[0] for fy, note in con.execute(
+        "SELECT fiscal_year, partial_note FROM sources WHERE partial_note != ''")}
+    overlap = {str(y) for y in covered} & partial
+    check(not overlap, f"no partial fiscal year is in the panel ({overlap or 'none'})")
+    check(all(isinstance(y, int) for y in covered),
+          f"covered fiscal years are years: {covered}")
+
+
+def test_split_point_handles_a_binary_feature():
+    """
+    A binary feature has median 1.0 among its non-zero values, so a naive
+    "split above the median" selects nothing and the row reads as no-signal
+    rather than as broken. That emptied prior_year_hit — the baseline every
+    other feature has to beat.
+    """
+    values = [0.0] * 60 + [1.0] * 95
+    nonzero = sorted(v for v in values if v > 0)
+    threshold = bt._split_point(values, nonzero)
+    selected = [v for v in values if v > threshold]
+    check(len(selected) == 95,
+          f"binary feature splits into 95 with-signal rows (got {len(selected)})")
+
+
+def test_a_lift_on_thin_data_is_not_called_significant():
+    """
+    THE SECOND BUG THIS FILE EXISTS FOR. The first verdict function called a
+    1.41x lift on six observations "a signal worth pursuing". The Wilson
+    interval around 5/6 runs from roughly 44% to 97% and swallows the 71%
+    stratum base rate whole — the lift was noise with a decimal point.
+
+    A bare threshold on the lift cannot catch that, because the lift alone
+    carries no information about how many rows produced it. The interval must
+    exclude the base rate.
+    """
+    thin = bt.StratumLift("audit_it", lift=1.41, k=5, n=6,
+                          stratum_base=0.71, ci=bt.wilson(5, 6))
+    check(not thin.significant,
+          f"5/6 at a 71% base rate is not significant (CI "
+          f"{100 * thin.ci[0]:.0f}-{100 * thin.ci[1]:.0f}%)")
+
+    thick = bt.StratumLift("audit_it", lift=1.41, k=50, n=60,
+                           stratum_base=0.50, ci=bt.wilson(50, 60))
+    check(thick.significant,
+          f"50/60 at a 50% base rate is significant (CI "
+          f"{100 * thick.ci[0]:.0f}-{100 * thick.ci[1]:.0f}%)")
+
+    at_base = bt.StratumLift("x", lift=1.0, k=30, n=60,
+                             stratum_base=0.50, ci=bt.wilson(30, 60))
+    check(not at_base.significant, "a lift of exactly 1.0 is never significant")
+
+
+def test_wilson_interval_brackets_the_point_estimate():
+    """A CI that does not contain its own estimate would silently invert every
+    significance call above."""
+    for k, n in [(0, 10), (1, 10), (5, 10), (9, 10), (10, 10), (33, 52)]:
+        lo, hi = bt.wilson(k, n)
+        check(lo <= k / n <= hi and 0.0 <= lo <= hi <= 1.0,
+              f"wilson({k}/{n}) = {100 * lo:.1f}-{100 * hi:.1f}% brackets "
+              f"{100 * k / n:.1f}%")
+    check(bt.wilson(0, 0) == (0.0, 1.0),
+          "wilson on an empty sample is total ignorance, not a crash")
+
+
+def main() -> int:
+    if not NOTICES_DB.exists():
+        print(f"no {NOTICES_DB.name}; run python scripts/notices_ingest.py — skipping")
+        return 0
+    con = sqlite3.connect(NOTICES_DB)
+
+    for name, fn in sorted(globals().items()):
+        if not (name.startswith("test_") and callable(fn)):
+            continue
+        print(f"\n{name}")
+        if fn.__code__.co_argcount:
+            fn(con)
+        else:
+            fn()
+    con.close()
+
+    print(f"\n{PASSED} passed, {FAILED} failed, {SKIPPED} skipped")
+    return 1 if FAILED else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

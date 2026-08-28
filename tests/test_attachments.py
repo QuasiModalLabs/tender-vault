@@ -64,8 +64,8 @@ def _register_text_extractor(ext: str, version: str = "1.0") -> None:
 def setup_temp_vault() -> Path:
     """A vault with one watching note. The redirect itself lives in conftest."""
     root = conftest.redirect_vault()
-    tt.WATCHING.mkdir(parents=True)
-    (tt.WATCHING / f"{NOTE_STEM}.md").write_text(NOTE, encoding="utf-8", newline="\n")
+    tt.paths.WATCHING.mkdir(parents=True)
+    (tt.paths.WATCHING / f"{NOTE_STEM}.md").write_text(NOTE, encoding="utf-8", newline="\n")
 
     _register_text_extractor(".txt")
     # .later is deliberately NOT registered yet — test_extractor_added_later
@@ -75,7 +75,7 @@ def setup_temp_vault() -> Path:
 
 
 def _folder() -> Path:
-    return tt.WATCHING / NOTE_STEM
+    return tt.paths.WATCHING / NOTE_STEM
 
 
 def _drop(name: str, content: str) -> Path:

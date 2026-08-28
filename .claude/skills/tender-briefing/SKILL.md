@@ -38,10 +38,14 @@ and 6 together are a handful of departments most weeks.
 
 ## Structure
 
-Open with an H1 naming the week, then two lines summarising what needs
-action. Obsidian previews the first lines of a file in its list view —
-that summary is how a reader scans months of briefings without opening
-them.
+Open with an H1 naming the read and its date, then two lines summarising
+what needs action. Obsidian previews the first lines of a file in its list
+view — that summary is how a reader scans months of briefings without
+opening them.
+
+The briefing is weekly; the ingest behind it is daily. Don't name the H1
+after the ingest cadence, and don't imply a week's worth of new notices
+when the corpus may have turned over several times since the last read.
 
 **1. Act now**
 Things with a clock: `closing_window: imminent`, and any
@@ -56,9 +60,9 @@ rather than the day of the ingest. Get it from `list-corpus` or `get`;
 it is not stored in the corpus. A `closed` window means the notice
 expired since the ingest — say so, don't list it as open.
 
-**Nothing goes in this section that doesn't need a decision this
-week, and imminent is not the same as actionable.** Most weeks a dozen
-or more notices are imminent and nearly all are call-ups against a
+**Nothing goes in this section that doesn't need a decision before the
+next read, and imminent is not the same as actionable.** Most reads a
+dozen or more notices are imminent and nearly all are call-ups against a
 vehicle not held, product buys or staff augmentation. Those go to
 section 5 under their failure class exactly as they would at any other
 closing date — putting them here replaces an empty section with a
@@ -101,9 +105,17 @@ context reads normally, and there is no "none found" line.
 
 **4. Vehicles**
 Cross-reference `vault/reference/vehicles.md`. Report qualification
-notices open now, and how many notices this week were gated behind a
-vehicle not held. Record the gating count even when it's zero — a
+notices open now, and how many notices in this corpus were gated behind
+a vehicle not held. Record the gating count even when it's zero — a
 verified zero is what makes the comparison meaningful in three months.
+
+**Record it only when the feed moved.** The ingest is daily and rebuilds
+only on a changed feed, stamping `feed_sha256` into the corpus. If that
+hash matches the one the previous briefing reported, this is a re-read of
+the same data: report the count in the briefing, and add **no new entry**
+to `vehicles.md`. Two readings of one feed are one observation, and
+tallying the second inflates the series the tier decision rests on. That
+file states the rule; this is where it gets applied.
 
 For vehicles already declined in `vehicles.md`, reference rather than
 restate: one line saying how many are open again and pointing at the
@@ -241,12 +253,25 @@ superseded. A count whose period is wrong is not a caveat problem, it is
 a wrong number.
 
 **Report corpus provenance, and never infer it from file timestamps.**
-`list-corpus` returns a `provenance` block: `corpus_built_at` and
-`feed_downloaded_at` as recorded by the ingest, the same two from the
-newest digest, and a `state`. State them in the briefing. If this
-machine's feed stamp is behind the digest's, say so and say plainly that
-the briefing cannot see anything the newer corpus holds — the reader's
-fix is `git pull` then `python scripts/ingest`.
+`list-corpus` returns a `provenance` block: `corpus_built_at`,
+`feed_downloaded_at` and `feed_sha256` as recorded by the ingest, the
+same three from the newest digest, and a `state`. State them in the
+briefing. If this machine's feed differs from the digest's, say so and
+say plainly that the briefing cannot see anything the newer corpus holds
+— the reader's fix is `git pull` then `python scripts/ingest`.
+
+**Read `basis` before you report the comparison.** It says which
+instrument answered "same feed or not": `feed_sha256` is a content match
+and settles it; `feed_downloaded_at` is a fallback used when one side
+carries no hash, and `basis_note` says which side. Download dates are
+per-machine — two machines holding identical bytes disagree on them — so
+a date-based agreement is not evidence of the same data. Report which
+basis was used rather than presenting either as the same finding.
+
+**A daily ingest means being a day behind is normal.** The corpus is
+rebuilt in CI only when the published feed moved, so a corpus several
+days old may be perfectly current. Don't report age as a problem; report
+the stamps and let the comparison speak.
 
 `chroma_db/` mtimes are **not** evidence of anything: ChromaDB rewrites
 its segment files on every read, so they report when you last queried.

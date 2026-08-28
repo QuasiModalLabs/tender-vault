@@ -6,6 +6,8 @@ new one is complete, so a failure part-way leaves you with the corpus you had.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import shutil
 import sys
@@ -32,6 +34,13 @@ def _feed_mtime_iso(feed_path: Optional[Path]) -> Optional[str]:
     moves `corpus_built_at` and leaves this alone, and that difference is the
     only way to tell "I have newer data" from "I re-ran the ingest" — which
     matters because only the first one changes what is in the corpus.
+
+    Still a LOCAL fact, and that is its limit: two machines that downloaded the
+    same bytes an hour apart carry different values here, so this date orders
+    events on one machine and cannot compare two. `feed_sha256` is what does
+    that - see corpus_identity. Kept because "when did this arrive" is a real
+    question that a hash cannot answer, and because a 304 now leaves it alone,
+    which makes it mean when the data last arrived rather than when we last asked.
 
     Returns None rather than raising: --cache can point anywhere, and a test
     harness that drives build_chroma directly has no feed at all.
@@ -183,8 +192,81 @@ def _chunk_document(title: str, desc: str) -> list[str]:
     return [f"{prefix}{b}" for b in bodies]
 
 
+# ---------------------------------------------------------------------------
+# Corpus identity — what a build was made FROM, by content
+# ---------------------------------------------------------------------------
+
+def _sha256_file(path: Optional[Path]) -> Optional[str]:
+    """Content hash of a file, or None when there is no file to hash."""
+    if path is None or not Path(path).exists():
+        return None
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def corpus_identity(feed_path: Optional[Path],
+                    profile_path: Optional[Path]) -> dict[str, str]:
+    """
+    The inputs this corpus was built from, identified by CONTENT.
+
+    Two hashes, because the two answer different questions and a rebuild that
+    changes one is a different event from a rebuild that changes the other. A
+    new `feed_sha256` is new notices; a new `profile_sha256` is a re-scoring of
+    the same ones. `feed_downloaded_at` cannot separate them — it moves whenever
+    bytes arrive, including when the bytes are identical — which is tolerable at
+    one run a week and is a daily false alarm at one run a day.
+
+    Keys are OMITTED when unknown, never None, for the reason `_write_chroma`
+    documents: Chroma raises on a None metadata value. An absent key means "no
+    hash to compare", which is a different finding from "the hashes differ" and
+    must stay distinguishable downstream.
+
+    Deliberately NOT a hash of this file. A change to the filter code alters the
+    corpus without altering either input, so `--skip-unchanged` would sit on a
+    stale build after a deploy. Run without the flag when the code changes; the
+    flag is for the scheduled case, where the code is fixed and the feed is not.
+    """
+    out: dict[str, str] = {}
+    feed = _sha256_file(feed_path)
+    if feed is not None:
+        out["feed_sha256"] = feed
+    profile = _sha256_file(profile_path)
+    if profile is not None:
+        out["profile_sha256"] = profile
+    return out
+
+
+# The identity of the build that produced a corpus, kept INSIDE the corpus
+# directory. Two reasons it is a file rather than a read of the collection
+# metadata that carries the same values. First, opening a ChromaDB client takes
+# OS-level handles on the directory for the life of the process, and
+# `build_chroma` renames that directory — reading the corpus to decide whether
+# to replace it would break replacing it, on Windows, exactly as the comment
+# there records. Second, it needs no chromadb import and no dependency on
+# Chroma's storage schema.
+#
+# The collection metadata remains the portable record: this file is local and
+# gitignored with the rest of chroma_db/, and only ever an optimisation. When it
+# is missing the answer is "rebuild", which is the safe direction.
+IDENTITY_FILENAME = "corpus-identity.json"
+
+
+def stored_identity(db_path: Path) -> dict[str, str]:
+    """Identity of the corpus already at `db_path`. {} when there isn't one."""
+    try:
+        loaded = json.loads(
+            (db_path / IDENTITY_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
 def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
-                 feed_path: Optional[Path] = None) -> None:
+                 feed_path: Optional[Path] = None,
+                 identity: Optional[dict] = None) -> None:
     """
     Embed filtered tenders and write to a persistent ChromaDB collection.
 
@@ -192,6 +274,10 @@ def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
     keyword-defaulted because tests drive this directly with no feed on disk;
     absent means the corpus is stamped with a build time and no feed date,
     which is a different fact from an unstamped corpus.
+
+    `identity` is `corpus_identity()` for this build - content hashes of the
+    inputs. Also optional and for the same reason, and an absent hash stays
+    absent rather than becoming a placeholder.
     """
     # Imported here, not at module level: this is the only function that needs
     # ChromaDB, and contracts_ingest.py imports this module purely for its
@@ -216,7 +302,7 @@ def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
         db_path.rename(retired)
 
     try:
-        _write_chroma(df, db_path, cols, feed_path)
+        _write_chroma(df, db_path, cols, feed_path, identity)
     except BaseException:
         if retired is not None:
             # Best effort: clear whatever partial exists and put the old corpus
@@ -242,9 +328,18 @@ def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
     if retired is not None:
         shutil.rmtree(retired, ignore_errors=True)
 
+    # AFTER the build succeeds, never before. This file is what --skip-unchanged
+    # trusts, so it must not be able to describe a corpus that was never
+    # completed - an absent file costs a rebuild, a premature one costs a
+    # silently stale corpus.
+    (db_path / IDENTITY_FILENAME).write_text(
+        json.dumps(identity or {}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8", newline="\n")
+
 
 def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
-                  feed_path: Optional[Path] = None) -> None:
+                  feed_path: Optional[Path] = None,
+                  identity: Optional[dict] = None) -> None:
     """Embed and write. Split out so build_chroma owns the rollback logic."""
     import chromadb
     from chromadb.utils import embedding_functions
@@ -270,6 +365,12 @@ def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
     feed_at = _feed_mtime_iso(feed_path)
     if feed_at is not None:
         provenance["feed_downloaded_at"] = feed_at
+    # The content hashes ride alongside the timestamps rather than replacing
+    # them. A timestamp says when something happened here; a hash says which
+    # bytes it happened to, and only the second one is comparable across two
+    # machines that downloaded the same feed at different moments. Already
+    # omit-when-unknown by construction - see corpus_identity.
+    provenance.update(identity or {})
 
     collection = client.create_collection(
         name="tenders",

@@ -360,7 +360,7 @@ def resolve_department_arg(value: str | None, flag: str = "--department") -> str
         f"{flag}: {value!r} is not a known organization.\n"
         + (f"  Closest matches: {', '.join(hint)}\n" if hint else "")
         + "  Pass a canonical key from vault/crosswalk/org_aliases.yaml, or an\n"
-          "  organization's registered name. Run `tender_tools.py "
+          "  organization's registered name. Run `tender_tools "
           "resolve-department <name>`\n  to check a string without running a query.\n"
     )
     sys.exit(2)

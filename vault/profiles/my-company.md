@@ -151,7 +151,7 @@ lobbying_window_years: 3
 # an incumbent's award has to be before its expiry is worth flagging. It says
 # nothing about what size of work we would bid. That it currently equals the
 # bottom of the prose fit range ($500K) is coincidence, not a link; changing one
-# does not imply changing the other. Read by tender_tools.py at query time, so
+# does not imply changing the other. Read by tender_tools at query time, so
 # edits take effect immediately with no rebuild.
 expiry_min_value: 500000
 

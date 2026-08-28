@@ -56,10 +56,14 @@ from .classify import (  # noqa: E402,F401
 from .cli import main  # noqa: E402,F401
 from .company_profile import _imminence_threshold, parse_profile  # noqa: E402,F401
 from .corpus import (  # noqa: E402,F401
+    IDENTITY_FILENAME,
+    _chunk_document,
     _feed_mtime_iso,
     _meta_str,
     _write_chroma,
     build_chroma,
+    corpus_identity,
+    stored_identity,
 )
 from .dates import (  # noqa: E402,F401
     _BODY_DATE,

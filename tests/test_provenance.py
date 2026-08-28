@@ -206,17 +206,17 @@ def test_states(tmp: Path) -> None:
     print("\nProvenance states")
     digests = tmp / "digests"
     digests.mkdir(parents=True, exist_ok=True)
-    original_collection, original_digests = tt._collection, tt.DIGESTS
-    tt.DIGESTS = digests
+    original_collection, original_digests = tt.corpus._collection, tt.paths.DIGESTS
+    tt.paths.DIGESTS = digests
     try:
         # -- local corpus states -------------------------------------------
-        tt._collection = FakeCollection({"hnsw:space": "cosine"})
+        tt.corpus._collection = FakeCollection({"hnsw:space": "cosine"})
         out = tt._corpus_provenance()
         check("unstamped corpus reports 'unstamped'",
               out["state"] == "unstamped", out["state"])
         check("unstamped corpus carries a note", bool(out.get("note")))
 
-        tt._collection = FakeCollection(
+        tt.corpus._collection = FakeCollection(
             {"corpus_built_at": "2026-08-09T14:27:11"})
         out = tt._corpus_provenance()
         check("built with no feed reports 'no_feed_at_build'",
@@ -260,7 +260,7 @@ def test_states(tmp: Path) -> None:
               out["newest_digest_state"] == "stamped",
               out.get("newest_digest_state"))
     finally:
-        tt._collection, tt.DIGESTS = original_collection, original_digests
+        tt.corpus._collection, tt.paths.DIGESTS = original_collection, original_digests
 
 
 # ---------------------------------------------------------------------------
@@ -279,8 +279,8 @@ def test_comparison(tmp: Path) -> None:
     print("\nComparison against the newest digest")
     digests = tmp / "digests-cmp"
     digests.mkdir(parents=True, exist_ok=True)
-    original_collection, original_digests = tt._collection, tt.DIGESTS
-    tt.DIGESTS = digests
+    original_collection, original_digests = tt.corpus._collection, tt.paths.DIGESTS
+    tt.paths.DIGESTS = digests
 
     def digest_with(built: str, feed: str) -> None:
         for old in digests.glob("digest-*.md"):
@@ -292,7 +292,7 @@ def test_comparison(tmp: Path) -> None:
     try:
         # Identical on both stamps.
         digest_with("2026-08-09T14:27:11", "2026-08-09T13:52:45")
-        tt._collection = FakeCollection({
+        tt.corpus._collection = FakeCollection({
             "corpus_built_at": "2026-08-09T14:27:11",
             "feed_downloaded_at": "2026-08-09T13:52:45"})
         out = tt._corpus_provenance()
@@ -301,7 +301,7 @@ def test_comparison(tmp: Path) -> None:
               out.get("reading"))
 
         # Same feed, later build. NOT behind.
-        tt._collection = FakeCollection({
+        tt.corpus._collection = FakeCollection({
             "corpus_built_at": "2026-08-11T20:00:00",
             "feed_downloaded_at": "2026-08-09T13:52:45"})
         out = tt._corpus_provenance()
@@ -313,14 +313,14 @@ def test_comparison(tmp: Path) -> None:
 
         # Feed moved: genuinely behind.
         digest_with("2026-08-11T09:00:00", "2026-08-11T08:30:00")
-        tt._collection = FakeCollection({
+        tt.corpus._collection = FakeCollection({
             "corpus_built_at": "2026-08-09T14:27:11",
             "feed_downloaded_at": "2026-08-09T13:52:45"})
         out = tt._corpus_provenance()
         check("older feed -> 'behind on data'",
               "behind on data" in out.get("reading", ""), out.get("reading"))
     finally:
-        tt._collection, tt.DIGESTS = original_collection, original_digests
+        tt.corpus._collection, tt.paths.DIGESTS = original_collection, original_digests
 
 
 # ---------------------------------------------------------------------------
@@ -338,13 +338,13 @@ def test_digest_roundtrip(tmp: Path) -> None:
 
     digests = tmp / "digests-rt"
     digests.mkdir(parents=True, exist_ok=True)
-    original = (tt.DIGESTS,
-                digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT, tt.DB_PATH)
+    original = (tt.paths.DIGESTS,
+                digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT, tt.paths.DB_PATH)
     try:
-        tt.DB_PATH = db
+        tt.paths.DB_PATH = db
         # One call, not a hand-listed tuple of globals: see _reset_corpus_state.
-        tt._reset_corpus_state()
-        tt.DIGESTS = digests
+        tt.corpus._reset_corpus_state()
+        tt.paths.DIGESTS = digests
         digest_mod.DIGEST_DIR = digests
         digest_mod.CORPUS_SNAPSHOT = digests / "corpus-latest.txt"
 
@@ -387,10 +387,10 @@ def test_digest_roundtrip(tmp: Path) -> None:
         except ImportError:
             print("        (PyYAML absent -- skipped the YAML coercion check)")
     finally:
-        tt._reset_corpus_state()
-        (tt.DIGESTS,
+        tt.corpus._reset_corpus_state()
+        (tt.paths.DIGESTS,
          digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT,
-         tt.DB_PATH) = original
+         tt.paths.DB_PATH) = original
 
 
 def test_digest_from_unstamped_corpus(tmp: Path) -> None:
@@ -430,10 +430,10 @@ def test_digest_from_unstamped_corpus(tmp: Path) -> None:
 
     digests = tmp / "digests-unstamped"
     digests.mkdir(parents=True, exist_ok=True)
-    original = (digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT, tt.DB_PATH)
+    original = (digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT, tt.paths.DB_PATH)
     try:
-        tt.DB_PATH = db
-        tt._reset_corpus_state()
+        tt.paths.DB_PATH = db
+        tt.corpus._reset_corpus_state()
         digest_mod.DIGEST_DIR = digests
         digest_mod.CORPUS_SNAPSHOT = digests / "corpus-latest.txt"
 
@@ -443,9 +443,9 @@ def test_digest_from_unstamped_corpus(tmp: Path) -> None:
         check("no empty '---\\n---' emitted",
               "---\n---" not in content, content[:60])
     finally:
-        tt._reset_corpus_state()
+        tt.corpus._reset_corpus_state()
         (digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT,
-         tt.DB_PATH) = original
+         tt.paths.DB_PATH) = original
 
 
 # ---------------------------------------------------------------------------
@@ -456,10 +456,12 @@ def test_no_verdict_field(tmp: Path) -> None:
     """
     There is deliberately no `stale` field, and no threshold anywhere.
 
-    How old is too old is not stateable — the ingest cron is weekly, so two
-    days old is normal — and a boolean verdict in a data field is exactly the
+    How old is too old is not stateable — the ingest cron runs daily but only
+    rebuilds when the published feed moved, so a corpus several days old can be
+    perfectly current — and a boolean verdict in a data field is exactly the
     judgement `vault/CLAUDE.md` keeps out of these tools. Asserted rather than
-    trusted, because "a boolean would be convenient here" is how it comes back.
+    trusted, because "a boolean would be convenient here" is how it comes back,
+    and a daily cadence is precisely the situation that makes it tempting.
     """
     print("\nNo verdict field")
     digests = tmp / "digests-verdict"
@@ -468,8 +470,8 @@ def test_no_verdict_field(tmp: Path) -> None:
         '---\ncorpus_built_at: "2026-08-11T09:00:00"\n'
         'feed_downloaded_at: "2026-08-11T08:30:00"\n---\n\n# d\n',
         encoding="utf-8")
-    original_collection, original_digests = tt._collection, tt.DIGESTS
-    tt.DIGESTS = digests
+    original_collection, original_digests = tt.corpus._collection, tt.paths.DIGESTS
+    tt.paths.DIGESTS = digests
     banned = {"stale", "is_stale", "fresh", "age_days", "corpus_age_days",
               "days_old", "ok", "healthy"}
     try:
@@ -479,7 +481,7 @@ def test_no_verdict_field(tmp: Path) -> None:
             {"corpus_built_at": "2026-08-09T14:27:11",
              "feed_downloaded_at": "2026-08-09T13:52:45"},
         ):
-            tt._collection = FakeCollection(meta)
+            tt.corpus._collection = FakeCollection(meta)
             out = tt._corpus_provenance()
             hit = banned & set(out)
             check(f"no verdict field for {out['state']}", not hit, str(hit))
@@ -491,7 +493,7 @@ def test_no_verdict_field(tmp: Path) -> None:
                   not (out.get("feed_downloaded_at")
                        and not out.get("corpus_built_at")))
     finally:
-        tt._collection, tt.DIGESTS = original_collection, original_digests
+        tt.corpus._collection, tt.paths.DIGESTS = original_collection, original_digests
 
 
 # ---------------------------------------------------------------------------
@@ -504,8 +506,8 @@ def test_dossier_feed_stamp() -> None:
     it must date what IT read rather than inherit the corpus stamp.
     """
     print("\nDossier feed stamp")
-    if not tt._TENDERS_CSV.exists():
-        print(f"  SKIP  {tt._TENDERS_CSV} not present")
+    if not tt.paths._TENDERS_CSV.exists():
+        print(f"  SKIP  {tt.paths._TENDERS_CSV} not present")
         return
     section = tt._dossier_tenders("dnd", limit=1)
     if section.get("state") == "no_feed":
@@ -516,7 +518,7 @@ def test_dossier_feed_stamp() -> None:
     check("dossier stamp is a str", isinstance(stamp, str), repr(stamp))
     check("dossier stamp matches the CSV it read",
           stamp == datetime.fromtimestamp(
-              tt._TENDERS_CSV.stat().st_mtime).isoformat(timespec="seconds"),
+              tt.paths._TENDERS_CSV.stat().st_mtime).isoformat(timespec="seconds"),
           repr(stamp))
 
 

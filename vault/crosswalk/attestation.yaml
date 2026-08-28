@@ -12,6 +12,12 @@
 # `last_seen` not advancing on a run means the name was not observed that day.
 # Only a name that has NEVER been observed, and so has no record here at all, is
 # an error — see tests/test_crosswalk.py.
+#
+# The daily ingest workflow runs --attest after every ingest that found a
+# changed feed, so `last_seen` reads as "the most recent day a published feed
+# carried this name". Before that it was whenever someone remembered, against a
+# feed sampled once a week — which is how the two bootstrap records below came
+# to exist at all.
 
 names:
   Canada Energy Regulator:
@@ -21,23 +27,23 @@ names:
     - tender_contracting
     count: 4
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Canadian Armed Forces:
     key: dnd
     sources:
     - oag
-    count: 5
+    count: 6
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Canadian Coast Guard:
     key: dfo
     sources:
     - oag
     - tender_contracting
     - tender_end_user
-    count: 25
+    count: 30
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Canadian Transportation Accident Investigation and Safety Board:
     sources:
     - tender_contracting
@@ -54,66 +60,66 @@ names:
     - tender_contracting
     count: 4
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Correctional Services Canada:
     key: csc
     sources:
     - oag
     count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Department of Citizenship & Immigration:
     key: ircc
     sources:
     - tender_contracting
     - tender_end_user
-    count: 4
+    count: 5
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Department of Foreign Affairs, Trade and Development:
     key: gac
     sources:
     - tender_contracting
-    count: 7
+    count: 10
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Department of Industry:
     key: ised
     sources:
     - tender_end_user
     count: 4
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Department of Public Safety and Emergency Preparedness:
     key: public-safety
     sources:
     - tender_contracting
     count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Department of Public Works and Government Services:
     key: pspc
     sources:
     - tender_contracting
     - tender_end_user
-    count: 492
+    count: 502
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Department of the Environment:
     key: eccc
     sources:
     - tender_contracting
     - tender_end_user
-    count: 3
+    count: 7
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Elections Canada:
     key: elections-canada
     sources:
     - tender_contracting
     count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Foreign Affairs, Trade And Development:
     key: gac
     sources:
@@ -121,35 +127,35 @@ names:
     - tender_end_user
     count: 2
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Immigration Refugee Board:
     key: irb
     sources:
     - tender_contracting
     count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Immigration and Refugee Board:
     key: irb
     sources:
     - tender_contracting
-    count: 1
+    count: 2
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Infrastructure Canada:
     key: housing-infrastructure
     sources:
     - oag
     count: 4
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Office of the Chief Electoral Officer:
     key: elections-canada
     sources:
     - tender_contracting
     count: 5
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Parks Canada:
     key: parks-canada
     sources:
@@ -158,15 +164,15 @@ names:
     - tender_end_user
     count: 19
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Parks Canada Agency:
     key: parks-canada
     sources:
     - tender_contracting
     - tender_end_user
-    count: 28
+    count: 32
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Polar Knowledge Canada:
     sources:
     - tender_contracting
@@ -183,21 +189,21 @@ names:
     - tender_end_user
     count: 25
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Royal Canadian Mounted Police:
     key: rcmp
     sources:
     - oag
     - tender_contracting
     - tender_end_user
-    count: 21
+    count: 26
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'
   Treasury Board:
     key: tbs
     sources:
     - oag
     - tender_contracting
-    count: 16
+    count: 17
     first_seen: '2026-08-09'
-    last_seen: '2026-08-09'
+    last_seen: '2026-08-17'

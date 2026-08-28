@@ -22,7 +22,7 @@ def matched_competencies(text: str, competencies: list[str]) -> list[str]:
     # "flaws", "withdrawals", or the French "travaux". The old substring version
     # inflated the corpus with archaeology and bridge tenders that merely
     # contained the letters a-w-s, and surfaced a $3.75M exhibits contract as a
-    # top "AWS" result in the weekly digest. Multi-word competencies like
+    # top "AWS" result in the digest. Multi-word competencies like
     # "it modernization" still match as a phrase with boundaries at each end.
     text_lower = text.lower()
     matched = []

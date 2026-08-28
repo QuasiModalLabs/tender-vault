@@ -97,6 +97,37 @@ COLUMN_CANDIDATES = {
     "description": ["description_en", "description"],
     "procurement_id": ["procurement_id"],
     "reference": ["reference_number"],
+    # --- Three columns that were in the source all along and thrown away -----
+    # Added for the backtest, but they are not backtest-specific facts: each
+    # answers a question the stored 12 columns could not.
+    #
+    # commodity_code is the only capability classification an award carries. The
+    # README records capability tracking as a dead end because "a $585 million
+    # contract is described in fifty-seven characters" — which is true of
+    # description_en and not of this field. It is a MIXED taxonomy, mostly GSIN
+    # (D302A = IT and Telecommunications Consultants) with some UNSPSC
+    # (81110000), 4,474 distinct values, populated on 65% of rows. Mixed and
+    # partial is still far better than absent, but nothing may join on it
+    # without checking which taxonomy a given value is in.
+    #
+    # solicitation_procedure (66% populated) separates competed work from
+    # directed. TC/TN/OB are competitive, ST/AC are not.
+    #
+    # number_of_bids (24% populated) is how contested the competition was. The
+    # sparsest of the three, and the only one whose absence is not obviously
+    # missing-at-random, so treat a null as unknown rather than as "one bid".
+    "commodity_code": ["commodity_code"],
+    "solicitation_procedure": ["solicitation_procedure"],
+    "number_of_bids": ["number_of_bids"],
+    # The quarterly disclosure window, e.g. "2023-2024-Q4". The ONLY column in
+    # this file that says when a row became public. contract_date is when the
+    # contract was signed, which is not the same thing and runs ahead of it by
+    # 70 days at the median and 1,020 at the 95th percentile — so any as-of-T
+    # gate built on contract_date shows evidence that was not yet disclosed.
+    # Blank on 20.9% of rows; reference_number encodes the same quarter and
+    # covers 97.2%, and the union of the two covers 99.3%. Stored raw here;
+    # casebook.py does the reconciliation and holds the +30-day deadline rule.
+    "reporting_period": ["reporting_period"],
 }
 
 
@@ -222,19 +253,31 @@ def open_source(source: str | None):
 
 def filter_chunk(chunk: pd.DataFrame, cols: dict, matchers,
                  cutoff: datetime) -> pd.DataFrame:
-    """Apply competency filter and keep rows within the recency window."""
+    """
+    Apply competency filter and keep rows within the recency window.
+
+    An EMPTY matcher list means no term filter — every row inside the window is
+    kept, with matched_terms left blank. That is not a degenerate case of the
+    filter, it is a different question: the profile's IT categories are right
+    for a lead list and wrong for an experiment whose capabilities span the
+    corpus, because a capability the filter drops has no contract evidence at
+    all and its A-vs-B comparison would be measuring the filter.
+    """
     desc = chunk[cols["description"]].fillna("").astype(str).str.lower()
 
-    def matched_terms(text: str) -> str:
-        return ",".join(term for term, needle in matchers if needle in text)
+    if matchers:
+        def matched_terms(text: str) -> str:
+            return ",".join(term for term, needle in matchers if needle in text)
 
-    terms = desc.map(matched_terms)
-    keep = terms != ""
-    if not keep.any():
-        return pd.DataFrame()
-
-    sub = chunk[keep].copy()
-    sub["_matched"] = terms[keep]
+        terms = desc.map(matched_terms)
+        keep = terms != ""
+        if not keep.any():
+            return pd.DataFrame()
+        sub = chunk[keep].copy()
+        sub["_matched"] = terms[keep]
+    else:
+        sub = chunk.copy()
+        sub["_matched"] = ""
 
     # effective date = max(award, period_end). See the long note below for why
     # this beats strict period-overlap: it captures recent awards (market shape)
@@ -316,12 +359,34 @@ def to_records(sub: pd.DataFrame, cols: dict) -> list[tuple]:
             _s(row.get(cols["period_end"]), 10) if cols["period_end"] else "",
             value,
             row["_matched"],
+            _s(row.get(cols["commodity_code"]), 20) if cols["commodity_code"] else "",
+            (_s(row.get(cols["solicitation_procedure"]), 10)
+             if cols["solicitation_procedure"] else ""),
+            _bids(row.get(cols["number_of_bids"])) if cols["number_of_bids"] else None,
+            _s(row.get(cols["reporting_period"]), 20) if cols["reporting_period"] else "",
         ))
     return records
 
 
+def _bids(raw):
+    """
+    number_of_bids as an int, or None.
+
+    None means the field was blank, which is 76% of rows. It is NOT one bid and
+    NOT zero bids — a directed contract and an unreported competition both land
+    here, and storing either as a number would invent a fact about how contested
+    the award was.
+    """
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return None
+    try:
+        return int(float(str(raw).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
 def build_db(records_iter, window_years: int, source_note: str,
-             db_path: Path = DB_PATH) -> int:
+             db_path: Path = DB_PATH, term_filter: bool = True) -> int:
     # Staged write: nothing touches db_path until the new database is complete.
     # The previous version unlinked the real DB here and then pulled from
     # records_iter — which is where resolve_columns used to run — so a schema
@@ -331,21 +396,30 @@ def build_db(records_iter, window_years: int, source_note: str,
             CREATE TABLE contracts (
                 family_id TEXT, reference TEXT, vendor TEXT, vendor_norm TEXT, org TEXT,
                 owner_org TEXT, description TEXT, contract_date TEXT, period_start TEXT,
-                period_end TEXT, value REAL, matched_terms TEXT
+                period_end TEXT, value REAL, matched_terms TEXT,
+                commodity_code TEXT, solicitation_procedure TEXT, number_of_bids INTEGER,
+                reporting_period TEXT
             )
         """)
         con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
         total = 0
         for records in records_iter:
-            con.executemany("INSERT INTO contracts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", records)
+            con.executemany(
+                "INSERT INTO contracts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", records)
             total += len(records)
         con.execute("CREATE INDEX idx_vendor ON contracts(vendor_norm)")
         con.execute("CREATE INDEX idx_org ON contracts(org)")
+        con.execute("CREATE INDEX idx_commodity ON contracts(commodity_code)")
+        con.execute("CREATE INDEX idx_contract_date ON contracts(contract_date)")
         for k, v in [
             ("ingest_date", datetime.now().strftime("%Y-%m-%d")),
             ("window_years", str(window_years)),
             ("source", source_note),
             ("row_count", str(total)),
+            # Which corpus this is. A tool quoting a department total from an
+            # unfiltered DB as though it were the profile's IT total would be
+            # wrong by an order of magnitude, and nothing else here says so.
+            ("term_filter", "profile" if term_filter else "none"),
             ("licence", "Open Government Licence - Canada"),
         ]:
             con.execute("INSERT INTO meta VALUES (?, ?)", (k, v))
@@ -720,7 +794,7 @@ def write_agency_intel(
             # real dependency. The dossier pointer is the other case — generic
             # "how to read this" on every file, discriminating nothing. It keeps
             # its links where they mean something: _attribution_note in
-            # tender_tools.py emits [[dossier]] only when attribution is weak.
+            # tender_tools emits [[dossier]] only when attribution is weak.
             f"Filtered to the competencies in [[my-company]]. For how this reads "
             f"against the other three signals on a department, see "
             f"`vault/reference/dossier.md`.",
@@ -798,12 +872,41 @@ def main():
     )
     parser.add_argument("--force", action="store_true", help="Re-download even if cached")
     parser.add_argument(
+        "--window-years", type=int, default=None,
+        help="Override the profile's contracts_window_years. The profile's 3 is "
+             "right for a lead list — an incumbent from 2015 is not an incumbent. "
+             "It is wrong for anything that needs history: a backtest whose "
+             "features must be knowable at a past date T cannot see contracts "
+             "the window already dropped. Widening costs disk and ingest time "
+             "and changes no other behaviour; the stored window_years in meta "
+             "says which was used, and any tool reading this DB should check it "
+             "before quoting a total.",
+    )
+    parser.add_argument(
         "--db", type=Path, default=None,
         help=f"Output DB path (default {DB_PATH}). --source redirects output to a "
              ".sample path unless this is given, so testing on a trimmed CSV "
              "cannot replace the committed database.",
     )
+    parser.add_argument(
+        "--no-term-filter", action="store_true",
+        help="Keep every contract row in the window instead of only rows whose "
+             "description matches the profile's contracts_categories. Required "
+             "by the case experiment, whose capabilities span the corpus rather "
+             "than one firm's profile. Costs disk (~10x) and changes no other "
+             "behaviour; meta.term_filter records which was used. Refuses to "
+             "write the profile-scoped default DB, since the intel files and "
+             "MCP tools reading it assume the filter ran.",
+    )
     args = parser.parse_args()
+
+    if args.no_term_filter and args.db is None:
+        sys.stderr.write(
+            "--no-term-filter needs an explicit --db. The default database is "
+            f"profile-scoped and read by tender_tools; writing an unfiltered\n"
+            f"corpus over it would silently change what every intel file and "
+            f"MCP tool reports. Try: --db data/contracts_full.db\n")
+        sys.exit(2)
 
     db_path = output_path(
         DB_PATH, args.db,
@@ -813,7 +916,8 @@ def main():
     is_sample = db_path != DB_PATH
 
     criteria = parse_profile(args.profile)
-    window_years = criteria.get("contracts_window_years", 3)
+    window_years = (args.window_years if args.window_years is not None
+                    else criteria.get("contracts_window_years", 3))
     # Contracts describe work as procurement CATEGORIES, not prose, so they need
     # their own vocabulary. Fall back to competencies only if categories unset.
     categories = criteria.get("contracts_categories") or criteria["competencies"]
@@ -822,9 +926,14 @@ def main():
         sys.exit(1)
 
     cutoff = datetime.now() - timedelta(days=365 * window_years)
-    matchers = build_matchers(categories)
-    print(f"Window: last {window_years} years (cutoff {cutoff:%Y-%m-%d})")
-    print(f"Contract categories (substring): {categories}")
+    matchers = [] if args.no_term_filter else build_matchers(categories)
+    source_of_window = "--window-years" if args.window_years is not None else "profile"
+    print(f"Window: last {window_years} years (cutoff {cutoff:%Y-%m-%d}, "
+          f"from {source_of_window})")
+    if matchers:
+        print(f"Contract categories (substring): {categories}")
+    else:
+        print("Term filter: OFF (--no-term-filter); keeping every row in the window")
 
     if args.force and not args.source:
         download_to_cache(force=True)
@@ -857,7 +966,8 @@ def main():
                 print(f"  ...scanned {state['seen']:,} rows")
 
     source_note = args.source or CONTRACTS_URL
-    kept = build_db(records_gen(), window_years, source_note, db_path)
+    kept = build_db(records_gen(), window_years, source_note, db_path,
+                    term_filter=not args.no_term_filter)
     print(f"\nScanned {state['seen']:,} rows, kept {kept:,} matching contract rows")
     print(f"SQLite written to {db_path} ({db_path.stat().st_size / 1e6:.1f} MB)")
 
