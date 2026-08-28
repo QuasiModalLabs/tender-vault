@@ -1655,6 +1655,120 @@ def _lobbying_rows(con, where: list, params: list, limit: int) -> tuple[list, di
     return rows, dpohs, subjects
 
 
+def _produced_by(command: str, db: Path, meta: dict) -> dict:
+    """
+    Name the path that produced a number, so a reader can tell a tool answer
+    from something typed by hand.
+
+    Every figure in a briefing is supposed to be reproducible by re-running one
+    command. That guarantee is invisible in the output, which is how it gets
+    broken: when this command was too slow to finish, its numbers were replaced
+    with equivalent hand-written SQL against the same database and nothing on
+    the page recorded the difference. The figures happened to be right; nobody
+    reading the file could have known either way, and the next substitution
+    might not be.
+
+    So the answer carries its own attribution. A number quoted with a
+    `produced_by` is one somebody else can re-derive; a number without one has
+    no standing, and the briefing skill treats it as unciteable.
+    """
+    return {
+        "command": command,
+        "database": str(db.relative_to(PROJECT_ROOT)),
+        "source_sha256": (meta.get("source_sha256") or "")[:12],
+        "ingest_date": meta.get("ingest_date"),
+        "rule": (
+            "Quote this beside any figure taken from this result. If this "
+            "command cannot complete, the briefing SAYS SO and the section "
+            "goes without the number — it is never backfilled from an ad-hoc "
+            "query, however obviously correct that query looks."
+        ),
+    }
+
+
+def _subject_coverage(con, matched_where: list, matched_params: list) -> dict:
+    """
+    The date range a subject-filtered answer ACTUALLY describes, read off the
+    data rather than off the window parameter.
+
+    `window.latest` is the newest communication in the database. It is not
+    necessarily the newest one that carries a subject code, and when those two
+    dates diverge every --subject filter answers about the coded period while
+    appearing to answer about the window.
+
+    That happened. On the archive acquired 2026-08-24 the two were twenty-three
+    months apart — subjects stopped at 2024-09-30 while communications ran to
+    2026-08-21, leaving 72,341 rows (65% of the windowed database) invisible to
+    any subject filter, and a briefing quoted the resulting counts as current.
+    The cause was an ingest that read Communication_SubjectMattersExport.csv and
+    not Communication_SubjectMatterDetailsExport.csv, which carries the same
+    vocabulary for every communication after that date; lobbying_ingest.py now
+    reads both, and a healthy build reports `state: complete`.
+
+    This block stays regardless, because the fix and the guard answer different
+    questions. The fix made today's data whole. The guard is what will say so
+    the next time the Office changes the export and nobody notices for a month.
+
+    That is the same failure the corpus provenance block exists to prevent: a
+    number that is correct about its rows and wrong about its period, presented
+    with a date that belongs to something else. So this is derived the same way
+    — measured from the rows, reported next to the parameter it contradicts,
+    and carrying a `state` a caller can branch on rather than prose it has to
+    parse.
+
+    `coded_*` describes the subject vocabulary across the whole database.
+    `matched_*` describes the specific result being returned. They are separate
+    because a department can be quiet inside a period that is fully coded, and
+    that is a real finding, where a period that is not coded at all is not.
+    """
+    coded_earliest, coded_latest, coded_n = con.execute(
+        "SELECT MIN(c.comm_date), MAX(c.comm_date), COUNT(DISTINCT c.comlog_id) "
+        "FROM communications c JOIN communication_subjects s "
+        "ON s.comlog_id = c.comlog_id").fetchone()
+    db_earliest, db_latest, db_n = con.execute(
+        "SELECT MIN(comm_date), MAX(comm_date), COUNT(*) FROM communications"
+    ).fetchone()
+    matched_earliest, matched_latest = con.execute(
+        f"SELECT MIN(c.comm_date), MAX(c.comm_date) FROM communications c "
+        f"WHERE {' AND '.join(matched_where)}", matched_params).fetchone()
+
+    uncoded = (db_n or 0) - (coded_n or 0)
+    truncated = bool(coded_latest and db_latest and coded_latest < db_latest)
+
+    cov = {
+        "effective_earliest": coded_earliest,
+        "effective_latest": coded_latest,
+        "matched_earliest": matched_earliest,
+        "matched_latest": matched_latest,
+        "communications_with_subject": coded_n,
+        "communications_without_subject": uncoded,
+        "state": "truncated" if truncated else "complete",
+    }
+    if truncated:
+        pct = round(100 * uncoded / db_n) if db_n else 0
+        cov["reading"] = (
+            f"SUBJECT CODES STOP AT {coded_latest}. This result describes "
+            f"{coded_earliest} to {coded_latest}, NOT the window's "
+            f"{db_earliest} to {db_latest}. The archive carries no subject row "
+            f"for any communication after {coded_latest}, so {uncoded:,} "
+            f"communications ({pct}% of the database) are invisible to any "
+            f"--subject filter. A count from this result is a count for the "
+            f"coded period only — quote that period beside it, and never read "
+            f"it as current. This is missing CODING, not missing activity. "
+            f"Check first whether the ingest is reading every subject member of "
+            f"the archive (this exact symptom was once "
+            f"Communication_SubjectMatterDetailsExport.csv going unread, not a "
+            f"defect at the Office); run without --subject meanwhile, to see "
+            f"whether the department is still being met."
+        )
+    else:
+        cov["reading"] = (
+            f"Subject coding reaches {coded_latest}, the newest communication "
+            f"in the database, so this result describes the full window."
+        )
+    return cov
+
+
 def cmd_lobbying_signals(args) -> dict:
     """
     Who has been in the room with a department, about what, and when — the
@@ -1770,16 +1884,24 @@ def cmd_lobbying_signals(args) -> dict:
             f"WHERE {' AND '.join(where)} AND d.dept_key IS NOT NULL "
             f"GROUP BY 1 ORDER BY n DESC LIMIT 15", params)
     ]
+    # Derived before the connection closes, and attached to every subject-filtered
+    # answer including the empty one — an empty result is exactly where a missing
+    # period is most likely to be misread as a quiet department.
+    coverage = _subject_coverage(con, where, params) if subject else None
     con.close()
 
     if not rows:
-        return {"as_of": meta.get("ingest_date"), "communications": 0,
-                "window": _lobbying_window(meta),
-                "note": "Nothing matched. Check --subject against "
-                        "--list-subjects, and remember the database holds only "
-                        f"the window described above ({meta.get('window_cutoff')} "
-                        "onward) — an older meeting is not absent, it is out of "
-                        "scope."}
+        empty = {"as_of": meta.get("ingest_date"), "communications": 0,
+                 "produced_by": _produced_by("lobbying-signals", db, meta),
+                 "window": _lobbying_window(meta),
+                 "note": "Nothing matched. Check --subject against "
+                         "--list-subjects, and remember the database holds only "
+                         f"the window described above ({meta.get('window_cutoff')} "
+                         "onward) — an older meeting is not absent, it is out of "
+                         "scope."}
+        if coverage:
+            empty["subject_coverage"] = coverage
+        return empty
 
     results = []
     for (comlog, date, client_name, _norm, reg_type,
@@ -1803,8 +1925,9 @@ def cmd_lobbying_signals(args) -> dict:
             if client_num is not None else str(comlog),
         })
 
-    return {
+    out = {
         "as_of": meta.get("ingest_date"),
+        "produced_by": _produced_by("lobbying-signals", db, meta),
         "window": _lobbying_window(meta),
         "matched": totals,
         "returned": len(results),
@@ -1833,6 +1956,21 @@ def cmd_lobbying_signals(args) -> dict:
             "program-signals and expiring-contracts for the same capability."
         ),
     }
+    if coverage:
+        # Placed after `window` in reading order but asserted here so it cannot
+        # be dropped by an edit to the literal above: a subject-filtered result
+        # without its effective range is the defect this block exists to close.
+        out["subject_coverage"] = coverage
+        if coverage["state"] == "truncated":
+            out["window"] = dict(out["window"])
+            out["window"]["note"] = (
+                "SUPERSEDED FOR THIS RESULT by subject_coverage — `latest` "
+                f"below is the newest communication in the database "
+                f"({coverage['effective_latest']} is the newest one carrying a "
+                "subject code). A --subject filter cannot see past that date. "
+                + out["window"].get("note", "")
+            )
+    return out
 
 
 def cmd_registrations_signals(args) -> dict:

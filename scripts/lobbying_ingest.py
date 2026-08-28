@@ -136,6 +136,7 @@ import csv
 import hashlib
 import io
 import re
+import sqlite3
 import sys
 import zipfile
 from datetime import datetime
@@ -203,6 +204,28 @@ ACQUISITION_HELP = (
 PRIMARY_MEMBER = "communication_primaryexport.csv"
 DPOH_MEMBER = "communication_dpohexport.csv"
 SUBJECT_MEMBER = "communication_subjectmattersexport.csv"
+# THE SECOND HALF OF THE SUBJECT DATA, and reading only the file above silently
+# loses it. The Office changed how subjects are exported partway through the
+# series, and the two files partition the dataset by communication rather than
+# duplicating it:
+#
+#   SubjectMatters   COMLOG_ID 73,734 - 689,815   308,091 comms   ends 2024-09-30
+#   SubjectMatterDetails  COMLOG_ID 615,832 - 698,638    72,339 comms   begins there
+#
+# 308,091 + 72,339 = 380,430 of 380,442 published communications; the residue is
+# communications filed with no subject at all. So there is no gap in the source
+# — an ingest that reads SubjectMatters alone simply stops seeing subjects at
+# 2024-09-30 while the communications keep arriving, which reads downstream as
+# "nobody lobbied about this any more" and is the most dangerous shape an error
+# can take in this project.
+#
+# The two files do not share a format. SubjectMatters is normalized, one row per
+# code. Details packs the codes into ONE field as a comma-joined list —
+# "SMT-8, SMT-17, SMT-20, ..." — beside a free-text DESCRIPTION. Splitting that
+# list is what makes the second era filterable on the same vocabulary as the
+# first: Government Procurement (SMT-17) appears on 7,651 communications in
+# Details against 1,669 in the whole of SubjectMatters.
+SUBJECT_DETAILS_MEMBER = "communication_subjectmatterdetailsexport.csv"
 # The subject vocabulary, shipped inside the same zip as the data it decodes.
 # Read rather than transcribed: a 54-entry list copied into this file would be
 # a second source of truth for the labels callers filter on, and the day the
@@ -243,6 +266,14 @@ SUBJECT_COLUMNS = {
     "comlog_id": ["COMLOG_ID"],
     "code": ["SUBJECT_CODE_OBJET"],
     "other_subject": ["CUSTOM_SUBJ_OBJET_PERSO"],
+}
+# Same code column name, different contents: here it is a comma-joined LIST.
+# DESCRIPTION is the filer's free prose about the requirement and takes the
+# place CUSTOM_SUBJ_OBJET_PERSO holds in the older file.
+SUBJECT_DETAIL_COLUMNS = {
+    "comlog_id": ["COMLOG_ID"],
+    "code": ["SUBJECT_CODE_OBJET"],
+    "description": ["DESCRIPTION"],
 }
 CODES_COLUMNS = {
     "code": ["SUBJECT_CODE_OBJET"],
@@ -652,6 +683,7 @@ def read_members(source: Path) -> dict[str, tuple[list[dict], dict, int]]:
         "primary": (PRIMARY_MEMBER, PRIMARY_COLUMNS),
         "dpoh": (DPOH_MEMBER, DPOH_COLUMNS),
         "subjects": (SUBJECT_MEMBER, SUBJECT_COLUMNS),
+        "subject_details": (SUBJECT_DETAILS_MEMBER, SUBJECT_DETAIL_COLUMNS),
         "codes": (CODES_MEMBER, CODES_COLUMNS),
     }
     out: dict[str, tuple[list[dict], dict, int]] = {}
@@ -700,6 +732,46 @@ def _num(value) -> int | None:
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
+
+# The two composite indexes the read path actually needs, kept in one place so
+# a build and a migration cannot disagree about what "indexed" means.
+#
+# Every department filter in tender_tools is a correlated EXISTS of the shape
+#   EXISTS (SELECT 1 FROM communication_dpohs d
+#           WHERE d.comlog_id = c.comlog_id AND d.dept_key = ?)
+# and the single-column idx_dpoh_dept is the wrong index for it: SQLite seeks on
+# dept_key and then filters comlog_id, so the subquery walks EVERY row for that
+# department once per communication in the outer scan. That is 110,619 x 11,429
+# for ISED, and it is why lobbying-signals took ~80 seconds a department and
+# looked hung rather than slow. Leading with comlog_id turns each subquery into a
+# point lookup: measured 23.28s -> 0.13s on the same query, ~180x.
+#
+# Both are covering indexes for their subquery, so neither touches the table.
+QUERY_INDEXES = (
+    ("idx_dpoh_comlog_dept", "communication_dpohs(comlog_id, dept_key)"),
+    ("idx_subj_comlog_subject", "communication_subjects(comlog_id, subject)"),
+)
+
+
+def ensure_query_indexes(con) -> list[str]:
+    """
+    Create the read-path composite indexes if they are missing.
+
+    Idempotent and additive — it writes no data and changes no row, so it is
+    safe on a database built by an older ingest. Returns the names it created,
+    empty if they were already there.
+    """
+    existing = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'index'")}
+    created = []
+    for name, target in QUERY_INDEXES:
+        if name not in existing:
+            con.execute(f"CREATE INDEX {name} ON {target}")
+            created.append(name)
+    if created:
+        con.execute("ANALYZE")
+    return created
+
 
 def build_db(members: dict, provenance: dict, archive_members: list,
              max_comms: int | None, window_years: int | None,
@@ -831,6 +903,39 @@ def build_db(members: dict, provenance: dict, archive_members: list,
         other = _txt(r[scols["other_subject"]]) if subject.lower() == "other" else ""
         subjects.append((_num(r[scols["comlog_id"]]), subject, other))
 
+    # --- second era: the Details file -------------------------------------
+    # Same vocabulary, different packing. Deduplicated against what the first
+    # file already produced because the two id ranges overlap (615,832-689,815)
+    # even though the date ranges do not, and a communication counted twice
+    # would inflate every `matched` this project prints.
+    detail_rows, dcols, _ = members["subject_details"]
+    seen = {(c, s) for c, s, _ in subjects}
+    subjects_from_details = 0
+    for r in detail_rows:
+        comlog = _txt(r[dcols["comlog_id"]])
+        if comlog not in keep:
+            continue
+        packed = _txt(r[dcols["code"]])
+        description = _txt(r[dcols["description"]])
+        for code in (x.strip() for x in packed.split(",")):
+            if not code:
+                continue
+            subject = code_labels.get(code, "")
+            if not subject:
+                unknown_codes[code] = unknown_codes.get(code, 0) + 1
+                continue
+            key = (_num(r[dcols["comlog_id"]]), subject)
+            if key in seen:
+                continue
+            seen.add(key)
+            # DESCRIPTION is prose about the requirement, not a subject label,
+            # so it is kept only where 'Other' means the vocabulary genuinely
+            # could not carry it — the same rule the older file's custom column
+            # gets, for the same reason.
+            other = description if subject.lower() == "other" else ""
+            subjects.append((key[0], subject, other))
+            subjects_from_details += 1
+
     if unknown_codes:
         listed = ", ".join(f"{c or '(blank)'} x{n:,}"
                            for c, n in sorted(unknown_codes.items(),
@@ -878,8 +983,15 @@ def build_db(members: dict, provenance: dict, archive_members: list,
         con.execute("CREATE INDEX idx_dpoh_dept ON communication_dpohs(dept_key)")
         con.execute("CREATE INDEX idx_subj_comlog ON communication_subjects(comlog_id)")
         con.execute("CREATE INDEX idx_subj ON communication_subjects(subject)")
+        ensure_query_indexes(con)
 
         dates = [c[1] for c in comms if c[1]]
+        # Hoisted deliberately. Inlining this set into the generator that reads
+        # it rebuilds all ~446k entries once per communication — 110,619 x
+        # 446,000, which ran for 77 minutes at full CPU with no disk activity
+        # before it was caught. The cost of the comprehension is invisible at
+        # the point of use, which is exactly why it belongs on its own line.
+        coded_comlogs = {s[0] for s in subjects}
         amendments = sum(1 for c in comms if c[13] is not None)
         superseded_present = len(
             {c[13] for c in comms if c[13] is not None} & {c[0] for c in comms}
@@ -897,6 +1009,15 @@ def build_db(members: dict, provenance: dict, archive_members: list,
             "communications": str(len(comms)),
             "dpoh_rows": str(len(dpohs)),
             "subject_rows": str(len(subjects)),
+            # Split by era so a reader can see the seam rather than infer it.
+            # If the second number is ever 0 on an archive that contains the
+            # Details member, subject coverage has silently reverted to ending
+            # 2024-09-30 and every --subject answer is describing the wrong
+            # period — which is exactly how this was missed the first time.
+            "subject_rows_from_details": str(subjects_from_details),
+            "subject_coverage_latest": max(
+                (c[1] for c in comms if c[1] and c[0] in coded_comlogs),
+                default=""),
             # What the window means, in the terms a reader needs to judge a
             # count: how many the Office published, how many survived, and the
             # date the cut was made at. "No meetings" and "no meetings in the
@@ -987,7 +1108,29 @@ def main():
     parser.add_argument("--show-institutions", action="store_true",
                         help="Print every institution and the population it "
                              "was classified into (audit aid)")
+    parser.add_argument(
+        "--reindex", action="store_true",
+        help="Add the read-path composite indexes to an existing database and "
+             "stop. Additive and idempotent: it writes no rows and re-reads no "
+             "archive, so it does not touch provenance. For a database built "
+             "by an ingest that predates those indexes.",
+    )
     args = parser.parse_args()
+
+    if args.reindex:
+        db_path = args.db or DB_PATH
+        if not db_path.exists():
+            sys.stderr.write(f"\nNo database at {db_path} — nothing to reindex.\n")
+            sys.exit(2)
+        con = sqlite3.connect(db_path)
+        created = ensure_query_indexes(con)
+        con.commit()
+        con.close()
+        if created:
+            print(f"Created on {db_path}: {', '.join(created)}")
+        else:
+            print(f"{db_path} already carries the read-path indexes.")
+        return
 
     try:
         source = locate_source(args.source)
