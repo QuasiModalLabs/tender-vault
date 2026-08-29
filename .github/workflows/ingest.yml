@@ -30,11 +30,18 @@ name: Tender ingest
 # needs a few times a year. So the gate — OAG, the test suites, the MCP import
 # check — stays on Monday, and Tuesday through Sunday run the ingest alone.
 #
-# Cron day-of-week: 1 is Monday and 7 is Sunday, so `2-7` is Tue..Sun.
+# CRON DAY-OF-WEEK IS 0-6 HERE, 0 BEING SUNDAY. It is NOT the POSIX range that
+# also accepts 7 for Sunday. `2-7` parses fine as YAML, is rejected by Actions
+# as an invalid schedule, and takes the WHOLE workflow down with it: the run is
+# a startup failure with no jobs, the Monday cron beside it never fires either,
+# and the workflow shows in the Actions list under its file path instead of its
+# name because the name was never parsed. Nothing reports it as a broken
+# schedule -- the symptom is an ingest that silently stops running.
+# So Tue..Sun is written as `0,2-6`: Sunday, then Tuesday through Saturday.
 on:
   schedule:
     - cron: "0 11 * * 1"    # Monday — full gate, then ingest
-    - cron: "0 11 * * 2-7"  # Tue-Sun — ingest only
+    - cron: "0 11 * * 0,2-6"  # Tue-Sun — ingest only (0 is Sunday)
   workflow_dispatch:
 
 # Only one ingest can run at a time. If a new run starts, cancel any pending one.
