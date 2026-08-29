@@ -171,22 +171,25 @@ def _dossier_audits(dept: str, limit: int) -> dict:
     if not direct and not bundled:
         section["state"] = "no_audits_attributed"
         section["note"] = (
-            f"No audit in this corpus is attributed to {dept!r}. That is not the "
-            f"same as a clean record: of {federal} federal audits, {resolved} were "
-            f"attributed to a department and {federal - resolved} were not — an "
-            "audit that names no department, or names a body outside the federal "
-            "executive, resolves to nobody. The residual is where a missed finding "
-            "would be hiding."
+            f"No audit here is pinned to {dept!r}. That is not the same as a "
+            f"clean record. Of {federal} federal audits, {resolved} could be "
+            f"pinned to a department and {federal - resolved} could not — an "
+            "audit that names nobody, or names a body outside the federal "
+            "government, has nowhere to go. If a finding about this department "
+            "has been missed, that leftover pile is where it would be."
         )
     else:
         section["state"] = "attributed"
     section["how_to_read"] = (
+        "Two lists, and they are not the same strength of evidence. "
         "direct_findings are audits that name this department in the finding "
-        "itself. bundle_attached are committee briefing packages that cite a "
-        "report naming it — real scrutiny, weaker evidence, and "
-        "parent_reports_in_bundle says how many reports the package covered "
-        "(the more it covered, the less it is about this department "
-        "specifically). Never read the two as one list."
+        "itself — the Auditor General looked at them. bundle_attached are packs "
+        "put together for a committee hearing that happen to cite a report naming "
+        "them: still real scrutiny, but second-hand. parent_reports_in_bundle "
+        "counts how many separate reports the pack covered, and the more it "
+        "covered, the less it is about this department in particular. NEVER read "
+        "the two as one list: adding them together makes a department look more "
+        "looked-at than it is."
     )
     return section
 
@@ -207,11 +210,11 @@ def _dossier_plans(dept: str, plan_ids: list, limit: int) -> dict:
     if not plan_ids:
         return {
             "state": "files_no_plans",
-            "note": f"{dept!r} files no departmental plans at all — it has no "
-                    "Infobase organization id, so this dataset has nothing to "
-                    "say about it. A handful of organizations publish contracts "
-                    "but file no plans. That is a fact about the organization, "
-                    "not missing data.",
+            "note": f"{dept!r} files no yearly plan at all — the government's "
+                    "plan database has no entry for it, so this source has "
+                    "nothing to say either way. A handful of bodies disclose "
+                    "contracts but file no plans. That is a fact about the "
+                    "body, not a hole in our data.",
         }
 
     con = sqlite3.connect(db)
@@ -374,10 +377,10 @@ def _dossier_contracts(dept: str, slugs: list, rows_by_slug: dict,
     if not slugs:
         return {
             "state": "no_slug",
-            "note": f"{dept!r} publishes no contracts under its own slug, so this "
-                    "dataset cannot answer for it. Some organizations file plans "
-                    "but disclose no contracts of their own. That is a fact about "
-                    "the organization, not a build failure.",
+            "note": f"{dept!r} discloses no contracts under a name of its own, "
+                    "so this source cannot answer for it. Some bodies file "
+                    "plans but buy nothing in their own right. That is a fact "
+                    "about the body, not a broken build.",
         }
 
     today = datetime.now()
@@ -417,11 +420,11 @@ def _dossier_contracts(dept: str, slugs: list, rows_by_slug: dict,
             "state": "slug_but_no_rows",
             "slugs": slugs,
             "as_of": meta.get("ingest_date"),
-            "note": f"{dept!r} owns {len(slugs)} CKAN slug(s) but has no rows in "
-                    f"this extract, which covers the last "
-                    f"{meta.get('window_years')} years filtered to IT and "
-                    "telecom categories. The organization discloses contracts; "
-                    "none of them are recent IT work.",
+            "note": f"{dept!r} discloses contracts under {len(slugs)} name(s), "
+                    f"but none of them show up here. We keep only the last "
+                    f"{meta.get('window_years')} years, and only IT and telecom "
+                    "work. So they do buy things; none of it is recent IT "
+                    "work.",
         }
 
     timeline = [
@@ -593,13 +596,15 @@ def _dossier_tenders(dept: str, limit: int) -> dict:
     else:
         section["state"] = "open_notices"
     section["how_to_read"] = (
-        "entity_source says how the notice reached this department. 'end_user' "
-        "means it named them as the customer. Anything else means they are the "
-        "contracting entity — attributed via contracting entity, end user "
-        "unstated — which for SSC and PSPC frequently means they are buying for "
-        "somebody else entirely. in_profile_corpus marks the notices that also "
-        "cleared our profile filter; the rest are the department being in "
-        "market regardless of our fit."
+        "entity_source says how the notice got attached to this department. "
+        "end_user means the notice named them as the customer — they are the "
+        "ones who want the work. Anything else means they are only the buyer on "
+        "paper. Shared Services Canada and Public Services and Procurement Canada "
+        "buy federal IT for other departments all the time, so a notice can carry "
+        "their name while the work is for someone else entirely; do not call them "
+        "the customer without checking. in_profile_corpus marks the notices that "
+        "also got through our own filter. The rest are this department out in the "
+        "market whether or not the work suits us."
     )
     return section
 
@@ -681,16 +686,16 @@ def _dossier_lobbying(dept: str, limit: int) -> dict:
     else:
         section["state"] = "present"
     section["how_to_read"] = (
-        "Evidence of PRESENCE, never of influence, and never a finding about "
-        "any firm named — filing these reports is what compliance with the "
-        "Lobbying Act looks like. Read it as: this department has been hearing "
-        "from these organizations, on these subjects, over this period. "
-        "on_government_procurement is the subset filed under that subject "
-        "specifically, which is the one that bears directly on a coming "
-        "requirement. Cross-read against the plans and contracts sections: a "
-        "firm meeting a department about procurement while that department "
-        "plans to modernize a system it already holds the contract for is an "
-        "incumbent defending a renewal."
+        "Proof of who was in the room. NEVER proof that anyone got anything for "
+        "it, and never a mark against any firm named here — filing these reports "
+        "is what obeying the Lobbying Act looks like. Read it as: this department "
+        "has been hearing from these firms, on these subjects, over this stretch "
+        "of time. on_government_procurement counts only the meetings filed under "
+        "buying, which is the slice that bears on work the department has not put "
+        "out yet. Read it beside the plans and contracts sections: a firm meeting "
+        "a department about buying, while that department plans to overhaul a "
+        "system the same firm already holds the contract for, is a sitting "
+        "supplier defending its patch."
     )
     return section
 
@@ -746,18 +751,18 @@ def cmd_department_dossier(args) -> dict:
         "lobbying": _dossier_lobbying(dept, limit),
         "tenders": _dossier_tenders(dept, limit),
         "how_to_read": (
-            "Five independent sources on one department. Read them together and "
-            "form your own judgement — there is no score here on purpose. What "
-            "you are looking for is agreement between sections: an audit finding "
-            "and a plan and an expiring incumbent that are all about the same "
-            "system. An empty section is information too, and each one says "
-            "which kind of empty it is — no data, or no signal. The lobbying "
-            "section is the exception to 'read them together': it is evidence "
-            "of who was present, never of influence, and it may not be used to "
-            "explain why any other section says what it says. Check "
-            "identity.records_folded_in before quoting any total: where a "
-            "predecessor or absorbed organization has been folded in, the "
-            "registry's note says what the number actually covers."
+            "Five separate sources on one department. Read them side by side "
+            "and make your own call — there is no score here, on purpose. What "
+            "you are looking for is sections that agree: an audit finding, a "
+            "plan, and a supplier contract running out, all pointing at the same "
+            "system. An empty section tells you something too, and each one says "
+            "which kind of empty it is — we hold no data, or there is no signal. "
+            "The lobbying section is the one you must not fold in with the rest: "
+            "it shows who was in the room, never that anyone swayed anything, and "
+            "it may not be used to explain why any other section says what it "
+            "says. Before quoting any total, look at identity.records_folded_in "
+            "— where an older or absorbed body has been counted in, the note "
+            "there says what the number really covers."
         ),
     }
 

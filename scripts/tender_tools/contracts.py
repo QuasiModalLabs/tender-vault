@@ -45,9 +45,9 @@ def cmd_contracts_intel(args) -> dict:
     if dept:
         if not slugs:
             return {"query": args.query, "department": dept, "families": 0,
-                    "note": f"{dept!r} publishes no contracts under its own slug, "
-                            "so this dataset cannot answer for it. That is a real "
-                            "fact about the organization, not a build failure."}
+                    "note": f"{dept!r} discloses no contracts under a name of "
+                            "its own, so this source cannot answer for it. That "
+                            "is a real fact about the body, not a broken build."}
         where.append(f"owner_org IN ({','.join('?' * len(slugs))})")
         params += slugs
 
@@ -166,8 +166,8 @@ def cmd_expiring_contracts(args) -> dict:
         if not slugs:
             con.close()
             return {"department": dept, "expiring": 0,
-                    "note": f"{dept!r} publishes no contracts under its own slug, "
-                            "so this dataset cannot answer for it."}
+                    "note": f"{dept!r} discloses no contracts under a name of "
+                            "its own, so this source cannot answer for it."}
         where.append(f"owner_org IN ({','.join('?' * len(slugs))})")
         params += slugs
 

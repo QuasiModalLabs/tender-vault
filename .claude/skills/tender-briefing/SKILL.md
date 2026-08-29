@@ -156,6 +156,79 @@ section can report. Name it as convergence; don't compute anything from it.
 has downloaded it — give me the download line rather than dropping the
 content silently. That is a missing file, never an absence of activity.
 
+## Language
+
+Write for someone who has never seen this pipeline. A briefing is read in
+Obsidian by a person deciding whether to bid, not by the tool that made
+it, and a sentence they have to decode is a sentence that costs them
+time at the point where time is the whole problem.
+
+**Never print a field name where a sentence belongs.** The corpus is full
+of machine names — `closing_window`, `kind_basis`, `entity_source`,
+`opportunity_kind`, `matched_competencies` — and they are good for
+looking a thing up, not for telling a reader what is true. Say the fact
+in words. Put the field in backticks after it only where the reader may
+want to go and check it. Where the field *is* the finding — a
+`closing_date_conflict`, a weak `kind_basis` — name it **as well as**
+saying it in words, never instead of it. Plainer must not mean vaguer.
+
+> Not: *`closing_window: imminent`; `kind_basis: prose_vehicle_name`.*
+>
+> Instead: *closes Thursday at 14:00, inside the ten-day window the
+> profile treats as imminent — and it is only a TBIPS job going by the
+> title, with no arrangement number anywhere in the notice
+> (`kind_basis: prose_vehicle_name`).*
+
+**A number that came from a setting has to name the setting.** This is the
+trap on the other side of the rule above. *"Twelve close within ten days"*
+reads beautifully and hides the fact that ten is a number in the profile,
+not a fact about the world — so a reader who thinks the threshold is wrong
+never learns it is theirs to change. Name it once, where the threshold
+first does any work: *"twelve fall inside the ten-day window the profile
+treats as urgent (`imminent_within_days`)"*. Thereafter plain words are
+fine. The same goes for any count shaped by `expiry_min_value`, the
+competency list, or the commodity-code families.
+
+**Gloss a government term where the argument turns on it — in practice,
+§4.** One clause, inside the sentence, never a footnote. Not on every
+first use: this file is read most weeks by someone who learned these
+terms months ago, and glossing each one every time is the same paragraph
+twenty weeks running. Gloss where *being on a list, or not* is the point
+being made; elsewhere use the term plainly and let [[notice-kinds]] carry
+the definition. The ones worth a clause when they are carrying the
+argument:
+
+- a **call-up** — a job competed only among firms already on a standing
+  supplier list
+- a **supply arrangement** or **standing offer** — one of those lists: being
+  on it is what lets you bid, and is not a contract in itself
+- a **qualification notice** — a posting that puts suppliers onto such a
+  list. It buys nothing today
+- a **results notice** — an announcement of who already qualified. Nothing
+  to bid for; the door is shut
+- an **RFI** — the department asking questions, with nothing yet to bid on
+- an **ACAN** — notice that the department already intends to award to a
+  named firm
+- a **set-aside** — work reserved for a defined group of suppliers, which
+  no amount of fit gets you past
+
+[[notice-kinds]] carries the full set and the exact definitions, and is
+the right destination for a reader who wants more than a clause.
+
+**Reach for the short word.** *corpus* → this read, what's open, the
+filtered set — it is the most pipeline-native word in the vocabulary and
+the easiest to leave in by habit; *gated* → shut out of; *instrument* → what
+kind of notice it is; *residual* → what is left over; *attribution* → who
+it belongs to; *convergence* → two signals landing on the same buyer;
+*disqualifying* → what rules us out; *incumbent* → the firm holding it
+now; *imminent* → closing in days. The Latin word hides the decision, the
+plain word puts it in front of the reader. This applies to the briefing's
+own prose, not to quoted text.
+
+**Quote the government word for word.** Their wording is the evidence,
+and softening a mandatory requirement into plainer English is how a bid
+gets lost on a technicality. Quote it, then gloss it if it needs one.
+
 ## Presentation
 
 Use Obsidian callouts. They're native, need no plugins, and degrade to

@@ -4,9 +4,26 @@
 
 ## Two rules that govern the whole thing
 
-**There is no score in it, and you should not compute one.** The five signals are incommensurable; any weighting would be invented, and a single number hides the reasoning that makes the dossier worth reading. Say what converges and why, in words — *"the AG flagged their IT modernization in 2023, their own plan names the same systems, and the incumbent's contract runs out in February"* — never "convergence: 8/10." This is the whole architecture of the tool.
+**There is no score in it, and you should not compute one.** The five signals do not share a unit, so any weighting would be made up, and a single number hides the reasoning that makes the dossier worth reading. Say what converges and why, in words — *"the AG flagged their IT modernization in 2023, their own plan names the same systems, and the incumbent's contract runs out in February"* — never "convergence: 8/10." This is the whole architecture of the tool.
 
 **Tenders are not required, and their absence is the most valuable case.** A department with an audit finding, a stated plan, an expiring incumbent and no open tender is the pre-RFP position worth acting on: the work is coming and nobody has been asked yet. An empty tenders section never weakens the case. Say so out loud rather than treating it as a miss.
+
+## Writing it up
+
+The JSON is for you; what reaches the reader is prose. Two rules, the same
+ones the briefing skill sets out in full under **Language**:
+
+**Don't hand over a field name as if it were English.** `entity_source`,
+`records_folded_in`, `bundle_attached` and the `state` values are lookup
+keys. Say what they mean — *"the notice names SSC as the buyer, not the
+customer"* — and put the key in backticks after it only if the reader may
+want to check it.
+
+**Gloss a government term the first time you use it.** A call-up, a supply
+arrangement, a set-aside, an ACAN: one clause in passing, in the sentence
+itself. [[notice-kinds]] holds the full definitions.
+
+Quoted text from a notice or an audit stays word for word.
 
 ## The sections
 
