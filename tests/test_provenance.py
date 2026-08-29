@@ -118,14 +118,14 @@ def _one_row_frame() -> tuple[pd.DataFrame, dict]:
 def _collection_metadata(db_path: Path) -> dict:
     import chromadb
     return dict(
-        chromadb.PersistentClient(path=str(db_path))
+        chromadb.PersistentClient(path=str(ingest.paths.active_db(db_path)))
         .get_collection("tenders").metadata or {})
 
 
 def _collection_count(db_path: Path) -> int:
     """Rows the corpus actually holds, as opposed to what it says it holds."""
     import chromadb
-    return (chromadb.PersistentClient(path=str(db_path))
+    return (chromadb.PersistentClient(path=str(ingest.paths.active_db(db_path)))
             .get_collection("tenders").count())
 
 

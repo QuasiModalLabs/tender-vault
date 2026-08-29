@@ -198,7 +198,7 @@ def test_collection_invariants(tmp_db: Path, rows, cols) -> None:
     print("\nThe two collections agree with each other")
     import chromadb
 
-    client = chromadb.PersistentClient(path=str(tmp_db))
+    client = chromadb.PersistentClient(path=str(ingest.paths.active_db(tmp_db)))
     tenders = client.get_collection("tenders").get()
     chunks = client.get_collection("tender_chunks").get()
 

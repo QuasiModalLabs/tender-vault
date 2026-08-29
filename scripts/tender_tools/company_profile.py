@@ -99,7 +99,7 @@ def _profile_corpus_ids() -> set[str]:
     for the embedding model just to answer "is this one we already track?".
     """
     import sqlite3
-    db = paths.DB_PATH / "chroma.sqlite3"
+    db = paths.active_db() / "chroma.sqlite3"
     if not db.exists():
         return set()
     con = sqlite3.connect(db)

@@ -80,7 +80,8 @@ def build_multivalued_corpus(tmp_db: Path):
 def test_all_values_survive(multi: pd.DataFrame, cols: dict, tmp_db: Path) -> int:
     import chromadb
 
-    collection = chromadb.PersistentClient(path=str(tmp_db)).get_collection("tenders")
+    collection = chromadb.PersistentClient(
+        path=str(ingest.paths.active_db(tmp_db))).get_collection("tenders")
     stored = {
         m["tender_id"]: m["end_user_entity"]
         for m in collection.get(include=["metadatas"])["metadatas"]
@@ -109,7 +110,8 @@ def test_fields_are_distinct(multi: pd.DataFrame, cols: dict, tmp_db: Path) -> N
     """The two entity fields must be stored separately, never merged."""
     import chromadb
 
-    collection = chromadb.PersistentClient(path=str(tmp_db)).get_collection("tenders")
+    collection = chromadb.PersistentClient(
+        path=str(ingest.paths.active_db(tmp_db))).get_collection("tenders")
     metadatas = collection.get(include=["metadatas"])["metadatas"]
     for m in metadatas:
         assert "contracting_entity" in m, "contracting_entity missing from metadata"

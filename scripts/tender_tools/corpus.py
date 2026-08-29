@@ -124,14 +124,20 @@ def _do_load():
     import chromadb
     from chromadb.utils import embedding_functions
 
-    if not paths.DB_PATH.exists():
+    # Resolve the live build through the CURRENT pointer. paths.DB_PATH is the
+    # container; the collection lives in whichever build it names. See
+    # paths.active_db — a rebuild writes a new build beside this one rather
+    # than replacing it, precisely so a long-lived reader like the MCP server
+    # can hold this open without blocking the next ingest.
+    db = paths.active_db()
+    if not db.exists():
         sys.stderr.write(
             f"ChromaDB not found at {paths.DB_PATH}.\n"
             f"Run: python scripts/ingest\n"
         )
         sys.exit(2)
 
-    client = chromadb.PersistentClient(path=str(paths.DB_PATH))
+    client = chromadb.PersistentClient(path=str(db))
     embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name="all-MiniLM-L6-v2"
     )

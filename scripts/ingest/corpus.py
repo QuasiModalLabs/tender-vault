@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import sys
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+
+from . import paths
 
 
 def _meta_str(value, limit: int) -> str:
@@ -258,7 +261,8 @@ def stored_identity(db_path: Path) -> dict[str, str]:
     """Identity of the corpus already at `db_path`. {} when there isn't one."""
     try:
         loaded = json.loads(
-            (db_path / IDENTITY_FILENAME).read_text(encoding="utf-8"))
+            (paths.active_db(db_path) / IDENTITY_FILENAME)
+            .read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return loaded if isinstance(loaded, dict) else {}
@@ -285,56 +289,72 @@ def build_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
     import chromadb
     from chromadb.utils import embedding_functions
 
-    # We want a clean snapshot, not accumulated cruft — but the old corpus is
-    # moved ASIDE rather than deleted, so a failure part-way through the build
-    # doesn't leave us with nothing.
+    # A REBUILD NEVER TOUCHES THE DIRECTORY A READER MAY HAVE OPEN. The corpus
+    # is a container holding build directories plus a one-line CURRENT file
+    # naming the live one; a rebuild writes a new build beside the old and then
+    # repoints CURRENT. See paths.active_db for the failure that forced this.
+    # Briefly: scripts/mcp_server.py holds a ChromaDB client open for the life
+    # of a Claude Desktop session, and the previous strategy began by renaming
+    # chroma_db/ out of the way, which Windows refuses while those handles
+    # exist. On 2026-08-28 that cost a full feed download and embed before
+    # dying with PermissionError [WinError 5], leaving an untouched corpus
+    # behind an advanced feed cache - the exact stale-mismatch state the
+    # provenance block exists to report.
     #
-    # Why aside rather than the usual build-to-temp-and-rename: ChromaDB holds
-    # OS-level handles on its directory for the life of the client, so renaming
-    # a freshly built temp directory into place fails on Windows with
-    # PermissionError (verified). Renaming the OLD directory works, because
-    # nothing has it open yet.
-    retired = None
-    if db_path.exists():
-        retired = db_path.with_name(db_path.name + ".old")
-        if retired.exists():
-            shutil.rmtree(retired)
-        db_path.rename(retired)
+    # The ordering also gives rollback for free: CURRENT still names the old
+    # build until the new one is complete, so a failure below leaves the corpus
+    # as it was rather than needing to be put back.
+    container = db_path
+    container.mkdir(parents=True, exist_ok=True)
+    previous = paths.active_db(container)
+    build_dir = container / f"build-{datetime.now():%Y%m%dT%H%M%S-%f}"
 
     try:
-        _write_chroma(df, db_path, cols, feed_path, identity)
+        _write_chroma(df, build_dir, cols, feed_path, identity)
     except BaseException:
-        if retired is not None:
-            # Best effort: clear whatever partial exists and put the old corpus
-            # back. ChromaDB may still hold handles on a partial build, in which
-            # case the cleanup fails and we hand the user the two paths instead
-            # of pretending we recovered.
-            shutil.rmtree(db_path, ignore_errors=True)
-            if not db_path.exists():
-                retired.rename(db_path)
-                sys.stderr.write(
-                    f"\nIngest failed. Your previous corpus has been restored:\n"
-                    f"  {db_path}\n"
-                )
-            else:
-                sys.stderr.write(
-                    f"\nIngest failed. Your previous corpus was NOT deleted:\n"
-                    f"  {retired}\n"
-                    f"An incomplete build is at {db_path} and is still held open by\n"
-                    f"ChromaDB, so this process cannot swap the old one back itself.\n"
-                    f"To restore:  rm -rf {db_path} && mv {retired} {db_path}\n"
-                )
+        # Nothing was moved, so there is nothing to restore. Clear the partial
+        # build if ChromaDB has let go of it; if it has not, the directory
+        # costs nothing and the next successful run sweeps it up.
+        shutil.rmtree(build_dir, ignore_errors=True)
+        sys.stderr.write(
+            f"\nIngest failed. Your corpus was not modified and is still live:\n"
+            f"  {previous}\n"
+        )
         raise
-    if retired is not None:
-        shutil.rmtree(retired, ignore_errors=True)
 
     # AFTER the build succeeds, never before. This file is what --skip-unchanged
     # trusts, so it must not be able to describe a corpus that was never
     # completed - an absent file costs a rebuild, a premature one costs a
     # silently stale corpus.
-    (db_path / IDENTITY_FILENAME).write_text(
+    (build_dir / IDENTITY_FILENAME).write_text(
         json.dumps(identity or {}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8", newline="\n")
+
+    # The switch, and the only step that makes the new build visible.
+    # os.replace is atomic: a reader sees the old name or the new one, never a
+    # half-written pointer.
+    pointer = container / paths.POINTER_FILENAME
+    tmp_pointer = container / (paths.POINTER_FILENAME + ".tmp")
+    tmp_pointer.write_text(build_dir.name + "\n", encoding="utf-8", newline="\n")
+    os.replace(tmp_pointer, pointer)
+
+    # Sweep, but KEEP THE BUILD WE JUST SUPERSEDED. A reader that opened the
+    # previous build is still serving from it - that is the whole premise of
+    # this layout - and deleting it underneath them is the same rug-pull the
+    # rename used to be, just with better timing. One generation of grace
+    # bounds the disk cost at two builds while never removing what a live
+    # reader most likely holds. Anything older is fair game, and still best
+    # effort: a directory that refuses to go waits for the next run.
+    keep = {build_dir, previous}
+    for stale in sorted(container.glob("build-*")):
+        if stale not in keep:
+            shutil.rmtree(stale, ignore_errors=True)
+
+    # A corpus built before this layout leaves its store at the container top
+    # level. It is deliberately NOT deleted: on the first run under this code
+    # that store is the one every already-running reader has open. It is
+    # superseded the moment CURRENT is written, costs only disk, and can be
+    # removed by hand once nothing is serving from it.
 
 
 def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
