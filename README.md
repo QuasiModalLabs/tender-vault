@@ -10,6 +10,86 @@ Claude does the reasoning. An [Obsidian](https://obsidian.md) vault of plain mar
 
 ---
 
+## A day with it, end to end
+
+The rest of this README works through how each part is built and why. This is what they look like running together, on a good day. The listings, counts and quotes are real ones out of the vault; the clock is the shape of a good day, and the coffee does no work.
+
+**08:10 — start with fresh data.** An overnight job pulled the new listings and saved a summary, so the day opens with the same two commands as every other day:
+
+```bash
+git pull
+python scripts/ingest        # 972 listings in, 71 left after the filter
+```
+
+Two minutes. It prints every step of the cut on the way down — too old, ruled out by hand, building work, wrong trade code, no keyword — so the number is one I watched fall rather than one I trust. Coffee while it runs.
+
+**08:40 — ask for the read.** In Claude Code: *"walk me through what's open."* Claude reads our company profile, looks at what we're already chasing so it doesn't sell me back something I'm on, and reads all 71 listings end to end. It writes the read into the vault as a file and never to the screen, because I read it in Obsidian, where the tables and the closing-date timeline draw properly.
+
+At the top it says how fresh the data is: feed pulled 08:12, pile rebuilt 08:14, level with what the overnight job last saved. Then six parts, sorted by what needs a call from me rather than by any score. Nineteen listings close soon. Two are worth my time. The other seventeen are named and counted, not waved away: work we can't bid on because we're not on the right supplier list, boxes of software, and questions the government is asking with nothing to bid on yet. *Only two* is a count, not a hunch.
+
+**09:30 — read up on the buyer.** A listing tells you what someone wants. This tells you why now.
+
+```bash
+python scripts/tender_tools dossier ssc
+```
+
+One command, five sources on one department — here Shared Services Canada, the government's own IT shop. Read the first part first: it says which of the department's older names have been folded in, and which have not. Get that wrong and everything after it is built on sand. Then the four signals line up. The Auditor General has said in public that their systems are failing. Their own plan says they mean to fix that. A sitting supplier's contract runs out inside the year. And the lobbying register shows which firms have been in the room on buying matters — TECHNATION, Oracle, Tenable, Pure Storage, VMware, HPE, Palo Alto, ThinkOn — which is the same set the awarded-contract data shows winning work. That last part says who has been talking to them. It never says anyone got anything for it, and this project will not write that it did. No score comes back. Five parts, and I make the call.
+
+**10:15 — keep the one worth keeping.**
+
+```bash
+python scripts/tender_tools promote WS5765538034-Doc5766134348
+```
+
+The listing stops being a row in a pile I throw away and rebuild each day, and becomes a file that stays. The first time we keep something from a new department, it also makes that department its own page, so every note, read and listing that touches them hangs off one place.
+
+**10:30 — go and get the real paperwork.** The listing is public. The bid pack it points at is not — it sits on a trading site behind a sign-in. This is the one step the code is not allowed to do for me.
+
+```bash
+python scripts/tender_tools attach WS5765538034-Doc5766134348 --platform merx
+```
+
+That makes a folder next to the listing's file and prints its path. Nothing is downloaded: there is no fetcher anywhere in this project, and bolting one on here would undo a choice rather than build on it. So I open MERX in a browser, sign in, download the pack by hand, and drop `RFP-W2187-SPO.pdf` into the folder that just opened.
+
+```bash
+python scripts/tender_tools list-attachments WS5765538034-Doc5766134348
+```
+
+Nothing is watching that folder, so this call is what spots the new file. It fingerprints it, pulls the words out, and writes down what it found. The fingerprint earns its keep later: MERX swaps in changed paperwork under the same file name mid-bid, and a fresh drop leaves both the new mark and the old one it replaced, with the date it moved. Old wording that reads as current is worse than none.
+
+**11:15 — read it.** `read-attachment <id> RFP-W2187-SPO.pdf --limit 400`, a screen at a time: must-haves, the seats they want filled, how they'll score us. A pricing sheet comes through with each box still named by its own row and column rather than mashed into a stream of words, because a number cut loose from the line it belongs to is how you end up sure and wrong. Claude reads the must-haves against our profile and says which one we'd fail. What it pulls out stays out of the repo — it's someone else's paperwork off a paid site.
+
+**12:30 — lunch.**
+
+**13:30 — clear the rest of the board.** Two more moves, each one asking for the thing I'd forget to write down:
+
+```bash
+python scripts/tender_tools park MX-444111388909.md "no IAM lead until the practice hire starts" "when the identity hire is onboard"
+python scripts/tender_tools archive cb-342-92719341.md "no bid — no one free in the window. DND, worn-out fire-services system, closed 2026-08-12"
+```
+
+`park` wants a reason **and** the thing that would bring it back, as two separate arguments, because "maybe later" with nothing named is just a file going stale — and Claude checks the parked pile whenever I mention something that might match, so *the identity hire signed* drags that listing back up without my having to remember it exists. `archive` wants a reason for the same purpose the other way round: in six months I'll remember that we walked away and not why, and the why is the part worth keeping.
+
+**14:30 — the talk it was all for.** What I take to the partners isn't a bid. It's whether we should get ourselves onto a standing supplier list at all — one of the pre-approved lists you have to be on before the government will let you bid on some work. The only fair way to ask that is: **what has staying off it kept us from bidding on?**
+
+Every read counts how many listings each list shut us out of, zeros and all, and `vault/reference/vehicles.md` keeps them as dated notes with what each count leaves out. So the meeting opens with names rather than a total. TBIPS — the list the government buys IT people by the seat through — has shut us out of 7, 7, 9, 15, 16 and 11 listings over six reads. The drop at the end is listings closing, not the door swinging open. Five of the last eleven belong to one buyer, Global Affairs: cloud platform, secure systems, AI support, data work, laptops and phones. Half the traffic through one door is an argument and a worry in the same number.
+
+For five reads the partners had a good answer to all of it. Everything behind that door was seat-hire work — one Level 2 programmer here, one Level 3 consultant there — which is the very thing we don't want to sell. A door that only shuts you out of work you'd turn down costs nothing.
+
+**This week's read is what changes the room.** `cb-803-76594845` — the Immigration and Refugee Board's case-handling system, closing 2026-09-11 — asks for a move "toward a modernized, cloud-aligned microservices architecture and operating model": study, design, build, join up, test, hand over, in stages. That is the second thing our profile says we do, almost word for word. It is work sold as a finished thing rather than by the seat. And it sits behind the door. The running count of *listings we'd have bid on if the door were open* stops being nought every week. It's one, once — and the claim that this one even runs through that list rests on the word TBIPS in its title, with no list number in the body, so pinning that down is the first job out of the room.
+
+Three ways in, and the counting speaks to exactly one of them:
+
+- **Get on the list ourselves.** No rush: the door reopens all year and the notice runs to 2028-07-04, so what stands in the way is our own time, not a closing date.
+- **Work under a firm that's already on it,** for one job. Reaches one listing, teaches us the buyer, leaves us still off the list.
+- **Buy, or team up with, a firm that holds it.** Whether the list follows a firm when it changes hands is one for a lawyer. Nothing here answers it, and saying so beats guessing.
+
+The awkward part is that the counting points at the list we'd least like to be on. SBIPS — the one that buys finished work rather than seats, and the one that fits what we sell — has shut us out of **nothing at all, on every read where it's been written down**. TBIPS fits us worst and holds all the traffic. So: get on the worse-fitting list, because that is where the work goes past. And for the *can't we bid now and sort the paperwork out after*, one Defence listing settles it in the government's own words: bidders who aren't on the list "will have to qualify for Supply Arrangement # TBIPS SA EN578-170432 before they are given an opportunity to bid," and "Canada will not extend RFP # WS5819275303 to provide additional time for Bidders to qualify." Being on the list is what gets you through the door. It doesn't win you anything once you're in.
+
+Two things the vault can't tell them, said out loud rather than smoothed over. **We can count the doors but not what's behind them:** the listings carry no price at all, so what this is worth has to come from the awarded-contract side, which does carry dollars and is rough at best. And **which flavour of the list to get on is still open:** these jobs go only to firms signed up for a given size band, region and kind of work. Four of the shut-out listings say which they want — three of one band, every one of them Ottawa — and eleven say nothing. Four sightings point a way; they don't draw the map. Sign up for the wrong band and we reach less than the headline count says.
+
+So the meeting ends with a next step, not a yes or no: pin down which list that IRB job really runs through, pick a band, work out again how many listings we'd truly reach, and keep counting. Better than a call made off one week's reading — and none of it came from today. Today only added the reading that tipped it. What piles up is the thing worth having.
+
 ## The thing I got wrong the first time
 
 A few months ago I built the obvious version: a retrieval pipeline that matched a company profile against active tenders. Semantic search, keyword search, a scoring formula with hand-tuned weights for contract value and timeline and complexity, and one call to an LLM at the end to write a strategic summary.
@@ -305,91 +385,6 @@ The presentation rules turned out to carry design weight, because a template is 
 **Report the zero.** An empty section says why it's empty; uncovered ground gets named rather than left as a silent gap. Most of the value in a series of briefings is in the counts that didn't change.
 
 **Correct the reference files.** They're written from past observation and aren't regenerated by any ingest, so when live data disagrees with a recorded count, the file gets fixed in place. The failure worth designing against is the line that's *true but incomplete* — TBIPS gating 7 notices was correct, and still overstated what qualifying reached until the set-asides were separated out. Record what a number excludes, not only what it counts.
-
-## A day with it, end to end
-
-Every piece above is described on its own. Here is one day with all of them in it. The notices, counts and quotes are real ones out of the vault; the clock is the shape of a good day rather than a transcript, and the coffee is not load-bearing.
-
-<details>
-<summary><strong>A day with it, hour by hour</strong></summary>
-
-**08:10 — start from a current corpus.** The daily Action ran overnight and committed a fresh digest, so the first two commands of the day are the same two every day:
-
-```bash
-git pull
-python scripts/ingest        # 972 raw notices → 71 after the profile filter
-```
-
-About two minutes. The funnel prints every stage on the way down — date, exclusions, construction, UNSPSC coverage, relevance — so the corpus size is a number I watched happen rather than one I half-remember. Coffee while it runs.
-
-**08:40 — ask for the read.** In Claude Code: *"walk me through what's open."* Claude loads the profile, glances at `watching/` so it doesn't pitch me something I'm already on, and runs the briefing skill across the corpus end to end. It writes to `vault/briefings/` and never to the terminal, because the tables and the Mermaid closing-date timeline are meant to be read in Obsidian.
-
-The provenance block at the top confirms the thing I just did: feed downloaded 08:12, corpus built 08:14, level with the newest committed digest. Then six sections, ordered by what needs a decision rather than by what scored highest. Nineteen notices imminent, two of them actionable, and the other seventeen accounted for in a table — call-ups against a vehicle we don't hold, product and licence buys, RFIs with nothing to submit against. *Only two* is a count, not an impression.
-
-**09:30 — pull the dossier on the department behind the better of the two.** A notice tells you what someone wants. The dossier tells you why now.
-
-```bash
-python scripts/tender_tools dossier ssc
-```
-
-Read `identity` first: it says which historical slugs got folded in and which predecessor bodies contribute nothing to the extract — the joins a naive name match gets silently wrong. Then the signals converge. Shared Services Canada recurs throughout the audit layer; its plan says it intends to modernize the thing the audit flagged; an incumbent contract runs out inside the year; and the lobbying section, windowed and filtered to `Government Procurement`, returns TECHNATION, Oracle, Tenable, Pure Storage, VMware, HPE, Palo Alto and ThinkOn — recognizably the same firms the contracts data shows winning, which is the join worth having and the *only* thing that section is allowed to mean. No score comes back. Five sections, and I judge.
-
-**10:15 — promote it.** The notice stops being a row in a rebuilt corpus and becomes a file that persists:
-
-```bash
-python scripts/tender_tools promote WS5765538034-Doc5766134348
-```
-
-That writes `vault/tenders/watching/`, and creates the department node the first time we promote anything from that department. From here the tender's `department` field links the node, so the node's backlinks are every tender, briefing and note touching it.
-
-**10:30 — go and get the actual RFP package.** The notice is public; the package it points at is not. This is the one step the code deliberately can't do.
-
-```bash
-python scripts/tender_tools attach WS5765538034-Doc5766134348 --platform merx
-```
-
-That creates a folder beside the tender note and prints its absolute path — nothing is downloaded, because there is no fetcher anywhere in this repo, and adding one to that module would reverse a decision rather than extend it. I open MERX in a browser, sign in past the account wall, download the package, and drop `RFP-W2187-SPO.pdf` into the folder that just opened in Explorer.
-
-```bash
-python scripts/tender_tools list-attachments WS5765538034-Doc5766134348
-```
-
-There's no watcher, so that call is what notices the new file. It hashes it, extracts the text into `.extracted/`, and writes a manifest. The hash earns its keep later: MERX posts addenda mid-solicitation under the same filename, and a re-drop records the change with `superseded_sha256` and the date it moved, so revised text can never quietly read as the original.
-
-**11:15 — read it.** `read-attachment <id> RFP-W2187-SPO.pdf --limit 400`, a window at a time: mandatory criteria, resource categories, the evaluation grid. A pricing spreadsheet comes through with every cell still addressable as `Pricing!D7` rather than flattened into prose, because a figure detached from its line item is the failure mode there. Claude reads the mandatories against the profile and says which one we'd fail. The extracted text stays out of git and out of the ChromaDB corpus — third-party content from a commercial platform.
-
-**12:30 — lunch.**
-
-**13:30 — clear the rest of the board.** Two more operations, each demanding the thing I'd otherwise fail to write down:
-
-```bash
-python scripts/tender_tools park MX-444111388909.md "no IAM lead until the practice hire starts" "when the identity hire is onboard"
-python scripts/tender_tools archive cb-342-92719341.md "no bid — no capacity in the window. DND, end-of-life IFSMR replacement, closed 2026-08-12"
-```
-
-`park` takes a reason **and** a revisit trigger as separate required arguments, because "maybe later" with no named event is just a file that rots — and Claude checks `parked/` whenever I mention something that might match one, so *the identity hire signed* brings that notice back without my remembering it existed. `archive` demands a reason for the same purpose pointed the other way: in six months I'll remember the no-bid and not the reason for it, and the reason is the part worth keeping.
-
-**14:30 — and then the conversation the counting is for.** The thing I take to the partners isn't a tender. It's whether to get onto a supply arrangement at all — and the only honest way to ask that is *what has not holding one kept us from bidding on.*
-
-Every briefing records how many notices each vehicle *gated*, including the zeros, and `vault/reference/vehicles.md` accumulates them as dated entries with what each one excludes. So the meeting opens with names rather than a total. TBIPS has gated 7, 7, 9, 15, 16, 11 across six ingests; the fall at the end is eleven notices closing between feeds, the calendar rather than the market. Five of the last eleven are Global Affairs — M365/Azure platform, classified solutions modernization, AI support, data and analytics foundations, endpoint management. One department running nearly half the observed traffic is an argument and a concentration risk in the same number.
-
-For five reads running the partners had a good answer to all of that: everything behind the gate was seat-shaped resource-category work — programmer Level 2, business consultant Level 3 — precisely the body-shop shape the profile exists to exclude. A gate that only blocks work you don't want costs nothing.
-
-**This week's read is what changes the meeting.** `cb-803-76594845` — IRB Digital Case Management, closing 2026-09-11 — asks for the transition of a case-management ecosystem "toward a modernized, cloud-aligned microservices architecture and operating model": analysis, architecture, design, integration, testing, phased. That's the profile's second core capability nearly verbatim, it's outcome-shaped rather than seat-shaped, and it sits behind the gate. The running count of *notices worth bidding if the vehicle weren't blocking them* stops being zero-every-week. It's one, once — and the vehicle claim rests on the word TBIPS in the title with no arrangement number in the body, so confirming that is the first action out of the room.
-
-Three routes on the table, and the data speaks to exactly one of them:
-
-- **Qualify ourselves.** No deadline pressure: the refresh is continuous and the RFSA notice runs to 2028-07-04, so the constraint is our own effort rather than a window.
-- **Subcontract to a holder** for a specific call-up. Reaches one notice, teaches us the buyer, banks no qualification.
-- **Acquire or partner with a holder.** Whether an arrangement survives a change of control is a question for procurement counsel; nothing in this project answers it, and saying so is better than estimating it.
-
-The awkward part of the recommendation is that it points at the vehicle we like least. SBIPS sells outcomes, fits the profile best, and has gated **zero on every read it's been recorded against**. TBIPS sells seats, fits worst, and gates everything. Qualify on the worse fit, because that's where the observable traffic is. And for the inevitable *can't we bid and sort the paperwork out after*, one DND call-up settles it in the government's own words: unqualified bidders "will have to qualify for Supply Arrangement # TBIPS SA EN578-170432 before they are given an opportunity to bid," and "Canada will not extend RFP # WS5819275303 to provide additional time for Bidders to qualify." Holding the arrangement is admission, not advantage.
-
-Two things the vault can't tell them, said out loud rather than smoothed over. **We can count the doors but not what's behind them:** the tender feed publishes no value field at all, so sizing comes from the contracts layer — `contracts-intel` and `expiring-contracts`, which carry real dollars and are directional. And **the tier question gates the decision:** call-ups are open to holders qualified in a specific tier, region and resource category; four of the gated notices state theirs — three Tier 1, every one NCR — and eleven state none. Four observations are a direction, not a distribution, and qualifying at the wrong tier reaches less than the headline count implies.
-
-So the meeting ends in a next step rather than a signature: confirm the IRB notice's vehicle, pick a tier, re-derive the reachable count against it, keep the series running. That's a better outcome than a decision made on one week's reading — and none of it came from today. Today just added the reading that tipped it. The accumulation is the product.
-
-</details>
 
 ## What I know is wrong with it
 
