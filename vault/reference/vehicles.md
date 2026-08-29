@@ -95,6 +95,18 @@ weeks of zero, against TBIPS's 7 → 7 → 9 → 15 → 16.**
 > observation is sound; what failed was the filing. **The 2026-08-26 read is that same
 > ingest and contributes no sixth observation.**
 
+**Gated:** 0 of 66 notices, ingest of 2026-08-29 (feed `19edace6`). `cb-20-75132174` is still
+the only notice open that mentions SBIPS at all. **Six recorded zeros, against TBIPS's
+7 → 7 → 9 → 15 → 16 → 9.**
+
+> **This series skipped an ingest that TBIPS recorded, and the gap cannot be closed.** The
+> 2026-08-26 evening ingest is filed under TBIPS as its sixth independent observation (11 of
+> 71); no SBIPS row was written for it. That build has since been superseded and deleted, so
+> the count cannot be re-derived, and it is not being reconstructed from the TBIPS entry's
+> denominator. The zeros above are the ones actually taken. What this costs is one
+> observation of interval, not the argument: a filter or a feed that hid SBIPS traffic could
+> only ever have hidden it, never invented it.
+
 ---
 
 ## TBIPS — EN578-170432
@@ -188,6 +200,24 @@ passed, so eleven of the sixteen had closed and five remained open — but **whi
 vehicle gates does not change when nobody re-ingests**, and this is deliberately not
 counted as a sixth week.
 
+**Gated:** 9 of 66 notices, ingest of 2026-08-29 (feed `19edace6`) — **8 reachable**.
+Seventh independent observation. The feed moved: `cb-40-97221487` (GAC, AI support) closed,
+and two arrived — `cb-956-25478772` (DND, two junior network specialists at CFB Bagotville)
+and `cb-692-67452484` (Transport Canada, UX/UI and Drupal application development). The one
+not reachable is `cb-192-89046879` (DND, C4ISR): Secret clearance with two Top Secret seats,
+controlled goods, citizens only, on-site Ottawa. Holding TBIPS would not reach it.
+
+_(This is the first entry to carry a feed hash. The 2026-08-28 read could not be filed at all
+— it had no hash to establish independence by, and said so in the briefing rather than
+recording on a weaker basis. Note the hash comes from `corpus-identity.json` in the live
+build; the `provenance` block on `list-corpus` reports it as absent, which is a reporting gap
+worth fixing before the next entry leans on it.)_
+
+**Work behind the gate that we would want, second read running.** `cb-803-76594845` (IRB case
+management) and now `cb-692-67452484` (Transport Canada) are both delivery work described as
+an outcome. Against that, `cb-956-25478772` is seat-hire — two junior resources — which is the
+usual shape and a fair reminder that most of what this gate blocks is still not work we want.
+
 ### The tier table, as of the 2026-08-17 ingest
 
 | Notice | Tier | Region |
@@ -198,6 +228,7 @@ counted as a sixth week.
 | `cb-40-97221487` (GAC) | Tier 1 | NCR |
 | `cb-272-69359473` (CAS) | Tier 1 | NCR |
 | `cb-702-62436471` (DND/MARPAC) | Tier 1 | **not stated** — template placeholder |
+| `cb-692-67452484` (Transport Canada) | Tier 1 ($0–$3.75M) | NCR — **arrangement number cited**, 2026-08-29 |
 | `cb-937-38464611` (Public Safety) | **none stated** | — |
 
 **Five of seven name a tier, four name the NCR, and one names neither.** The exception is
