@@ -210,8 +210,12 @@ controlled goods, citizens only, on-site Ottawa. Holding TBIPS would not reach i
 _(This is the first entry to carry a feed hash. The 2026-08-28 read could not be filed at all
 — it had no hash to establish independence by, and said so in the briefing rather than
 recording on a weaker basis. Note the hash comes from `corpus-identity.json` in the live
-build; the `provenance` block on `list-corpus` reports it as absent, which is a reporting gap
-worth fixing before the next entry leans on it.)_
+build, because the `provenance` block on `list-corpus` reported it as absent at the time.
+**That reporting gap is now fixed** — the block assigned the local hash only when the newest
+digest also carried one, so a corpus with a perfectly good hash reported none whenever the
+digest predated hashing. It now reports each side's hash whenever that side has one, and
+`basis` still falls back to dates when there is nothing to compare against. Future entries can
+take the hash straight from the provenance block.)_
 
 **Work behind the gate that we would want, second read running.** `cb-803-76594845` (IRB case
 management) and now `cb-692-67452484` (Transport Canada) are both delivery work described as

@@ -172,9 +172,23 @@ def _corpus_provenance() -> dict:
     # digest helpers, and test_provenance.test_no_verdict_field, which fails if
     # a verdict is ever added here.
     local_hash, digest_hash = meta.get("feed_sha256"), fm.get("feed_sha256") or None
-    if local_hash and digest_hash:
+    # EACH HASH IS REPORTED WHENEVER IT EXISTS, independent of whether the two
+    # can be compared. A hash describes what one side IS; `basis` describes
+    # what could be compared. Conflating them is how this block came to report
+    # a corpus as carrying no feed_sha256 because the OTHER side carried none
+    # — the stamp was sitting in the collection metadata and in
+    # corpus-identity.json the whole time, and the block said it was absent.
+    #
+    # That is not cosmetic. The briefing's rule for whether a vehicle
+    # observation may be filed is written in terms of this field, so an
+    # omission here reads downstream as a missing MEASUREMENT rather than a
+    # missing counterpart, and a real observation gets withheld. It did, on
+    # 2026-08-28.
+    if local_hash:
         out["feed_sha256"] = local_hash
+    if digest_hash:
         out["newest_digest_feed_sha256"] = digest_hash
+    if local_hash and digest_hash:
         out["basis"] = "feed_sha256"
         if local_hash == digest_hash:
             if built_at == d_built:
@@ -220,8 +234,10 @@ def _corpus_provenance() -> dict:
         # predates hashing. Equal dates here are not proof of equal data.
         out["basis_note"] = (
             "Compared on download dates because "
-            + ("the newest digest carries no feed_sha256"
-               if local_hash else "this corpus carries no feed_sha256")
+            + ("neither this corpus nor the newest digest carries a "
+               "feed_sha256" if not local_hash and not digest_hash
+               else "the newest digest carries no feed_sha256" if local_hash
+               else "this corpus carries no feed_sha256")
             + ". Dates are per-machine, so this cannot distinguish the same "
               "feed fetched twice from two different feeds.")
     return out

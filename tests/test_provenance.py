@@ -331,6 +331,76 @@ def test_comparison(tmp: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 4b — a hash is reported for what it IS, not for what it can be compared to
+# ---------------------------------------------------------------------------
+
+def test_local_hash_is_reported_without_a_counterpart(tmp: Path) -> None:
+    """
+    A corpus carrying feed_sha256 must SAY SO even when the digest has none.
+
+    THE BUG THIS EXISTS TO PREVENT. `out["feed_sha256"]` was assigned only
+    inside the `if local_hash and digest_hash:` branch, so a corpus whose
+    collection metadata held a perfectly good hash reported none whenever the
+    newest digest predated hashing. The block then fell back to comparing
+    download dates and said, in `basis_note`, that "this corpus carries no
+    feed_sha256" — about a corpus that did.
+
+    It cost a real observation. On 2026-08-28 the briefing declined to file a
+    vehicle gating count to vehicles.md, because that file's rule for deciding
+    whether two readings are independent is written in terms of this field, and
+    the provenance block reported it absent. The measurement existed on disk in
+    corpus-identity.json the whole time.
+
+    So: what each side IS and what can be COMPARED are two questions, and the
+    answer to the first does not depend on the second.
+    """
+    print("\nLocal hash with no digest counterpart")
+    digests = tmp / "digests-halfhash"
+    digests.mkdir(parents=True, exist_ok=True)
+    original_collection, original_digests = tt.corpus._collection, tt.paths.DIGESTS
+    tt.paths.DIGESTS = digests
+    try:
+        # A digest from before hashing: both dates, no hash. This is every
+        # digest committed to the repo today.
+        (digests / "digest-2026-08-24.md").write_text(
+            '---\ncorpus_built_at: "2026-08-24T06:43:23"\n'
+            'feed_downloaded_at: "2026-08-24T06:43:17"\n---\n\n# d\n',
+            encoding="utf-8")
+        tt.corpus._collection = FakeCollection({
+            "corpus_built_at": "2026-08-29T00:05:30",
+            "feed_downloaded_at": "2026-08-28T23:13:20",
+            "feed_sha256": "19edace64a5aa",
+        })
+        out = tt._corpus_provenance()
+
+        check("the local hash is reported", out.get("feed_sha256") == "19edace64a5aa",
+              repr(out.get("feed_sha256")))
+        check("no counterpart key is invented",
+              "newest_digest_feed_sha256" not in out,
+              repr(out.get("newest_digest_feed_sha256")))
+        check("basis still falls back to dates — nothing to compare on",
+              out.get("basis") == "feed_downloaded_at", repr(out.get("basis")))
+        check("the note blames the digest, not this corpus",
+              "the newest digest carries no feed_sha256" in out.get("basis_note", ""),
+              out.get("basis_note"))
+
+        # The mirror case: neither side has one. The note must not single out
+        # this corpus as if the digest were fine.
+        tt.corpus._collection = FakeCollection({
+            "corpus_built_at": "2026-08-29T00:05:30",
+            "feed_downloaded_at": "2026-08-28T23:13:20",
+        })
+        out = tt._corpus_provenance()
+        check("with no hash anywhere, feed_sha256 is absent rather than None",
+              "feed_sha256" not in out, repr(out.get("feed_sha256")))
+        check("the note names both sides when neither has a hash",
+              "neither this corpus nor the newest digest" in out.get("basis_note", ""),
+              out.get("basis_note"))
+    finally:
+        tt.corpus._collection, tt.paths.DIGESTS = original_collection, original_digests
+
+
+# ---------------------------------------------------------------------------
 # 5 — digest frontmatter round-trip, and the YAML timestamp trap
 # ---------------------------------------------------------------------------
 
@@ -697,6 +767,7 @@ def main() -> None:
         test_stamp_survives_reads(tmp)
         test_states(tmp)
         test_comparison(tmp)
+        test_local_hash_is_reported_without_a_counterpart(tmp)
         test_digest_roundtrip(tmp)
         test_digest_from_unstamped_corpus(tmp)
         test_no_verdict_field(tmp)
