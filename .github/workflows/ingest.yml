@@ -30,8 +30,11 @@ name: Tender ingest
 # needs a few times a year. So the gate — OAG, the test suites, the MCP import
 # check — stays on Monday, and Tuesday through Sunday run the ingest alone.
 #
-# CRON DAY-OF-WEEK IS 0-6 HERE, 0 BEING SUNDAY. It is NOT the POSIX range that
-# also accepts 7 for Sunday. `2-7` parses fine as YAML, is rejected by Actions
+# CRON DAY-OF-WEEK IS 0-6, 0 BEING SUNDAY, which is exactly what POSIX
+# specifies -- Actions is the standard-conforming one here. The habit of
+# writing 7 for Sunday comes from Vixie cron, the implementation behind most
+# Linux crontabs, which accepts 0-7 as an EXTENSION to the standard. Actions
+# does not. `2-7` parses fine as YAML, is rejected by Actions
 # as an invalid schedule, and takes the WHOLE workflow down with it: the run is
 # a startup failure with no jobs, the Monday cron beside it never fires either,
 # and the workflow shows in the Actions list under its file path instead of its
