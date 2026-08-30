@@ -109,6 +109,41 @@ def find_similar(tender_id: str, n: int = 5) -> dict:
 
 
 @mcp.tool()
+def pre_mortem(tender_id: str) -> dict:
+    """
+    Assume this tender already went wrong, and assemble what would explain it.
+
+    One adversarial pass before committing to a bid, for a tender the user has
+    already decided they like. Runs two questions separately and merges neither:
+    `bid_and_lost` (eligibility gates, a named shortlist, an incumbent, a bar we
+    do not clear) and `won_and_regretted` (seat-based pricing, a product we would
+    have to front, a multi-year tail on work outside the profile). The same fact
+    often points opposite ways under the two, which is why they stay apart.
+
+    ASSEMBLES; DOES NOT SCORE. No risk rating, no ranking, no tally of how many
+    signals fired. Read the sections and judge — that is the architecture, and it
+    is the same rule the dossier follows.
+
+    Reads the corpus first and the promoted vault note second, and reports which
+    in `subject.read_from`. There is deliberately no lobbying section: a
+    pre-mortem asks why we lost, and who was in the room is presence rather than
+    influence — do not add one from another tool.
+
+    Read `not_checked` before treating any of it as a clean bill. The
+    solicitation package is unread by design and is where the mandatory
+    requirements live.
+
+    Args:
+        tender_id: A corpus id, or a promoted tender's id.
+
+    Returns:
+        Dict with subject, the two lenses, prior_decisions from the vault,
+        not_checked, and how_to_read.
+    """
+    return tender_tools.cmd_pre_mortem(SimpleNamespace(tender_id=tender_id))
+
+
+@mcp.tool()
 def list_watching() -> dict:
     """
     List tenders in the vault's watching folder — the promoted/hot tier.

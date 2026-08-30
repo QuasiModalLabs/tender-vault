@@ -12,6 +12,7 @@ Usage:
     python scripts/tender_tools search "cloud migration federal"
     python scripts/tender_tools get W1234-567890
     python scripts/tender_tools similar W1234-567890
+    python scripts/tender_tools pre-mortem W1234-567890
     python scripts/tender_tools list-corpus --window imminent
     python scripts/tender_tools list-watching
     python scripts/tender_tools list-parked
@@ -42,6 +43,7 @@ from .lifecycle import (
     cmd_park,
     cmd_promote,
 )
+from .premortem import cmd_pre_mortem
 from .search import cmd_get, cmd_search, cmd_similar
 from .signals import (
     cmd_lobbying_signals,
@@ -79,6 +81,16 @@ def build_parser() -> argparse.ArgumentParser:
     sim.add_argument("tender_id")
     sim.add_argument("--n", type=int, default=5)
     sim.set_defaults(func=cmd_similar)
+
+    pm = sub.add_parser(
+        "pre-mortem",
+        help="Assume this tender went wrong: what explains it. Assembles two "
+             "lenses (bid-and-lost, won-and-regretted); does not score",
+    )
+    pm.add_argument("tender_id",
+                    help="A corpus id, or a promoted tender's id — the vault "
+                         "note is read when the notice has left the corpus")
+    pm.set_defaults(func=cmd_pre_mortem)
 
     lc = sub.add_parser(
         "list-corpus",

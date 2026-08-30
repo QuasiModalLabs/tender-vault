@@ -57,6 +57,7 @@ from .lifecycle import (  # noqa: E402
 from .cli import build_parser, main  # noqa: E402
 from .company_profile import _SENTINEL_HORIZON_YEARS  # noqa: E402
 from .provenance import _corpus_provenance, _digest_frontmatter  # noqa: E402
+from .premortem import cmd_pre_mortem  # noqa: E402
 from .search import cmd_get, cmd_search, cmd_similar  # noqa: E402
 from .signals import (  # noqa: E402
     cmd_lobbying_signals,
@@ -72,6 +73,7 @@ __all__ = [
     "cmd_list_corpus", "cmd_list_watching", "cmd_list_parked",
     "cmd_promote", "cmd_park", "cmd_archive",
     "cmd_attach", "cmd_list_attachments", "cmd_read_attachment",
+    "cmd_pre_mortem",
     "cmd_contracts_intel", "cmd_expiring_contracts",
     "cmd_program_signals", "cmd_oag_signals", "cmd_resolve_department",
     "cmd_lobbying_signals", "cmd_registrations_signals",

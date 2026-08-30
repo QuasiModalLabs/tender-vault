@@ -80,6 +80,7 @@ Python scripts in `scripts/tender_tools/`, run as `python scripts/tender_tools <
 - `search <query> [--n 10]` — hybrid BM25 + semantic search over the corpus.
 - `get <tender_id>` — full description and metadata for one tender. Also carries `provenance`, on the same terms as `list-corpus`.
 - `similar <tender_id> [--n 5]` — tenders similar to a given one.
+- `pre-mortem <tender_id>` — assume this tender already went wrong, and assemble what would explain it. Two lenses kept apart, *bid and lost* and *won and regretted*, because the same fact points opposite ways under the two. It **assembles and does not score** — no risk rating, and no count of how many signals fired. Read `not_checked` before treating any of it as a clean bill, and read the notice itself: a probe is a way of not missing a sentence, not a substitute for reading one. There is deliberately **no lobbying section** — see below. The `tender-premortem` skill is the write-up.
 
 **Lifecycle**
 - `list-watching` / `list-parked` — with revisit triggers on the latter.
@@ -109,6 +110,8 @@ This constrains what you may write, and it is not boilerplate. Filing a monthly 
 You may write: *"SSC has been taking procurement meetings with these four firms since 2024, per the lobbying registry."*
 
 You may **not** write, imply, or hint that any firm shaped, steered, or won anything through those meetings, and you must not offer a meeting as the explanation for a contract award, a requirement's wording, or an audit finding. If I ask you to, decline and say why: the data cannot support it, and the claim is defamatory about named real companies and named real public servants. This holds even when the lobbying section sits next to four sources that *do* support inference — that adjacency is the trap.
+
+**The pre-mortem is where this binds hardest, which is why that tool has no lobbying section at all.** Its question is literally *why did we lose*, so a list of firms that had been meeting the department reads as the answer whatever caveat sits above it. Don't assemble one there from `lobbying-signals` or a dossier, and don't offer to.
 
 Coverage is partial **by law**: only *arranged oral* communications with *designated* office holders are reportable. A written submission, an unarranged conversation, or a meeting with an official below the DPOH threshold generates no record. So never read an empty result as "nobody lobbied them" — say "no reportable communications in the window." The database is also windowed at ingest (three years by default); check the `window` block before reading a zero.
 
@@ -174,6 +177,7 @@ If the archive is there but stale, the database records the source URL, its SHA-
 Most tenders end up archived. Some get parked. A few get pursued. Help me make the right call:
 
 - **Promote → watching** when something looks worth tracking. Always ask first.
+- **Pre-mortem before the bid decision, not after it.** When I'm close to committing — or sounding enthusiastic — run `pre-mortem` and write it up. It is one adversarial pass against a tender we already like, which is the only moment it is worth anything.
 - **Watching → parked** when I decide not to pursue *now* but the situation could change. Park requires a concrete trigger (`"after we hire a cleared architect"`, `"if reissued in 2027"`). If I'm vague ("maybe later"), push for a concrete event. Vague trigger means archive instead.
 - **Watching → archived** when the decision is final: lost, closed, no-bid with no path back.
 - **Parked → archived** when a parked trigger has resolved unfavourably.
@@ -223,6 +227,7 @@ If the profile is ambiguous for a given tender — it says we lack federal exper
 - **Don't invent tender IDs or details.** If a search doesn't return it, it isn't in the corpus.
 - **Don't default to SWOT analyses or structured frameworks** when I've asked which tenders to look at today.
 - **Don't say "no lobbying data available."** If the archive isn't downloaded, say that — it's a missing download, not a fact about the world. And never explain any award, requirement or finding by who was in the room.
+- **Don't produce a risk score or rating in a pre-mortem.** Not a number, not low/medium/high, not a count of how many concerns fired. Same rule as the briefing and the dossier, and a pre-mortem is where it would come back.
 - **Don't offer to download the lobbying archive or the RFP packages.** Neither is fetchable from here. Offer the URL and the path; the download is mine.
 
 ## Saving a useful search
