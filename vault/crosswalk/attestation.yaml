@@ -27,7 +27,7 @@ names:
     - tender_contracting
     count: 2
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Canadian Armed Forces:
     key: dnd
     sources:
@@ -43,7 +43,7 @@ names:
     - tender_end_user
     count: 39
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Canadian Transportation Accident Investigation and Safety Board:
     sources:
     - tender_contracting
@@ -60,7 +60,7 @@ names:
     - tender_contracting
     count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Correctional Services Canada:
     key: csc
     sources:
@@ -75,14 +75,14 @@ names:
     - tender_end_user
     count: 2
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Department of Foreign Affairs, Trade and Development:
     key: gac
     sources:
     - tender_contracting
     count: 11
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Department of Industry:
     key: ised
     sources:
@@ -90,22 +90,22 @@ names:
     - tender_end_user
     count: 8
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Department of Public Safety and Emergency Preparedness:
     key: public-safety
     sources:
     - tender_contracting
     count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Department of Public Works and Government Services:
     key: pspc
     sources:
     - tender_contracting
     - tender_end_user
-    count: 526
+    count: 521
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Department of the Environment:
     key: eccc
     sources:
@@ -113,7 +113,7 @@ names:
     - tender_end_user
     count: 18
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Elections Canada:
     key: elections-canada
     sources:
@@ -128,21 +128,22 @@ names:
     - tender_end_user
     count: 2
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Immigration Refugee Board:
     key: irb
     sources:
     - tender_contracting
     count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Immigration and Refugee Board:
     key: irb
     sources:
     - tender_contracting
-    count: 3
+    - tender_end_user
+    count: 4
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Infrastructure Canada:
     key: housing-infrastructure
     sources:
@@ -154,9 +155,9 @@ names:
     key: elections-canada
     sources:
     - tender_contracting
-    count: 2
+    count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Parks Canada:
     key: parks-canada
     sources:
@@ -165,7 +166,7 @@ names:
     - tender_end_user
     count: 5
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Parks Canada Agency:
     key: parks-canada
     sources:
@@ -173,14 +174,14 @@ names:
     - tender_end_user
     count: 23
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Polar Knowledge Canada:
     key: polar
     sources:
     - tender_contracting
     count: 1
     first_seen: '2026-08-03'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Public Works and Government Services Canada:
     key: pspc
     sources:
@@ -188,7 +189,7 @@ names:
     - tender_end_user
     count: 24
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Royal Canadian Mounted Police:
     key: rcmp
     sources:
@@ -197,7 +198,7 @@ names:
     - tender_end_user
     count: 27
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
   Treasury Board:
     key: tbs
     sources:
@@ -205,4 +206,4 @@ names:
     - tender_contracting
     count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-09-04'
+    last_seen: '2026-09-05'
