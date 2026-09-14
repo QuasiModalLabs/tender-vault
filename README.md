@@ -8,6 +8,18 @@ This project started as a way to read the tender feed faster. It ended up somewh
 
 Claude does the reasoning. An [Obsidian](https://obsidian.md) vault of plain markdown files is the memory.
 
+<details>
+<summary><strong>Briefing Outputs</strong></summary>
+  <strong>Act Now</strong>
+<img width="1461" height="1024" alt="Image" src="https://github.com/user-attachments/assets/d564a677-ae74-4567-96a2-a69ddd49f908" />
+  <strong>Opportunities Behind Vehicles We Don't Hold</strong>
+<img width="1439" height="1005" alt="Image" src="https://github.com/user-attachments/assets/6d2876ee-268b-46d6-9502-d40985e83009" />
+  <strong>Pre-RFP Signals</strong>
+<img width="1460" height="1021" alt="Image" src="https://github.com/user-attachments/assets/21c37f2c-3d15-46ed-a8f5-4e3bf1a6e7ce" />
+<img width="1448" height="1026" alt="Image" src="https://github.com/user-attachments/assets/3d0f4fa8-4785-4058-9884-9f5e7d38888b" />
+
+</details>
+
 ---
 
 ## A day with it, end to end
@@ -628,6 +640,8 @@ Its test suite still runs on Monday, and still catches the thing most likely to 
 - **Win/loss pattern mining**, once the archive is deep enough to say things like *we lose every tender that requires active SOC work*.
 
 None of these need new infrastructure. That's mostly what the markdown-first design bought.
+
+Where the line between AI reasoning and human judgement should sit, argued more times: [QuasiModal Labs](https://github.com/QuasiModalLabs)
 
 ---
 
