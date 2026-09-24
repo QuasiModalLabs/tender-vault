@@ -107,6 +107,15 @@ the only notice open that mentions SBIPS at all. **Six recorded zeros, against T
 > observation of interval, not the argument: a filter or a feed that hid SBIPS traffic could
 > only ever have hidden it, never invented it.
 
+**Gated:** 0 of 72 notices, ingest of 2026-09-13 (feed `df283359`). `cb-20-75132174` is still the
+only notice that mentions SBIPS at all — checked by text search across all 72 descriptions, not
+by title. **Seven recorded zeros.**
+
+> **Fifteen daily feeds sit between this entry and the last one and none was read.** This machine
+> held feed `19edace6` from 2026-08-28 until 2026-09-13; CI committed a digest each day in between,
+> but digests carry no vehicle counts. A call-up that arrived and closed inside that span was never
+> seen. Same shape as the gap above: it can hide SBIPS traffic, not invent it.
+
 ---
 
 ## TBIPS — EN578-170432
@@ -221,6 +230,42 @@ take the hash straight from the provenance block.)_
 management) and now `cb-692-67452484` (Transport Canada) are both delivery work described as
 an outcome. Against that, `cb-956-25478772` is seat-hire — two junior resources — which is the
 usual shape and a fair reminder that most of what this gate blocks is still not work we want.
+
+**Gated:** 10 of 72 notices, ingest of 2026-09-13 (feed `df283359`) — **7 reachable**. Eighth
+independent observation, after an unread interval of fifteen daily feeds (see the SBIPS note).
+Four survive from 2026-08-29 — `cb-192-89046879`, `cb-803-76594845`, `cb-956-25478772`,
+`cb-692-67452484` — and three of those four had their closing dates pushed out one to two weeks.
+Six arrived: `cb-355-54916616` (DND, four Level 1 DBAs, title only), `cb-270-34941267` (RCMP,
+SharePoint Online migration, arrangement number cited), `cb-839-36369475` (GAC, Mission Video
+Management System, incumbent named), `cb-789-71410272` (DND/DRDC, cyber R&D and satcom specialists,
+number cited), `cb-657-66034711` (Justice, Azure cloud architecture and engineering), and
+`cb-287-3588994` (CNSC, senior Microsoft developer, number cited).
+
+Three second gates, none of them the Indigenous set-asides of earlier weeks except one:
+`cb-192-89046879` (Secret with two Top Secret seats, citizens only, controlled goods);
+`cb-789-71410272` (*"conditionally set aside under the federal government's Procurement Strategy
+for Indigenous Business"*); and `cb-657-66034711`, whose *"Minimum Resource Security Required:
+Secret"* puts it past the profile's no-Secret-as-prime line. **That last one is the closest stack
+match behind this gate so far** — landing zones, Azure platform services, DevSecOps, application
+modernization — and it is shut twice: four seats on an as-and-when task authorization, at Secret.
+
+Not counted: `cb-619-77529222` (Transport Canada, TTIS data-process modernization) is filed as a
+call-up and reads *"defined, task-based activities"*, but its text names no arrangement. Probably
+TBIPS; unconfirmed, so outside the 10.
+
+**The NCR direction has its first exception.** `cb-287-3588994` (CNSC) is open to holders *"who
+qualified under Tier 1 under the region remote / virtual access"*, with the arrangement number
+cited. Every other call-up this feed that names a region names the NCR (`cb-270-34941267`,
+`cb-839-36369475`, `cb-657-66034711`, `cb-692-67452484`), and `cb-789-71410272` names *"National
+Capital Region (NCR) and Trenton, ON"*. Six of the ten state a tier; all six are Tier 1.
+
+| Notice | Tier | Region |
+|---|---|---|
+| `cb-270-34941267` (RCMP) | Tier 1 | NCR — arrangement number cited |
+| `cb-839-36369475` (GAC) | Tier 1 | NCR |
+| `cb-657-66034711` (Justice) | Tier 1 | NCR |
+| `cb-789-71410272` (DND/DRDC) | Tier 1 (< $4.5M) | NCR and Trenton — number cited |
+| `cb-287-3588994` (CNSC) | Tier 1 | **remote / virtual access** — number cited |
 
 ### The tier table, as of the 2026-08-17 ingest
 
@@ -355,6 +400,12 @@ retroactively on 2026-08-26.
 **Gated:** 0 of 71 notices, ingest of 2026-08-26 (feed downloaded 20:25 the same
 evening). Sixth verified zero, and a genuinely independent one.
 
+**Gated:** 1 of 72, ingest of 2026-09-13 (feed `df283359`) — **first observed traffic through
+ProServices.** `cb-698-78735396` (Polar Knowledge Canada) is open only to holders *"under ProServices
+SA E60ZT-180027"* in category 1.13 Web designer, Level 2: one resource, 600 hours to 2026-12-30,
+Reliability clearance, six firms invited. The notice mentions no Indigenous set-aside. Reachable if
+held — and seat-shaped, so it says the vehicle carries traffic, not that the traffic is work we want.
+
 **Read the RFSA before qualifying.** `cb-8448-42897985` states that part of this
 method of supply is set aside under the Procurement Strategy for Indigenous
 Business. Check which streams that covers before treating ProServices as cheap
@@ -370,8 +421,9 @@ of Qualified Suppliers for the subsequent phases of the SMP procurement. It is i
 file because this file is where eligibility is decided, and this is an eligibility
 decision.
 
-**Status:** not qualified. **Closes 2026-09-10** — and unlike TBIPS, SBIPS and
-ProServices, **this one expires.** The three standing arrangements are in continuous
+**Status:** not qualified. **Closes 2026-09-28** per the feed of 2026-09-13 — it has moved
+twice (2026-09-10 as first recorded here, 2026-09-17 on the 2026-08-29 feed). Confirm the date in
+the Ariba event rather than here. Unlike TBIPS, SBIPS and ProServices, **this one expires.** The three standing arrangements are in continuous
 refresh, which is why their decision keeps not being made; there is no such slack here.
 
 **Eligibility:** participation limited to Canadian Suppliers as defined in the
@@ -392,7 +444,12 @@ the retroactive-filing note in the SBIPS section.)_
 
 ## Considered and declined
 
-**PSPC AI Source List (ITQ)** — closes 2026-09-30. A pre-qualified source list for AI services. Real and current, but only worth it if we intend to become an AI shop.
+**PSPC AI Source List (ITQ)** — `WS4286933967-Doc4822970058`. A pre-qualified source list for AI services. Real and current, but only worth it if we intend to become an AI shop.
+
+> **Date corrected 2026-09-13.** Recorded as closing 2026-09-30; the feed now reads 2027-09-30, and
+> the notice says the date *"is the publication closing date only and does not represent the ITQ
+> response submission deadline"* — that deadline is in section 2.7 of the ITQ document, not the
+> notice. Neither date in the feed is the response deadline.
 
 **Software Licensing SLSA** — excluded by its own terms: explicitly not for IT professional services or cloud-based solutions such as software as a service. It is licence resale.
 
@@ -428,6 +485,10 @@ the retroactive-filing note in the SBIPS section.)_
 > SA holders and Class-1 resellers. **Third observation of traffic through a declined
 > vehicle, and all three are exactly the resale work its own terms describe.** All three
 > had closed by 2026-08-26. This confirms the decline; it does not reopen it.
+>
+> **Gated: 1 of 72, ingest of 2026-09-13 (feed `df283359`).** `SSC-26-00034516:T`, Red Hat Ansible
+> licence renewal for SSC under SLSA EN578-232335/078/SMS, selective tendering to eighteen named SA
+> holders and Class-1 resellers. Fourth observation, same shape. Nothing reopens.
 
 **SaaS Method of Supply** (`EN578-191593`) — we would be the SaaS vendor. We are not one.
 
@@ -440,6 +501,12 @@ the retroactive-filing note in the SBIPS section.)_
 > vehicle is a subscription to somebody else's product, which is what its own terms
 > describe. Recorded because a declined vehicle with observed traffic is a stronger record
 > than one with none.
+>
+> **Gated: 1 of 72, ingest of 2026-09-13 (feed `df283359`).** `WS5872101970-Doc5872171711` — a
+> Supplier Collaboration and Digital Marketplace Solution for DND's Defence Drone Initiative, open to
+> *"suppliers holding a valid Supply Arrangement under PSPC's Software as a Service (SaaS) Supply
+> Arrangement"*. Filed as a plain solicitation, not a call-up; caught by reading. Second observation,
+> and again a subscription to a product. Nothing reopens.
 
 **Subscription Agent Services** — magazine subscriptions.
 
@@ -451,9 +518,13 @@ articles, reports, templates, blueprints and white papers.
 
 This is analyst-subscription resale, not IT services — the same shape as the SLSA, and
 declined for the same reason. **Gated: 1 of 71, ingest of 2026-08-26.** Recorded so the
-next read does not re-derive it from scratch.
+next read does not re-derive it from scratch. **Gated: 0 of 72, ingest of 2026-09-13** —
+`cb-772-71669904` closed 2026-09-07.
 
-**CRA Professional Services Supply Chain — `cb-394-26364368`, closes 2026-10-02.** Not a
+**CRA Professional Services Supply Chain — `cb-394-26364368`, closes 2026-10-02.**
+_(2026-09-13: absent from the feed of that date, although the 2026-08-28 feed gave its close as
+2026-10-16. The feed does not say whether it was cancelled, withdrawn or re-posted under another
+number. The decline below stands either way.)_ Not a
 PSPC arrangement: the CRA's own suite of contracts, five streams (Application Development;
 IT Oversight/Project Management; Cyber Protection; SAP ERP; Administrative and Non-IT).
 Top five ranked bidders win contracts, then every requirement is competed among them.

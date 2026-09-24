@@ -115,3 +115,7 @@ Thumbs.db
 # filter-failure-taxonomy.yaml, filter-versions.yaml and filter-refinements/.
 # Those are human judgement and belong in a diff; this is scaffolding.
 data/filter_audit.db
+
+.env
+.env.*
+!.env.example
