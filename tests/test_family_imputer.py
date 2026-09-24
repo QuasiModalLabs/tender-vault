@@ -275,6 +275,34 @@ def test_cache_is_append_only() -> None:
         conn.close()
 
 
+def test_abort_logs_every_sent_call() -> None:
+    print("\nAn auth failure stops the run, and every call sent is in the ledger")
+    import threading
+
+    class FakeClient:
+        def __init__(self):
+            self.sent = 0
+            self._lock = threading.Lock()
+
+        def ask(self, state, payload):
+            with self._lock:
+                self.sent += 1
+            raise client.JevAuthError("HTTP 401: nope")
+
+    fake = FakeClient()
+    q = Q.Question((), {"type": "choice"}, "q" * 64)
+    blind = [(f"N{i}", ImputerState(f"t{i}", "d")) for i in range(60)]
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = cache.connect(Path(tmp) / "c.db")
+        raises("a 401 aborts the run", client.JevAuthError,
+               lambda: evaluate.impute(blind, q, "test", fake, conn, workers=4,
+                                       echo=lambda *_: None))
+        logged = conn.execute("SELECT COUNT(*) FROM calls").fetchone()[0]
+        check("every call that was sent is logged", logged, fake.sent)
+        check("...and the run stopped long before 60", fake.sent < 60, True)
+        conn.close()
+
+
 def test_nothing_in_the_product_reaches_the_imputer() -> None:
     print("\nNo product surface imports family_imputer or names its data")
     targets = (list((SCRIPTS / "tender_tools").rglob("*.py"))
@@ -369,6 +397,7 @@ def main() -> int:
     test_key_never_leaves_the_header()
     test_comparator_is_production()
     test_cache_is_append_only()
+    test_abort_logs_every_sent_call()
     test_nothing_in_the_product_reaches_the_imputer()
     test_imputed_fields_are_withheld()
     test_label_writes_only_the_scratch_file()

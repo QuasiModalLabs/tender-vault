@@ -47,7 +47,7 @@ import sqlite3
 import subprocess
 import sys
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,7 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ingest  # noqa: E402
 
 from . import cache
-from .client import JevClient, JevError, ModelMismatch, validate_answer
+from .client import JevAuthError, JevClient, JevError, ModelMismatch, validate_answer
 from .comparator import keyword_hits
 from .options import NONE_KEY, label_set
 from .question import MODEL, Question
@@ -214,53 +214,83 @@ def impute(blind: list, question: Question, purpose: str, client: JevClient,
     if not todo:
         return stats
 
+    # A SLIDING WINDOW, NOT A QUEUE. At most `workers` calls are ever in
+    # flight, and the next is submitted only while no abort is pending. Submitting
+    # everything up front let a fast failure (a 401 on every call) race the
+    # workers through the whole queue before this thread could cancel anything -
+    # tests/test_family_imputer.py measured 60 of 60 sent.
+    #
+    # ABORTING DRAINS, IT DOES NOT ABANDON. Calls already in flight were sent and
+    # may be billed, so they are consumed and logged before the abort is raised.
     errors: list[str] = []
+    abort: Exception | None = None
+    pending = iter(todo)
+    in_flight: dict = {}
+
+    def submit_next(pool) -> None:
+        if abort is not None:
+            return
+        item = next(pending, None)
+        if item is not None:
+            in_flight[pool.submit(client.ask, item[1].payload, question.payload)] = item
+
+    def handle(nid, prepared, fut) -> None:
+        nonlocal abort
+        stats["called"] += 1
+        try:
+            body = fut.result()
+        except JevAuthError as exc:
+            cache.log_call(conn, purpose, nid, None, None, None, "auth_error")
+            stats["errors"] += 1
+            abort = abort or exc
+            return
+        except JevError as exc:
+            cache.log_call(conn, purpose, nid, None, None, None, "error")
+            stats["errors"] += 1
+            errors.append(f"{nid}: {exc}")
+            if stats["errors"] >= max_errors:
+                abort = abort or JevError(
+                    f"{max_errors} failed calls; stopping. Last: {errors[-1]}")
+            return
+        usage = body.get("usage") or {}
+        try:
+            verdict = validate_answer(body, question.keys)
+        except ModelMismatch as exc:
+            cache.log_call(conn, purpose, nid, body.get("model"),
+                           usage.get("input_tokens"), usage.get("output_tokens"),
+                           "refused_model_mismatch")
+            abort = abort or exc
+            return
+        except JevError as exc:
+            cache.log_call(conn, purpose, nid, body.get("model"),
+                           usage.get("input_tokens"), usage.get("output_tokens"),
+                           "refused_malformed")
+            stats["errors"] += 1
+            errors.append(f"{nid}: {exc}")
+            return
+        cache.put(conn, nid, prepared, question.sha256, verdict)
+        cache.log_call(conn, purpose, nid, verdict["model"],
+                       verdict["input_tokens"], verdict["output_tokens"], "stored")
+        stats["stored"] += 1
+        stats["input_tokens"] += verdict["input_tokens"]
+
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(client.ask, p.payload, question.payload): (nid, p)
-                   for nid, p in todo}
-        for i, fut in enumerate(as_completed(futures), 1):
-            nid, prepared = futures[fut]
-            stats["called"] += 1
-            try:
-                body = fut.result()
-            except JevError as exc:
-                cache.log_call(conn, purpose, nid, None, None, None, "error")
-                stats["errors"] += 1
-                errors.append(f"{nid}: {exc}")
-                if stats["errors"] >= max_errors:
+        for _ in range(workers):
+            submit_next(pool)
+        while in_flight:
+            done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+            for fut in done:
+                nid, prepared = in_flight.pop(fut)
+                handle(nid, prepared, fut)
+                submit_next(pool)
+                if stats["called"] % 250 == 0:
                     conn.commit()
-                    for f in futures:
-                        f.cancel()
-                    raise JevError(f"{max_errors} failed calls; stopping. Last: {errors[-1]}")
-                continue
-            usage = body.get("usage") or {}
-            try:
-                verdict = validate_answer(body, question.keys)
-            except ModelMismatch:
-                cache.log_call(conn, purpose, nid, body.get("model"),
-                               usage.get("input_tokens"), usage.get("output_tokens"),
-                               "refused_model_mismatch")
-                conn.commit()
-                for f in futures:
-                    f.cancel()
-                raise
-            except JevError as exc:
-                cache.log_call(conn, purpose, nid, body.get("model"),
-                               usage.get("input_tokens"), usage.get("output_tokens"),
-                               "refused_malformed")
-                stats["errors"] += 1
-                errors.append(f"{nid}: {exc}")
-                continue
-            cache.put(conn, nid, prepared, question.sha256, verdict)
-            cache.log_call(conn, purpose, nid, verdict["model"],
-                           verdict["input_tokens"], verdict["output_tokens"], "stored")
-            stats["stored"] += 1
-            stats["input_tokens"] += verdict["input_tokens"]
-            if i % 250 == 0:
-                conn.commit()
-                echo(f"  {i}/{len(todo)} called, {stats['errors']} errors, "
-                     f"{stats['input_tokens']:,} input tokens")
+                    echo(f"  {stats['called']}/{len(todo)} called, "
+                         f"{stats['errors']} errors, "
+                         f"{stats['input_tokens']:,} input tokens")
     conn.commit()
+    if abort is not None:
+        raise abort
     stats["error_samples"] = errors[:5]
     return stats
 

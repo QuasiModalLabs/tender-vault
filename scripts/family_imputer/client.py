@@ -43,6 +43,10 @@ class ModelMismatch(JevError):
     """The response came from a model other than the pinned one."""
 
 
+class JevAuthError(JevError):
+    """401/403. No retry and no later call can succeed, so a run stops at once."""
+
+
 def load_api_key() -> str | None:
     """Process env first, then .env. Returns None rather than raising."""
     key = os.environ.get(ENV_VAR)
@@ -124,6 +128,9 @@ class JevClient:
             else:
                 if resp.status_code == 200:
                     return resp.json()
+                if resp.status_code in (401, 403):
+                    raise JevAuthError(_scrub(
+                        f"HTTP {resp.status_code}: {resp.text[:300]}", self._key))
                 if resp.status_code not in RETRY_STATUSES or attempt == self.max_retries:
                     raise JevError(_scrub(
                         f"HTTP {resp.status_code}: {resp.text[:300]}", self._key))
