@@ -63,6 +63,31 @@ def cmd_check_key(args) -> int:
     return 0
 
 
+def cmd_measure_overhead(args) -> int:
+    """
+    The per-call fixed cost, measured rather than fitted: the frozen question
+    over a state with the run's shape and no text. Logged in the ledger as
+    `overhead`; never cached as a verdict, because it is not about a notice.
+    """
+    q = frozen_question()
+    conn = cache.connect()
+    try:
+        body = JevClient().ask({"title": "", "description": ""}, q.payload)
+        verdict = validate_answer(body, q.keys)
+    except JevError as exc:
+        cache.log_call(conn, "overhead", None, None, None, None, "error")
+        conn.commit()
+        print(f"overhead call FAILED: {exc}")
+        return 1
+    cache.log_call(conn, "overhead", None, verdict["model"], verdict["input_tokens"],
+                   verdict["output_tokens"], "ok")
+    conn.commit()
+    print(f"question {q.sha256[:16]}.. model {verdict['model']}")
+    print(f"fixed overhead: {verdict['input_tokens']} input tokens "
+          f"(empty title and description), {verdict['output_tokens']} output")
+    return 0
+
+
 def cmd_question(args) -> int:
     q = build_question()
     print(f"options   {len(q.options)}")
@@ -221,6 +246,7 @@ def main(argv=None) -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check-key").set_defaults(fn=cmd_check_key)
     sub.add_parser("question").set_defaults(fn=cmd_question)
+    sub.add_parser("measure-overhead").set_defaults(fn=cmd_measure_overhead)
     p = sub.add_parser("pilot")
     p.add_argument("--n", type=int, default=E.PILOT_N)
     p.add_argument("--workers", type=int, default=8)

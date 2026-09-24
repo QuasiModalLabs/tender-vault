@@ -104,6 +104,34 @@ admits in ten.
 majority-class baseline, is a diagnostic. It is dominated by the non-IT
 segments, where a constant answer scores well.
 
+## Cost structure, and the candidate variant B
+
+Added 2026-09-24, after the pilot and before the full run. This section is
+outside the pre-registered rule and changes nothing in it.
+
+**Fixed overhead is measured, not fitted.** `python scripts/family_imputer
+measure-overhead` sends the frozen question over the run's state shape with
+empty title and description. It returned **3,471 input tokens** on
+`jev-1.13.0`, question `c5725ac4..`.
+
+The 200 pilot calls averaged 3,869.0 input tokens (median 3,665.5, p99 6,755,
+max 8,449, sum 773,808). So **about 90% of every call (3,471 / 3,869) is the
+question**: the instructions plus the 35 option criteria. The notice itself
+contributes about 398 tokens on average. Price per docs.typesafe.ai/models
+(read 2026-09-23): $0.042 per million input tokens, output free. The whole
+coded set is about 90.2M input tokens, about $3.79.
+
+**The question stays frozen for this run.** Trimming the option descriptions
+would change `QUESTION_SHA256`. Every cached verdict would be keyed out of
+reach, and the rule above would no longer describe the question that was run.
+
+**Candidate variant B: trimmed option descriptions.** It is recorded here and
+not started. It is to be proposed only if this run returns INCONCLUSIVE. It
+would be a new question with a new recorded hash, a new pre-registered rule,
+and a fresh run, compared against this run as a separate measurement. Nothing
+cached under `c5725ac4..` carries over to it. `proposed_change.variant` stays
+null for this run.
+
 ## Status
 
 PROPOSED, and naming no variant. Phase 1 is an evaluation of an imputer, not a
