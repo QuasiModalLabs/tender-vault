@@ -132,6 +132,60 @@ and a fresh run, compared against this run as a separate measurement. Nothing
 cached under `c5725ac4..` carries over to it. `proposed_change.variant` stays
 null for this run.
 
+## Phase 1 measurement, 2026-09-24
+
+Produced by `python scripts/family_imputer report`, over verdicts cached under
+question `c5725ac4..` and model `jev-1.13.0`. Coverage: 23,314 of 23,314 coded
+notices, 0 missing, 0 errors in the run.
+
+**Headline, admit class (1,843 publisher admits):**
+
+| | recall | precision |
+|---|---|---|
+| Jev (top choice) | 0.796 (0.777–0.814), 1467/1843 | 0.703 (0.683–0.722), 1467/2087 |
+| Keyword branch (production) † | 0.565 (0.543–0.588), 1042/1843 | 0.469 (0.448–0.489), 1042/2224 |
+| Majority baseline (never admit) | 0.000 | undefined |
+
+**Population:** every coded notice is WS or cb. These numbers are evidence
+about the model, not a measurement on the PW, SSC and MX notices the imputer
+would serve.
+† **Keyword handicap:** `matched_competencies` never runs on WS/cb notices in
+production, so part of the 23-point gap is an artefact of this population.
+
+**Pre-registered rule: PROCEED.** Every condition holds with margin:
+
+| Condition | Required | Measured |
+|---|---|---|
+| Recall gain over keywords | ≥ +0.10 | +0.231 |
+| Precision change vs keywords | ≥ −0.05 | +0.234 |
+| Jev recall | ≥ 0.60 | 0.796 |
+
+It holds within each source system separately:
+
+| Source | Jev recall | Jev precision | Keyword recall | Keyword precision |
+|---|---|---|---|---|
+| WS (n = 10,193) | 0.749 | 0.713 | 0.442 | 0.467 |
+| cb (n = 13,121) | 0.813 | 0.700 | 0.610 | 0.469 |
+
+**Diagnostics (not headline):**
+- Set agreement is 0.649, against 0.291 for always answering "none of these".
+- Strict agreement on single-label notices is 0.638.
+- Jev confuses 8111 and 80101507 in both directions (126 and 121 notices). Both are profile options, so this does not move the admit decision.
+- 81 notices the publisher coded "8010 other" went to 80101507, which counts against precision.
+- The admit rate follows P(profile options): 0.012 in the lowest decile, 0.800 in the top one.
+- 242 publisher admits sit in the 0.0–0.1 bucket. That is where the recall loss is concentrated.
+
+**What these numbers exclude or assume:**
+- Precision is measured against publisher codes, which contain miscodes. The 30 sampled disagreements in `data/family_imputer/report.json` are the first look at how many of Jev's "errors" are publisher errors. They are unlabelled as of this entry.
+- 22 notices whose codes are all unmappable are excluded from set agreement only.
+- 1 notice was truncated.
+
+**Tokens and cost, from the call ledger:**
+- 23,342 calls, 90,111,081 input tokens: **$3.78** at $0.042 per million input (docs.typesafe.ai/models, read 2026-09-23). Output is free.
+- The pre-run estimate was $3.79.
+- 12.4M output tokens were returned and are unbilled under current pricing.
+- An aborted pilot on 2026-09-24 sent an unknown number of calls, and only 25 are in the ledger. All were rejected 401 and unbilled (fixed in 37731b4).
+
 ## Status
 
 PROPOSED, and naming no variant. Phase 1 is an evaluation of an imputer, not a
