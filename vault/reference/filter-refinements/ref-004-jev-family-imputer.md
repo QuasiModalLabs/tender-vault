@@ -186,6 +186,72 @@ It holds within each source system separately:
 - 12.4M output tokens were returned and are unbilled under current pricing.
 - An aborted pilot on 2026-09-24 sent an unknown number of calls, and only 25 are in the ledger. All were rejected 401 and unbilled (fixed in 37731b4).
 
+## Phase 2 analysis, 2026-09-24 (post hoc, not pre-registered)
+
+Produced by `python scripts/family_imputer sweep` and `misses`, from the cache
+only. The call ledger shows 23,342 calls before and after. Recall is against
+publisher codes. The phase 1 population caveat and keyword handicap apply
+throughout.
+
+**Why this was run.** A false negative is a tender never seen; a false positive
+is seconds of reading. Recall is the number that matters, and phase 1's rule
+weighed the two alike.
+
+**Admit on probability mass.** A notice is admitted if the summed probability
+on the four profile options is at least t. Full curve: `data/family_imputer/sweep.csv`.
+
+| t | recall | precision | admits |
+|---|---|---|---|
+| top choice (phase 1) | 0.796 | 0.703 | 2,087 |
+| 0.05 | 0.887 (0.872–0.901) | 0.539 | 3,033 |
+| 0.03 | 0.8996 (1658/1843), just under 0.90 | 0.513 | 3,235 |
+| **0.02** | **0.909 (0.895–0.922)** | **0.489 (0.473–0.506)** | **3,425** |
+| 0.01 | 0.925 (0.912–0.936) | 0.450 | 3,790 |
+
+- **Recall 0.90 is reachable on the full set at t = 0.02.** Against the top-choice rule, that is 209 more IT notices for 1,338 more admits, about 6.4 extra reads per notice recovered.
+- **The split-half check says 0.02 is fragile.** Choosing t on a seeded half A picks 0.01, not 0.02, because 0.02 falls short of 0.90 on that half. At 0.01, half B's recall is 0.941 (P 0.452). The halves differ by about 3 points at a fixed t, which is the resolution this analysis actually has.
+- **Jev's probabilities are rounded to 0.01.** Summed mass moves in steps of 0.01, so any t in (0, 0.01] selects the same notices. **t = 0.01 is the floor, and recall 0.925 is the ceiling of the threshold approach.**
+
+**The misses have no mass on any profile option.** Of the 208 publisher admits missed at t = 0.05:
+
+| Profile mass | Notices |
+|---|---|
+| 0.00 exactly | 139 |
+| 0.01 | 28 |
+| 0.02–0.04 | 41 |
+
+The 139 at exactly 0.00 are unrecoverable by any threshold. Of the 376 phase 1 top-choice misses, 139 sit at 0.00 and 168 carry 0.05 or more.
+
+**Union with the keyword branch.** A notice is admitted if the mass rule fires or `matched_competencies` fires. The union reaches 0.901 at t = 0.04 (precision 0.435, 3,817 admits) and 0.931 at t = 0.01 (precision 0.392, 4,378 admits). The two methods mostly fail on the same notices:
+
+| t | found by both | Jev only | keywords only | neither |
+|---|---|---|---|---|
+| 0.05 | 1,021 | 614 | 21 | 187 |
+| 0.01 | 1,030 | 674 | 12 | 127 |
+
+**The 187 found by neither at t = 0.05.** These are 121 cb and 66 WS notices. 127 of them have profile mass 0.00. The profile codes they carry are 117 in 8111, 76 in 4323, 54 in 8116 and 10 in 80101507, counted per code. Six codes account for 75 notice-code occurrences: 81112000 ×23, 81162308 ×17, 81110000 ×10, 80101507 ×10, 81111809 ×8 and 43230000 ×7.
+
+The shapes below come from reading titles only, not full descriptions, so they are a reading, not a finding:
+
+1. **A profile code filed as a generic service code.**
+   - 81162308 appears on first aid, nursing simulation, driver instruction and fall protection.
+   - 81162305 appears on psychological risk assessments at correctional institutions (6 notices).
+   - 81111809 appears on dust collectors, a roof chiller and a fire panel.
+   - 43232605, 43232504 and 81111705 appear on floating docks, a tractor GPS and field cabins.
+   - Jev names the actual purchase. These look like publisher miscodes.
+2. **Data and statistics filed under 81112000.** Examples are national surveys, immunization coverage, lake sediment and magnetotelluric data. Jev chose 8113 Statistics or 8115 Earth science. They are plausibly not IT work.
+3. **IT-adjacent, with the principal purchase outside IT.** Examples are vendor training (Cisco MDS, Nutanix, Fortinet, ArcGIS, an ML/AI workshop), which Jev put in 86 Education. Building automation control system maintenance went to 72, security system replacements to 46, and scanners and label printers to 4321 Computer Equipment. Whether we want these is a fit question for the profile, not an imputation error.
+4. **Not procurement at all.** Examples are "DO NOT USE", "Cancelled", "created in error", RFI and consultation summaries, and Innovative Solutions Canada calls filing 10–59 codes. One ECCC RFI files 398 codes.
+5. **Consulting and administrative roles filed under 80101507, 81111819 or 81162310.** Examples are project managers, QA specialists, procurement and financial specialists. Jev chose 8010 or 8011.
+
+On this reading, groups 1, 2 and 4 are the publisher's code being wrong, uninformative or not describing a purchase, rather than the model missing IT work. The 30-notice disagreement labels are what would test that reading; none have been recorded yet.
+
+**Recall weighted by bid disposition: not computed.**
+- Only 1 of the 23,314 coded notices joins to a vault disposition (an archived tender).
+- The two watching tenders are newer than `notices.db` (last publication 2026-08-13).
+- The one other human-disposition store, `filter-reviews.jsonl`, has 1 record, and it judges relevance, not bid.
+- One case cannot support a weighted recall, so there are no weights and no number.
+
 ## Status
 
 PROPOSED, and naming no variant. Phase 1 is an evaluation of an imputer, not a

@@ -380,6 +380,22 @@ def test_decision_rule() -> None:
           evaluate.decide(m(0.9, None), m(0.5, 0.7))["outcome"], "NOT EVALUATED")
 
 
+def test_sweep_definitions() -> None:
+    print("\nPhase 2 sweep: low tail present; 'neither' means both methods missed")
+    from family_imputer import sweep as S
+    check("the grid reaches below 0.05", min(S.THRESHOLDS), 0.005)
+    rows = [
+        {"notice_id": "a", "publisher_admit": True, "p_profile": 0.0, "kw_admit": False},
+        {"notice_id": "b", "publisher_admit": True, "p_profile": 0.0, "kw_admit": True},
+        {"notice_id": "c", "publisher_admit": True, "p_profile": 0.06, "kw_admit": False},
+        {"notice_id": "d", "publisher_admit": False, "p_profile": 0.0, "kw_admit": False},
+    ]
+    check("neither = publisher admit, mass below t, no keyword",
+          [r["notice_id"] for r in S.neither(rows, 0.05)], ["a"])
+    check("mass histogram counts every miss once",
+          sum(b["n"] for b in S.mass_histogram(rows)), len(rows))
+
+
 def test_wilson() -> None:
     print("\nWilson interval sanity")
     lo, hi = evaluate.wilson(50, 100)
@@ -402,6 +418,7 @@ def main() -> int:
     test_imputed_fields_are_withheld()
     test_label_writes_only_the_scratch_file()
     test_decision_rule()
+    test_sweep_definitions()
     test_wilson()
 
     print()

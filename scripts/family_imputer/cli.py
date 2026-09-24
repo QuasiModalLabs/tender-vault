@@ -234,6 +234,92 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_sweep(args) -> int:
+    """Phase 2: threshold sweep and keyword union, from the cache only.
+    Constructs no JevClient, so it cannot make a call."""
+    from . import sweep as S
+    q = frozen_question()
+    blind, answers = E.load_coded()
+    profile = ingest.parse_profile(ingest.DEFAULT_PROFILE)
+    result = E.score(blind, answers, q, cache.connect(), profile["unspsc_families"],
+                     profile["competencies"])
+    if result["coverage"]["missing"]:
+        print(f"error: {result['coverage']['missing']} notices lack a cached verdict")
+        return 1
+    rows = result["_rows"]
+    points, ref = S.curve(rows)
+    out = cache.DATA_DIR / "sweep.csv"
+    S.write_csv(points, out)
+
+    print("POST HOC: nothing below was pre-registered. Recall is against publisher codes.")
+    print(textwrap.fill(E.POPULATION_CAVEAT, 100))
+    for name, m in ref.items():
+        print(f"reference  {name:15} R {_fmt(m['recall'])}  P {_fmt(m['precision'])}  "
+              f"admits {m['admits']:,}")
+    print(f"\n{'t':>5}  {'Jev mass  recall':36}{'precision':36}{'admits':>7}"
+          f"   {'union  recall':36}{'precision':36}{'admits':>7}")
+    for p in points:
+        j, u = p["jev_mass"], p["union"]
+        print(f"{p['t']:5.3f}  {_fmt(j['recall']):36}{_fmt(j['precision']):36}{j['admits']:7,}"
+              f"   {_fmt(u['recall']):36}{_fmt(u['precision']):36}{u['admits']:7,}")
+    print(f"\npublisher admits by method (TP), and false positives by method")
+    print(f"{'t':>5} {'both':>6} {'Jev only':>9} {'KW only':>8} {'neither':>8}"
+          f"   {'FP both':>8} {'FP Jev only':>12} {'FP KW only':>11}")
+    for p in points:
+        print(f"{p['t']:5.3f} {p['tp_both']:6,} {p['tp_jev_only']:9,} {p['tp_kw_only']:8,} "
+              f"{p['tp_neither']:8,}   {p['fp_both']:8,} {p['fp_jev_only']:12,} {p['fp_kw_only']:11,}")
+    for key in ("jev_mass", "union"):
+        hit = S.highest_t_reaching(points, key)
+        if hit is None:
+            print(f"\n{key}: no threshold on the grid reaches recall {S.RECALL_TARGET}")
+            continue
+        print(f"\n{key}: highest t with recall >= {S.RECALL_TARGET} is {hit['t']:.3f}: "
+              f"R {_fmt(hit[key]['recall'])}  P {_fmt(hit[key]['precision'])}  "
+              f"admits {hit[key]['admits']:,}")
+        sh = S.split_half(rows, key)
+        if sh["chosen_t"] is not None:
+            print(f"  split-half: t chosen on half A = {sh['chosen_t']:.3f}; "
+                  f"half A R {_fmt(sh['half_a']['recall'])}; "
+                  f"half B R {_fmt(sh['half_b']['recall'])}  P {_fmt(sh['half_b']['precision'])}")
+    print("\nNOTE: Jev returns probabilities rounded to 0.01, so profile mass moves in")
+    print("steps of 0.01 and any t in (0, 0.01] selects the same notices.")
+    print(f"\nwrote {out}")
+    return 0
+
+
+def cmd_misses(args) -> int:
+    """
+    Phase 2: the publisher admits both methods miss, from the cache only.
+    Mass histogram for misses at --t (and for phase 1's top-choice misses),
+    then every admit found by neither Jev mass >= t nor the keyword branch.
+    """
+    from . import sweep as S
+    q = frozen_question()
+    blind, answers = E.load_coded()
+    profile = ingest.parse_profile(ingest.DEFAULT_PROFILE)
+    families = profile["unspsc_families"]
+    result = E.score(blind, answers, q, cache.connect(), families,
+                     profile["competencies"])
+    rows = result["_rows"]
+    pos = [r for r in rows if r["publisher_admit"]]
+    for label, missed in (
+            (f"Jev mass < {args.t}", [r for r in pos if r["p_profile"] < args.t]),
+            ("phase 1 top choice (not a profile option)",
+             [r for r in pos if not r["jev_admit"]])):
+        print(f"\nprofile-option mass of publisher admits missed by {label}: n={len(missed)}")
+        for b in S.mass_histogram(missed):
+            print(f"  [{b['lo']:.3f}, {b['hi']:.3f})  {b['n']:5,}")
+    both = S.neither(rows, args.t)
+    print(f"\nFOUND BY NEITHER (Jev mass < {args.t} and no keyword): n={len(both)}")
+    for r in sorted(both, key=lambda r: (r["choice"], r["notice_id"])):
+        pcodes = [c for c in r["codes"] if ingest.matches_unspsc_families({c}, families)]
+        print(f"{r['notice_id']}\t{r['source']}\tmass={r['p_profile']:.2f}\t"
+              f"jev={r['choice']} p={r['choice_p']:.2f}\t"
+              f"profile_codes={','.join(pcodes)}\tall_codes={len(r['codes'])}\t"
+              f"{' '.join(r['title'].split())[:110]}")
+    return 0
+
+
 def cmd_label(args) -> int:
     rec = E.record_label(args.notice_id, args.kind, args.note or "")
     print(f"recorded {rec['notice_id']} as {rec['kind']} -> {E.LABELS_JSONL}")
@@ -255,6 +341,10 @@ def main(argv=None) -> None:
     p.add_argument("--workers", type=int, default=8)
     p.set_defaults(fn=cmd_run)
     sub.add_parser("report").set_defaults(fn=cmd_report)
+    sub.add_parser("sweep").set_defaults(fn=cmd_sweep)
+    p = sub.add_parser("misses")
+    p.add_argument("--t", type=float, default=0.05)
+    p.set_defaults(fn=cmd_misses)
     p = sub.add_parser("label")
     p.add_argument("notice_id")
     p.add_argument("kind", choices=E.LABEL_KINDS)
