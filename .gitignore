@@ -119,3 +119,9 @@ data/filter_audit.db
 .env
 .env.*
 !.env.example
+
+# Jev family imputer (ref-004). The cache holds paid-for verdicts and the call
+# ledger; ignored as derived data, like filter_audit.db. The report, confusion
+# matrix and disagreement labels beside it are deliberately NOT ignored - the
+# labels are human judgement, and whether they are committed is a decision.
+data/family_imputer/cache.db
