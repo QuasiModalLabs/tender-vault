@@ -196,6 +196,23 @@ def map_code(code: str, options: tuple[Option, ...]) -> str:
     return NONE_KEY
 
 
+def describe_code(code: str, ref: dict[str, RefEntry]) -> str:
+    """
+    The English UNSPSC description of an 8-digit code, at the level it was
+    filed: 81112000 is a class and reads as the class, 81000000 as the segment.
+    Walks commodity -> class -> family -> segment, taking a coarser level only
+    when the trailing digits are zero, so a commodity is never silently read
+    as its parent.
+    """
+    for width in (8, 6, 4, 2):
+        if code[width:].strip("0"):
+            break
+        entry = ref.get(code[:width])
+        if entry is not None:
+            return entry.description
+    return "(not in the PSPC reference file)"
+
+
 def label_set(codes: set[str], options: tuple[Option, ...]) -> tuple[frozenset, int]:
     """
     The publisher's codes as a set of option keys, and how many codes were

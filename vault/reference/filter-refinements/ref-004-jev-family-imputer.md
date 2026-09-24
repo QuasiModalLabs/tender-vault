@@ -246,6 +246,16 @@ The shapes below come from reading titles only, not full descriptions, so they a
 
 On this reading, groups 1, 2 and 4 are the publisher's code being wrong, uninformative or not describing a purchase, rather than the model missing IT work. The 30-notice disagreement labels are what would test that reading; none have been recorded yet.
 
+**A third label kind, `out_of_scope`, was added before any label was recorded.**
+Groups 3 and 5 fit neither of the original two kinds. They are notices
+correctly coded as IT-adjacent that the profile would not bid. Labelling them
+`jev_wrong` would blame the model for a profile boundary, and
+`publisher_miscoded` would blame a correctly filed code. The three definitions
+live in `evaluate.LABEL_DEFINITIONS`. The `label` command validates against
+them, and `sheet` prints them at the top of
+`data/family_imputer/disagreements.md`, the reading sheet for the 30-notice
+sample. The sheet suggests no labels.
+
 **Recall weighted by bid disposition: not computed.**
 - Only 1 of the 23,314 coded notices joins to a vault disposition (an archived tender).
 - The two watching tenders are newer than `notices.db` (last publication 2026-08-13).

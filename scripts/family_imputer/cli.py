@@ -6,7 +6,9 @@ Jev family imputer - phase 1 evaluation.
     pilot       impute a seeded 200-notice sample; token count and cost estimate
     run         impute every coded notice (resumable - cached verdicts are skipped)
     report      score against the publisher's codes; write report.json + confusion.csv
-    label       record one printed disagreement as jev_wrong or publisher_miscoded
+    sheet       write the disagreement sample to disagreements.md for reading
+    label       record one printed disagreement as jev_wrong, publisher_miscoded
+                or out_of_scope
 
 Usage:
     python scripts/family_imputer check-key
@@ -207,7 +209,7 @@ def _print_report(result: dict, spend: dict, sample: list) -> None:
           f"=> ${c['usd']:.2f}   ({E.PRICE_SOURCE})")
 
     print(f"\nDISAGREEMENTS - {len(sample)} sampled (seed {E.SEED}). Record each with:")
-    print("  python scripts/family_imputer label <notice_id> jev_wrong|publisher_miscoded [--note ...]")
+    print(f"  python scripts/family_imputer label <notice_id> {'|'.join(E.LABEL_KINDS)} [--note ...]")
     for i, r in enumerate(sample, 1):
         desc = " ".join(r["description"].split())[:500]
         print(f"\n[{i:02}] {r['notice_id']}  {r['direction']}")
@@ -320,6 +322,20 @@ def cmd_misses(args) -> int:
     return 0
 
 
+def cmd_sheet(args) -> int:
+    """The disagreement sample as a Markdown reading sheet. Cache only."""
+    from .options import load_reference
+    q = frozen_question()
+    blind, answers = E.load_coded()
+    profile = ingest.parse_profile(ingest.DEFAULT_PROFILE)
+    result = E.score(blind, answers, q, cache.connect(), profile["unspsc_families"],
+                     profile["competencies"])
+    sample = E.disagreement_sample(result.get("_rows", []))
+    path = E.write_label_sheet(sample, load_reference())
+    print(f"wrote {len(sample)} notices to {path}")
+    return 0
+
+
 def cmd_label(args) -> int:
     rec = E.record_label(args.notice_id, args.kind, args.note or "")
     print(f"recorded {rec['notice_id']} as {rec['kind']} -> {E.LABELS_JSONL}")
@@ -342,6 +358,7 @@ def main(argv=None) -> None:
     p.set_defaults(fn=cmd_run)
     sub.add_parser("report").set_defaults(fn=cmd_report)
     sub.add_parser("sweep").set_defaults(fn=cmd_sweep)
+    sub.add_parser("sheet").set_defaults(fn=cmd_sheet)
     p = sub.add_parser("misses")
     p.add_argument("--t", type=float, default=0.05)
     p.set_defaults(fn=cmd_misses)
@@ -353,7 +370,7 @@ def main(argv=None) -> None:
     args = ap.parse_args(argv)
     try:
         sys.exit(args.fn(args))
-    except (JevError, FrozenQuestionDrift, E.NotPreregistered, ValueError,
-            FileNotFoundError) as exc:
+    except (JevError, FrozenQuestionDrift, E.NotPreregistered, E.SampleDrift,
+            ValueError, FileNotFoundError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)

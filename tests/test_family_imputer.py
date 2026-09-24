@@ -380,6 +380,66 @@ def test_decision_rule() -> None:
           evaluate.decide(m(0.9, None), m(0.5, 0.7))["outcome"], "NOT EVALUATED")
 
 
+def test_three_label_kinds_and_the_sheet() -> None:
+    print("\nThree label kinds; the reading sheet matches the report and pre-fills nothing")
+    check("the kinds are exactly the three", evaluate.LABEL_KINDS,
+          ("jev_wrong", "publisher_miscoded", "out_of_scope"))
+    check("every kind has a definition",
+          all(evaluate.LABEL_DEFINITIONS[k].strip() for k in evaluate.LABEL_KINDS), True)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        ref = O.load_reference(_fake_reference(tmp))
+        check("an L4 code reads as itself",
+              O.describe_code("80101507", ref), "Information technology consultation services")
+        check("a class-level code reads at its class",
+              O.describe_code("80101500", ref), "Business consultation")
+        check("an unknown commodity is not read as its parent",
+              O.describe_code("80101599", ref), "(not in the PSPC reference file)")
+
+        report = tmp / "report.json"
+        labels = tmp / "labels.jsonl"
+        sheet = tmp / "sheet.md"
+        report.write_text(json.dumps({
+            "model": "jev-1.13.0", "question_sha256": "q" * 64,
+            "disagreement_sample": [
+                {"notice_id": "WS1", "direction": "jev_admits_publisher_did_not"},
+                {"notice_id": "cb-2", "direction": "publisher_admits_jev_did_not"}]}))
+        evaluate.record_label("WS1", "out_of_scope", "", report_path=report, labels_path=labels)
+        check("out_of_scope is accepted by label",
+              json.loads(labels.read_text().splitlines()[0])["kind"], "out_of_scope")
+
+        def row(nid, direction, truncated=False):
+            return {"notice_id": nid, "direction": direction, "title": f"Title {nid}",
+                    "description": "Line one\n\nLine two", "codes": ["80101507"],
+                    "choice": "a", "choice_p": 0.6,
+                    "probabilities": {"a": 0.6, "b": 0.3, "c": 0.1},
+                    "kw_hits": [], "truncated": truncated}
+        sample = [row("WS1", "jev_admits_publisher_did_not"),
+                  row("cb-2", "publisher_admits_jev_did_not", truncated=True)]
+        raises("a sample in a different order than the report is refused",
+               evaluate.SampleDrift,
+               lambda: evaluate.write_label_sheet(list(reversed(sample)), ref,
+                                                  path=sheet, report_path=report))
+        evaluate.write_label_sheet(sample, ref, path=sheet, report_path=report)
+        text = sheet.read_text(encoding="utf-8")
+        check("each notice id is a heading, in report order",
+              [l[3:] for l in text.splitlines() if l.startswith("## ") and l[3:] in ("WS1", "cb-2")],
+              ["WS1", "cb-2"])
+        check("all three definitions are at the top",
+              all(f"`{k}`" in text.split("## WS1")[0] for k in evaluate.LABEL_KINDS), True)
+        check("every label and note line is blank",
+              {l for l in text.splitlines() if l.startswith(("label:", "note:"))},
+              {"label:", "note:"})
+        check("the next two options are shown",
+              ("next: b (p = 0.30)" in text, "next: c (p = 0.10)" in text), (True, True))
+        check("no-keyword notices read 'none'", "**Keyword hits:** none" in text, True)
+        check("the full description is carried, not an excerpt",
+              "> Line one" in text and "> Line two" in text, True)
+        check("the code carries its English description",
+              "`80101507` Information technology consultation services" in text, True)
+
+
 def test_sweep_definitions() -> None:
     print("\nPhase 2 sweep: low tail present; 'neither' means both methods missed")
     from family_imputer import sweep as S
@@ -418,6 +478,7 @@ def main() -> int:
     test_imputed_fields_are_withheld()
     test_label_writes_only_the_scratch_file()
     test_decision_rule()
+    test_three_label_kinds_and_the_sheet()
     test_sweep_definitions()
     test_wilson()
 

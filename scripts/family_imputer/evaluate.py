@@ -59,7 +59,7 @@ from .client import JevAuthError, JevClient, JevError, ModelMismatch, validate_a
 from .comparator import keyword_hits
 from .options import NONE_KEY, label_set
 from .question import MODEL, Question
-from .state import ImputerState, prepare
+from .state import STATE_CHAR_BUDGET, ImputerState, prepare
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 NOTICES_DB = PROJECT_ROOT / "data" / "notices.db"
@@ -70,7 +70,30 @@ RULE_HEADING = "## Pre-registered decision rule"
 REPORT_JSON = cache.DATA_DIR / "report.json"
 CONFUSION_CSV = cache.DATA_DIR / "confusion.csv"
 LABELS_JSONL = cache.DATA_DIR / "disagreements.jsonl"
-LABEL_KINDS = ("jev_wrong", "publisher_miscoded")
+# The labelling standard, in one place. The label command validates against
+# these keys and the reading sheet prints these definitions, so the standard
+# the human reads is the standard the tool enforces.
+#
+# out_of_scope was added 2026-09-24, before any label was recorded. Reading the
+# 187 notices both methods missed turned up correctly-coded IT-adjacent work
+# the profile would not bid. Filing those as jev_wrong would blame the model
+# for a profile boundary; filing them as publisher_miscoded would blame a
+# correctly filed code.
+LABEL_DEFINITIONS = {
+    "jev_wrong": (
+        "The publisher's code describes what the notice buys, and Jev's top "
+        "choice does not."),
+    "publisher_miscoded": (
+        "Jev's top choice describes what the notice buys, and the publisher's "
+        "code does not - wrong, used as a generic service code, or attached "
+        "to something that is not a purchase."),
+    "out_of_scope": (
+        "The publisher's code is defensible for what is bought and the notice "
+        "is IT-adjacent, but it is not work the profile would bid - e.g. "
+        "vendor training, building automation, staffing roles filed under IT "
+        "codes. A profile boundary, not a model or publisher error."),
+}
+LABEL_KINDS = tuple(LABEL_DEFINITIONS)
 
 # docs.typesafe.ai/models, read 2026-09-23: input $0.042 per million tokens,
 # output tokens free. Recorded with its source because a price is a fact that
@@ -358,6 +381,7 @@ def score(blind: list, answers: dict, question: Question, conn,
             "publisher_admit": bool(ingest.matches_unspsc_families(codes, families)),
             "choice": verdict["choice"],
             "choice_p": probs[verdict["choice"]],
+            "probabilities": probs,
             "p_profile": sum(p for k, p in probs.items() if kinds[k] == "profile"),
             "jev_admit": kinds[verdict["choice"]] == "profile",
             "kw_hits": kw,
@@ -524,3 +548,78 @@ def record_label(notice_id: str, kind: str, note: str = "",
     with open(labels_path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(record) + "\n")
     return record
+
+
+# ---------------------------------------------------------------------------
+# The reading sheet
+# ---------------------------------------------------------------------------
+
+SHEET_MD = cache.DATA_DIR / "disagreements.md"
+DIRECTION_TEXT = {
+    "jev_admits_publisher_did_not": "Jev admits / publisher didn't",
+    "publisher_admits_jev_did_not": "Publisher admits / Jev didn't",
+}
+
+
+class SampleDrift(RuntimeError):
+    """The recomputed sample is not the one the report printed."""
+
+
+def write_label_sheet(sample: list, ref: dict, path: Path = SHEET_MD,
+                      report_path: Path = REPORT_JSON) -> Path:
+    """
+    The disagreement sample as Markdown, for reading outside the terminal.
+
+    SAME ORDER AS THE REPORT, CHECKED. The sample is recomputed from the cache
+    and compared id-for-id with the one `report` wrote to report.json, and a
+    mismatch refuses rather than writing a sheet whose ids `label` would reject.
+
+    THE SHEET CARRIES NO VERDICT. It shows the notice, the publisher's codes,
+    Jev's distribution and the keyword hits, with blank label and note lines.
+    It suggests no label; the definitions at the top are the only guidance.
+    """
+    from .options import describe_code
+
+    if not report_path.exists():
+        raise FileNotFoundError("no report yet - run `report` first")
+    printed = [r["notice_id"] for r in
+               json.loads(report_path.read_text(encoding="utf-8"))["disagreement_sample"]]
+    ids = [r["notice_id"] for r in sample]
+    if ids != printed:
+        raise SampleDrift("recomputed disagreement sample differs from report.json; "
+                          "re-run `report` before writing the sheet")
+
+    out = ["# Disagreement sample - reading sheet", "",
+           f"{len(sample)} notices, seed {SEED}, in the order `report` printed them. "
+           f"Model `{MODEL}`.",
+           "",
+           "## Label kinds", ""]
+    for kind, definition in LABEL_DEFINITIONS.items():
+        out.append(f"- **`{kind}`**: {definition}")
+    out += ["", "Record each one with:", "",
+            "```", "python scripts/family_imputer label <notice_id> "
+            + "|".join(LABEL_KINDS) + " --note \"...\"", "```", ""]
+
+    for i, r in enumerate(sample, 1):
+        probs = sorted(r["probabilities"].items(), key=lambda kv: -kv[1])
+        runners = [kv for kv in probs if kv[0] != r["choice"]][:2]
+        out += ["---", "", f"## {r['notice_id']}", "",
+                f"**{i:02} of {len(sample)}**: {DIRECTION_TEXT[r['direction']]}", "",
+                f"**Title:** {' '.join(r['title'].split())}", "",
+                "**Publisher's codes:**", ""]
+        out += [f"- `{c}` {describe_code(c, ref)}" for c in r["codes"]]
+        out += ["", "**Jev:**", "",
+                f"- top choice: {r['choice']} (p = {r['choice_p']:.2f})"]
+        out += [f"- next: {k} (p = {p:.2f})" for k, p in runners]
+        out += ["", f"**Keyword hits:** {', '.join(r['kw_hits']) or 'none'}", ""]
+        if r.get("truncated"):
+            out += [f"*Jev saw this description cut to {STATE_CHAR_BUDGET:,} "
+                    "characters; the full text is below.*", ""]
+        out += ["**Description:**", ""]
+        out += ["> " + line if line.strip() else ">"
+                for line in r["description"].replace("\r\n", "\n").split("\n")]
+        out += ["", "label:", "", "note:", ""]
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(out), encoding="utf-8", newline="\n")
+    return path
