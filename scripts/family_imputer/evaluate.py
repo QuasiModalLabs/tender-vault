@@ -40,9 +40,11 @@ on point estimates; Wilson intervals are printed beside every number.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import random
+import re
 import sqlite3
 import subprocess
 import sys
@@ -92,8 +94,26 @@ LABEL_DEFINITIONS = {
         "is IT-adjacent, but it is not work the profile would bid - e.g. "
         "vendor training, building automation, staffing roles filed under IT "
         "codes. A profile boundary, not a model or publisher error."),
+    # The three below were added 2026-09-24 from the definitions at the top
+    # of the reviewed sheet, before its labels were ingested. Without them
+    # ten-plus cases would have been forced into the first three kinds, and the
+    # tally would read far more confident than the reading was.
+    "profile_gap": (
+        "The publisher coded correctly and Jev answered correctly; it scored as "
+        "a disagreement only because the code sits in a family "
+        "unspsc_families does not list (e.g. 8010, 8016, 8110). Neither error. "
+        "Points at a filter refinement with nothing to do with Jev."),
+    "no_description": (
+        "The description is empty or pure boilerplate, so the notice was "
+        "classified from a title or less. An input ceiling that binds every "
+        "method equally."),
+    "unsure": (
+        "Two kinds are both defensible on the facts available. Not a hedge to "
+        "be resolved by picking the likelier one; the record carries the "
+        "candidate kinds and what the call turns on."),
 }
 LABEL_KINDS = tuple(LABEL_DEFINITIONS)
+LABELLERS = ("human", "assistant")
 
 # docs.typesafe.ai/models, read 2026-09-23: input $0.042 per million tokens,
 # output tokens free. Recorded with its source because a price is a fact that
@@ -522,32 +542,183 @@ def cost(spend: dict) -> dict:
 # Labelling disagreements
 # ---------------------------------------------------------------------------
 
-def record_label(notice_id: str, kind: str, note: str = "",
+def load_labels(labels_path: Path = LABELS_JSONL) -> list:
+    if not labels_path.exists():
+        return []
+    return [json.loads(line) for line in
+            labels_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def record_label(notice_id: str, kind: str, note: str = "", *,
+                 labelled_by: str, why_unsure: str = "", source: dict = None,
                  report_path: Path = REPORT_JSON,
                  labels_path: Path = LABELS_JSONL) -> dict:
     """
-    Append one human label to the scratch JSONL. Refuses notice ids that were
-    not in the printed sample, and kinds outside LABEL_KINDS. Writes nowhere
-    else - not filter-reviews.jsonl, not the golden set.
+    Append one label to the scratch JSONL. Writes nowhere else - not
+    filter-reviews.jsonl, not the golden set.
+
+    Refuses: a kind outside LABEL_KINDS; a notice not in the printed sample;
+    a second label for the same notice from the same labeller (so an ingest
+    re-run cannot double-count); an `unsure` with no stated reason.
+
+    `labelled_by` HAS NO DEFAULT, for the reason filter_audit.review gives for
+    `reviewer`: a human judgement and an assistant's proposal are different
+    measurements, and a default would let the log guess which one it holds.
     """
     if kind not in LABEL_KINDS:
         raise ValueError(f"kind must be one of {LABEL_KINDS}")
+    if labelled_by not in LABELLERS:
+        raise ValueError(f"labelled_by must be one of {LABELLERS}")
+    if kind == "unsure" and not why_unsure.strip():
+        raise ValueError("an unsure label must say which kinds it is between and why")
     if not report_path.exists():
         raise FileNotFoundError("no report yet - run `report` first")
     report = json.loads(report_path.read_text(encoding="utf-8"))
     sample = {r["notice_id"]: r for r in report.get("disagreement_sample", [])}
     if notice_id not in sample:
         raise ValueError(f"{notice_id} is not in the printed disagreement sample")
+    if any(r["notice_id"] == notice_id and r.get("labelled_by") == labelled_by
+           for r in load_labels(labels_path)):
+        raise ValueError(f"{notice_id} already has a {labelled_by} label; "
+                         f"labels are append-only and are not overwritten")
     record = {
         "notice_id": notice_id, "kind": kind, "note": note,
+        "why_unsure": why_unsure, "labelled_by": labelled_by,
         "direction": sample[notice_id]["direction"],
         "labelled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "question_sha256": report["question_sha256"], "model": report["model"],
     }
+    if source:
+        record["source"] = source
     labels_path.parent.mkdir(parents=True, exist_ok=True)
     with open(labels_path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(record) + "\n")
     return record
+
+
+class LabelSheetError(ValueError):
+    """The reviewed sheet did not parse. Nothing was written."""
+
+
+_BLOCK_MARK = re.compile(r"^\*\*\d{2} of \d+\*\*")
+_LABEL_LINE = re.compile(r"^label:[ \t]*(.*?)\s*$")
+_NOTE_LINE = re.compile(r"^note:[ \t]*(.*?)\s*$")
+_WHY_LINE = re.compile(r"^\*\*Why unsure:\*\*[ \t]*(.*?)\s*$")
+
+
+def parse_label_sheet(text: str, sample_ids: list) -> tuple[list, list]:
+    """
+    (parsed, errors) from a reviewed reading sheet.
+
+    A NOTICE BLOCK is a `## <id>` heading followed by a `**NN of M**` line - so
+    prose headings in the findings section are not mistaken for notices, while
+    a mistyped id in a real block is still caught as unknown. Within a block,
+    `label:`, `note:` and `**Why unsure:**` must start their line; description
+    lines are quoted with `>`, so a word "label:" inside a notice cannot match.
+    Nothing is guessed: every problem is returned, and the caller writes
+    nothing unless the list is empty.
+    """
+    lines = text.replace("\r\n", "\n").split("\n")
+    blocks, current = [], None
+    for i, line in enumerate(lines):
+        if line.startswith("## ") or line.startswith("# "):
+            nxt = next((l for l in lines[i + 1:i + 4] if l.strip()), "")
+            if line.startswith("## ") and _BLOCK_MARK.match(nxt):
+                current = {"id": line[3:].strip(), "lines": []}
+                blocks.append(current)
+            else:
+                current = None
+            continue
+        if current is not None:
+            current["lines"].append(line)
+
+    errors, parsed = [], []
+    seen = Counter(b["id"] for b in blocks)
+    for nid, n in seen.items():
+        if n > 1:
+            errors.append(f"{nid}: appears {n} times")
+    for nid in sorted(set(sample_ids) - set(seen)):
+        errors.append(f"{nid}: in the sample but has no block")
+    for nid in sorted(set(seen) - set(sample_ids)):
+        errors.append(f"{nid}: block heading is not a notice in the sample")
+
+    for b in blocks:
+        labels = [m.group(1) for l in b["lines"] if (m := _LABEL_LINE.match(l))]
+        notes = [m.group(1) for l in b["lines"] if (m := _NOTE_LINE.match(l))]
+        whys = [m.group(1) for l in b["lines"] if (m := _WHY_LINE.match(l))]
+        where = b["id"]
+        if len(labels) != 1:
+            errors.append(f"{where}: {len(labels)} label: lines, need exactly 1")
+            continue
+        if len(notes) != 1:
+            errors.append(f"{where}: {len(notes)} note: lines, need exactly 1")
+            continue
+        kind = labels[0].strip("` ")
+        if kind not in LABEL_KINDS:
+            errors.append(f"{where}: kind {labels[0]!r} is not one of {LABEL_KINDS}")
+            continue
+        if len(whys) > 1:
+            errors.append(f"{where}: {len(whys)} Why unsure lines, need at most 1")
+            continue
+        why = whys[0] if whys else ""
+        if kind == "unsure" and not why:
+            errors.append(f"{where}: unsure with no **Why unsure:** line")
+            continue
+        if kind != "unsure" and why:
+            errors.append(f"{where}: a Why unsure line on a {kind} label")
+            continue
+        parsed.append({"notice_id": b["id"], "kind": kind, "note": notes[0],
+                       "why_unsure": why})
+    return parsed, errors
+
+
+def ingest_label_sheet(path: Path, labelled_by: str,
+                       report_path: Path = REPORT_JSON,
+                       labels_path: Path = LABELS_JSONL) -> list:
+    """
+    Parse a reviewed sheet and record every label through record_label.
+
+    TWO PHASES. Everything is validated first - the sheet's ids against the
+    printed sample, every kind, every unsure reason, and that none of these
+    notices already carries a label from this labeller - and nothing is
+    written unless all of it passes. Then each record goes through
+    record_label, so the command's validation applies to the ingest too.
+    """
+    if not report_path.exists():
+        raise FileNotFoundError("no report yet - run `report` first")
+    raw = path.read_bytes()
+    sample_ids = [r["notice_id"] for r in json.loads(
+        report_path.read_text(encoding="utf-8"))["disagreement_sample"]]
+    parsed, errors = parse_label_sheet(raw.decode("utf-8"), sample_ids)
+    already = {r["notice_id"] for r in load_labels(labels_path)
+               if r.get("labelled_by") == labelled_by}
+    errors += [f"{p['notice_id']}: already has a {labelled_by} label"
+               for p in parsed if p["notice_id"] in already]
+    if errors:
+        raise LabelSheetError(
+            f"{path.name}: {len(errors)} problem(s), nothing written:\n  "
+            + "\n  ".join(errors))
+    try:
+        shown = path.resolve().relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        shown = str(path)
+    source = {"path": shown, "sha256": hashlib.sha256(raw).hexdigest()}
+    order = {nid: i for i, nid in enumerate(sample_ids)}
+    return [record_label(p["notice_id"], p["kind"], p["note"],
+                         labelled_by=labelled_by, why_unsure=p["why_unsure"],
+                         source=source, report_path=report_path,
+                         labels_path=labels_path)
+            for p in sorted(parsed, key=lambda p: order[p["notice_id"]])]
+
+
+def label_table(labels: list) -> dict:
+    """kind x direction, per labeller. Never summed across labellers."""
+    out: dict = {}
+    for r in labels:
+        who = out.setdefault(r.get("labelled_by", "unstated"), {})
+        row = who.setdefault(r["kind"], Counter())
+        row[r["direction"]] += 1
+    return out
 
 
 # ---------------------------------------------------------------------------

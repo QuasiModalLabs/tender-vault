@@ -349,12 +349,12 @@ def test_label_writes_only_the_scratch_file() -> None:
             "disagreement_sample": [{"notice_id": "WS1",
                                      "direction": "jev_admits_publisher_did_not"}]}))
         raises("an id outside the printed sample is refused", ValueError,
-               lambda: evaluate.record_label("WS2", "jev_wrong", "",
+               lambda: evaluate.record_label("WS2", "jev_wrong", "", labelled_by="human",
                                              report_path=report, labels_path=labels))
         raises("a kind outside the two is refused", ValueError,
-               lambda: evaluate.record_label("WS1", "ambiguous", "",
+               lambda: evaluate.record_label("WS1", "ambiguous", "", labelled_by="human",
                                              report_path=report, labels_path=labels))
-        evaluate.record_label("WS1", "publisher_miscoded", "n", report_path=report,
+        evaluate.record_label("WS1", "publisher_miscoded", "n", labelled_by="human", report_path=report,
                               labels_path=labels)
         lines = labels.read_text().splitlines()
         check("one line appended", len(lines), 1)
@@ -382,8 +382,9 @@ def test_decision_rule() -> None:
 
 def test_three_label_kinds_and_the_sheet() -> None:
     print("\nThree label kinds; the reading sheet matches the report and pre-fills nothing")
-    check("the kinds are exactly the three", evaluate.LABEL_KINDS,
-          ("jev_wrong", "publisher_miscoded", "out_of_scope"))
+    check("the kinds are exactly the six", evaluate.LABEL_KINDS,
+          ("jev_wrong", "publisher_miscoded", "out_of_scope",
+           "profile_gap", "no_description", "unsure"))
     check("every kind has a definition",
           all(evaluate.LABEL_DEFINITIONS[k].strip() for k in evaluate.LABEL_KINDS), True)
 
@@ -405,7 +406,7 @@ def test_three_label_kinds_and_the_sheet() -> None:
             "disagreement_sample": [
                 {"notice_id": "WS1", "direction": "jev_admits_publisher_did_not"},
                 {"notice_id": "cb-2", "direction": "publisher_admits_jev_did_not"}]}))
-        evaluate.record_label("WS1", "out_of_scope", "", report_path=report, labels_path=labels)
+        evaluate.record_label("WS1", "out_of_scope", "", labelled_by="human", report_path=report, labels_path=labels)
         check("out_of_scope is accepted by label",
               json.loads(labels.read_text().splitlines()[0])["kind"], "out_of_scope")
 
@@ -438,6 +439,130 @@ def test_three_label_kinds_and_the_sheet() -> None:
               "> Line one" in text and "> Line two" in text, True)
         check("the code carries its English description",
               "`80101507` Information technology consultation services" in text, True)
+
+
+def _sheet(blocks) -> str:
+    """A reviewed sheet: header prose, then (id, label, why, note) blocks, then findings."""
+    out = ["# Disagreement sample - reading sheet", "", "## Label kinds", "",
+           "- label: this line is in the header and must not be read", ""]
+    for i, (nid, label, why, note) in enumerate(blocks, 1):
+        out += ["---", "", f"## {nid}", "", f"**{i:02} of {len(blocks)}**: Jev admits",
+                "", "**Description:**", "", "> label: jev_wrong inside a quote is not a label",
+                "", f"label: {label}", ""]
+        if why is not None:
+            out += [f"**Why unsure:** {why}", ""]
+        out += [f"note: {note}", ""]
+    out += ["# Findings from the reading", "", "## A fourth label kind is missing", "",
+            "label: prose here is not a block"]
+    return "\n".join(out)
+
+
+def test_label_ingest() -> None:
+    print("\nIngest: validate everything, write nothing on any problem, never twice")
+    import inspect
+    check("record_label has no default labeller",
+          inspect.signature(evaluate.record_label).parameters["labelled_by"].default,
+          inspect.Parameter.empty)
+    from family_imputer.cli import main as cli_main
+    try:
+        cli_main(["label", "WS1", "jev_wrong"])
+        refused = False
+    except SystemExit as exc:
+        refused = exc.code == 2
+    check("the label command refuses without --labelled-by", refused, True)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        report = tmp / "report.json"
+        report.write_text(json.dumps({
+            "model": "jev-1.13.0", "question_sha256": "q" * 64,
+            "disagreement_sample": [
+                {"notice_id": "WS1", "direction": "jev_admits_publisher_did_not"},
+                {"notice_id": "cb-2", "direction": "publisher_admits_jev_did_not"}]}))
+        good = [("WS1", "publisher_miscoded", None, "a note"),
+                ("cb-2", "unsure", "profile_gap or jev_wrong: turns on X", "n2")]
+
+        def attempt(label, blocks):
+            labels = tmp / f"{label}.jsonl"
+            sheet = tmp / f"{label}.md"
+            sheet.write_text(_sheet(blocks), encoding="utf-8")
+            try:
+                evaluate.ingest_label_sheet(sheet, "human", report_path=report,
+                                            labels_path=labels)
+                refused = False
+            except evaluate.LabelSheetError:
+                refused = True
+            check(f"{label}: refused and nothing written",
+                  (refused, labels.exists()), (True, False))
+
+        attempt("missing id", good[:1])
+        attempt("extra id", good + [("WS9", "jev_wrong", None, "x")])
+        attempt("duplicate id", good + [good[0]])
+        attempt("unknown kind", [good[0], ("cb-2", "maybe", None, "x")])
+        attempt("unsure with no reason", [good[0], ("cb-2", "unsure", None, "x")])
+        attempt("two label lines", [good[0], ("cb-2", "jev_wrong\nlabel: unsure", None, "x")])
+
+        labels = tmp / "ok.jsonl"
+        sheet = tmp / "ok.md"
+        sheet.write_text(_sheet(good), encoding="utf-8")
+        recs = evaluate.ingest_label_sheet(sheet, "human", report_path=report,
+                                           labels_path=labels)
+        check("a clean sheet records every block, in sample order",
+              [(r["notice_id"], r["kind"]) for r in recs],
+              [("WS1", "publisher_miscoded"), ("cb-2", "unsure")])
+        check("quoted and header 'label:' lines are not read", len(recs), 2)
+        check("records carry labeller, reason and the sheet's hash",
+              (recs[1]["labelled_by"], recs[1]["why_unsure"],
+               len(recs[1]["source"]["sha256"])),
+              ("human", "profile_gap or jev_wrong: turns on X", 64))
+        raises("re-ingesting the same sheet is refused", evaluate.LabelSheetError,
+               lambda: evaluate.ingest_label_sheet(sheet, "human", report_path=report,
+                                                   labels_path=labels))
+        check("...and wrote nothing more", len(labels.read_text().splitlines()), 2)
+        check("an assistant reading of the same notices is a separate record",
+              len(evaluate.ingest_label_sheet(sheet, "assistant", report_path=report,
+                                              labels_path=labels)), 2)
+        table = evaluate.label_table(evaluate.load_labels(labels))
+        check("the table keeps labellers apart", sorted(table), ["assistant", "human"])
+
+
+def test_strip_and_ceiling() -> None:
+    print("\nVariant B stripper and input-ceiling flags")
+    from family_imputer import ceiling as C
+    from family_imputer import strip as S
+    check("strip rules match their recorded hash", S.rules_sha256(), S.STRIP_RULES_SHA256)
+    names = "\n".join(f"{i}.\tVendor Number {i} Inc." for i in range(1, 16))
+    desc = ("The requirement is for a systems administrator.\n"
+            "The following SA Holders have been invited:\n" + names +
+            "\nFile Number: R1")
+    s = S.strip_supplier_lists(desc)
+    check("a 15-name numbered list is removed as one run", (len(s.runs), s.names_removed), (1, 15))
+    check("...and the prose on either side is kept",
+          ("systems administrator" in s.text, "File Number: R1" in s.text,
+           "[invited-supplier list: 15 names removed]" in s.text), (True, True, True))
+    bullets = "\n".join(f"- Managed services item {i}" for i in range(1, 16))
+    check("a bulleted requirement list with no legal suffixes is kept",
+          S.strip_supplier_lists(bullets).runs, ())
+    nine = "\n".join(f"Vendor {i} Inc." for i in range(9))
+    check("nine names is below the run threshold", S.strip_supplier_lists(nine).runs, ())
+
+    ariba = ("AMENDMENT TO CLOSING TIME: Please disregard the Ariba Discovery posting "
+             "response deadline closing time and CanadaBuys posting closing time. All "
+             "required supporting documentation and proposals must be submitted by "
+             "January 22, 2024 at 2:00 PM EST. All proposals submitted after 2:00 PM EST "
+             "will result in the proposal being declared non-responsive. The period of "
+             "the contract is from date of contract award, up to 3 years.")
+    f = C.flags(ariba)
+    check("Ariba boilerplate plus a contract period is boilerplate_only",
+          (f["short"], f["boilerplate_only"]), (False, True))
+    work = ariba.replace("The period of the contract",
+                         "The Giant Mine Remediation Project requires a contractor to develop "
+                         "Version 1 of the Perpetual Care Plan for the Giant Mine in "
+                         "Yellowknife, Northwest Territories, including long-term monitoring "
+                         "and maintenance planning. The period of the contract")
+    check("the same boilerplate around a described requirement is not flagged",
+          C.flags(work)["boilerplate_only"], False)
+    check("'See Attached.' is short", C.flags("See Attached.")["short"], True)
 
 
 def test_sweep_definitions() -> None:
@@ -479,6 +604,8 @@ def main() -> int:
     test_label_writes_only_the_scratch_file()
     test_decision_rule()
     test_three_label_kinds_and_the_sheet()
+    test_label_ingest()
+    test_strip_and_ceiling()
     test_sweep_definitions()
     test_wilson()
 

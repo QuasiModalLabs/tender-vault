@@ -262,6 +262,73 @@ sample. The sheet suggests no labels.
 - The one other human-disposition store, `filter-reviews.jsonl`, has 1 record, and it judges relevance, not bid.
 - One case cannot support a weighted recall, so there are no weights and no number.
 
+## Disagreement labels, 2026-09-24
+
+Recorded with `python scripts/family_imputer ingest-labels
+data/family_imputer/disagreements-reviewed.md --labelled-by human` into
+`data/family_imputer/disagreements.jsonl`. The sheet's sha256 is `b45bd8d2…bf117`.
+The label drafts were proposed by Claude from an unblinded reading, as the
+sheet's own provenance block states. The human reviewer checked each one, so
+the records say `labelled_by=human`.
+
+Three kinds were added before ingest, from the sheet's definitions:
+`profile_gap`, `no_description` and `unsure`. There are now six in
+`evaluate.LABEL_DEFINITIONS`.
+
+| label | Jev admits / publisher didn't | Publisher admits / Jev didn't | total |
+|---|---|---|---|
+| unsure | 9 | 6 | **15** |
+| publisher_miscoded | 3 | 3 | 6 |
+| jev_wrong | 3 | 2 | 5 |
+| no_description | 0 | 4 | 4 |
+| profile_gap | 0 | 0 | 0 |
+| out_of_scope | 0 | 0 | 0 |
+
+- **Only 11 of 30 received a definite error attribution**, and they split
+  almost evenly: publisher miscoded 6, Jev wrong 5.
+- **Within the Jev-admits direction the split is 3 and 3.** The reading's
+  hypothesis that publisher error falls mainly on precision is not supported
+  by these labels.
+- **The 15 `unsure` labels are not a single hesitation.** Their stated reasons name:
+
+  | Candidate kinds | Cases |
+  |---|---|
+  | jev_wrong vs publisher_miscoded (what was bought is itself arguable) | 6 |
+  | profile_gap, alone or with others | 7 |
+  | out_of_scope | 4 |
+  | "a missing kind" (an RFI summary with no purchase) | 1 |
+
+- `profile_gap` was never assigned outright. Every case that raised it was
+  also defensible as something else.
+
+**What this does to the measurement.** Half the sample could not be assigned
+a single kind, and four more had no description to judge. So on the cases
+where the two disagree, **the publisher's code is an ambiguous ground truth,
+not a reference standard.**
+
+The ~0.925 recall ceiling from the threshold sweep is therefore agreement with
+a noisy labeller, not a measured limit of the imputer. Recall against
+publisher codes cannot be the quantity phase 2 optimises. Pushing it higher
+rewards reproducing the publisher's coding, including codes a reader cannot
+defend. The phase 1 numbers stand as recorded; they are agreement figures,
+which is all they ever were.
+
+**Weaknesses of this sample, stated with the finding:**
+- There are 30 cases, so each label moves any rate by more than three points.
+- The cases were selected for disagreement, and no agreement was read. Nothing
+  here estimates how often the publisher is wrong across the 23,314.
+- They are drawn from phase 1's top-choice disagreements, not from the 139
+  zero-mass misses that set the threshold ceiling. The ceiling claim above is
+  therefore an inference about similar notices, not a reading of those.
+- They were read unblinded: Jev's answer, its probability and the direction
+  were visible throughout.
+- The labels began as one model's proposals. Human review checked them but was
+  anchored on them.
+
+The measurable version is a random sample from the cache, with both the
+publisher's code and Jev's choice hidden, judged from the description and
+then revealed (the `blinding.py` machinery). It has not been run.
+
 ## Status
 
 PROPOSED, and naming no variant. Phase 1 is an evaluation of an imputer, not a

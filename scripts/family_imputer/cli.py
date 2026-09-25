@@ -336,9 +336,270 @@ def cmd_sheet(args) -> int:
     return 0
 
 
+def _scored_rows():
+    q = frozen_question()
+    blind, answers = E.load_coded()
+    profile = ingest.parse_profile(ingest.DEFAULT_PROFILE)
+    result = E.score(blind, answers, q, cache.connect(), profile["unspsc_families"],
+                     profile["competencies"])
+    if result["coverage"]["missing"]:
+        raise ValueError(f"{result['coverage']['missing']} notices lack a cached verdict")
+    return q, result["_rows"]
+
+
+def cmd_ceiling(args) -> int:
+    """Input ceiling: flag empty/boilerplate descriptions; headline with and
+    without them. Cache only."""
+    import random
+    from collections import Counter
+    from . import ceiling as C
+    q, rows = _scored_rows()
+    fired, bars = Counter(), Counter()
+    for r in rows:
+        f = C.flags(r["description"])
+        r["_short"], r["_bp"] = f["short"], f["boilerplate_only"]
+        r["_residue"] = f["residue"]
+        fired.update(set(f["fired"]))
+        for bar in C.STRICTER_BARS:
+            if not f["short"] and f["residue_chars"] < bar:
+                bars[bar] += 1
+    short = [r for r in rows if r["_short"]]
+    bp = [r for r in rows if r["_bp"]]
+    kept = [r for r in rows if not (r["_short"] or r["_bp"])]
+    print("POST HOC. Population: WS/cb coded notices only. Recall is against publisher codes.")
+    print(f"\nflagged short (<{C.SHORT_CHARS} chars raw):          {len(short):6,}  "
+          f"publisher admits among them {sum(r['publisher_admit'] for r in short):,}")
+    print(f"flagged boilerplate_only (residue <{C.SHORT_CHARS}):   {len(bp):6,}  "
+          f"publisher admits among them {sum(r['publisher_admit'] for r in bp):,}")
+    print(f"  (the flags are exclusive by construction: boilerplate_only excludes short)")
+    print(f"  boilerplate_only at stricter residue bars: "
+          + ", ".join(f"<{b}: {bars[b]:,}" for b in C.STRICTER_BARS))
+    print(f"total flagged {len(short) + len(bp):,} of {len(rows):,}; kept {len(kept):,}")
+    print("\npattern hits (notices where the pattern removed at least one sentence):")
+    for k in C.BOILERPLATE:
+        print(f"  {k:28} {fired[k]:6,}")
+    strict = [r for r in rows if not (r["_short"] or
+              (not r["_short"] and len(r["_residue"]) < min(C.STRICTER_BARS)))]
+    print(f"\n{'':44}{'recall':38}precision")
+    for label, sub in (("ALL coded notices", rows),
+                       (f"EXCL. short + residue<{C.SHORT_CHARS} (n={len(kept):,})", kept),
+                       (f"EXCL. short + residue<{min(C.STRICTER_BARS)} (n={len(strict):,})", strict)):
+        for name, key in (("Jev top", "jev_admit"), ("Keywords", "kw_admit")):
+            m = E.admit_metrics(sub, key)
+            print(f"{label + ' / ' + name:44}{_fmt(m['recall']):38}{_fmt(m['precision'])}")
+    print(textwrap.fill(E.POPULATION_CAVEAT, 100))
+    rng = random.Random(E.SEED)
+    print(f"\nSAMPLE: 10 boilerplate_only residues (seed {E.SEED}) - check the rule "
+          f"is not eating real work")
+    for r in rng.sample(bp, min(10, len(bp))):
+        print(f"\n  {r['notice_id']}  raw {len(r['description']):,} chars  "
+              f"publisher_admit={r['publisher_admit']}")
+        print(f"    title:   {' '.join(r['title'].split())[:110]}")
+        print(f"    residue: {r['_residue'][:200] or '(nothing)'}")
+    return 0
+
+
+def cmd_strip_preview(args) -> int:
+    """Variant B design: before/after, corpus-wide saving, cost. Cache only;
+    nothing is sent and nothing is cached."""
+    import sqlite3
+    import statistics as st
+    from . import strip as S
+    S.check_frozen()
+    q, rows = _scored_rows()
+    conn = cache.connect()
+    tokens = {r[0]: r[1] for r in conn.execute(
+        "SELECT notice_id, input_tokens FROM verdicts WHERE question_sha256=? "
+        "AND model_version=?", (q.sha256, E.MODEL))}
+    OVERHEAD = 3471  # measured, ref-004 `measure-overhead`
+    changed, swallowed = [], []
+    for r in rows:
+        s = S.strip_supplier_lists(r["description"])
+        if s.runs:
+            changed.append((r, s))
+            swallowed += [(r["notice_id"], l) for l in S.swallowed_lines(r["description"])]
+
+    def slope(pairs):
+        xs, ys = [p[0] for p in pairs], [p[1] for p in pairs]
+        mx, my = st.mean(xs), st.mean(ys)
+        return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sum((x - mx) ** 2 for x in xs)
+
+    all_pairs = [(len(r["title"]) + len(r["description"]), tokens[r["notice_id"]])
+                 for r in rows if not r["truncated"]]
+    ch_pairs = [(len(r["title"]) + len(r["description"]), tokens[r["notice_id"]])
+                for r, _ in changed if not r["truncated"]]
+    b_all, b_ch = slope(all_pairs), slope(ch_pairs)
+    # per-token cost of list text specifically: actual tokens minus overhead
+    # minus what the NON-list text should cost at the corpus slope, over list chars
+    list_tpc = (sum(tokens[r["notice_id"]] - OVERHEAD
+                    - b_all * (len(r["title"]) + len(s.text)) for r, s in changed)
+                / sum(s.chars_removed for _, s in changed))
+
+    print(f"strip rules {S.STRIP_RULES_SHA256[:16]}.. (frozen); question {q.sha256[:16]}.. unchanged")
+    print(f"\nnotices changed: {len(changed):,} of {len(rows):,} coded; "
+          f"runs {sum(len(s.runs) for _, s in changed):,}; "
+          f"names removed {sum(s.names_removed for _, s in changed):,}; "
+          f"chars removed {sum(s.chars_removed for _, s in changed):,}")
+    print(f"non-name lines swallowed inside removed runs: {len(swallowed):,}"
+          + (" - sample:" if swallowed else ""))
+    for nid, line in swallowed[:15]:
+        print(f"    {nid[:28]:28} | {line[:90]}")
+
+    # before/after
+    chosen = ["cb-309-38456671", "cb-282-89433549"]
+    rest = sorted((r for r, _ in changed if r["notice_id"] not in chosen),
+                  key=lambda r: -tokens[r["notice_id"]])
+    chosen.append(rest[0]["notice_id"])
+    by_id = {r["notice_id"]: (r, s) for r, s in changed}
+    for nid in chosen:
+        r, s = by_id[nid]
+        print(f"\n=== {nid}  ({tokens[nid]:,} input tokens today)")
+        print(f"  title: {' '.join(r['title'].split())[:110]}")
+        print(f"  description {len(r['description']):,} -> {len(s.text):,} chars "
+              f"({s.chars_removed:,} removed, {s.names_removed} names in {len(s.runs)} run(s))")
+        for a, b, n in s.runs:
+            print(f"  removed run of {n}: '{a[:60]}' ... '{b[:60]}'")
+        lines = s.text.split("\n")
+        at = next(i for i, l in enumerate(lines) if l.startswith("[invited-supplier list"))
+        print("  after, around the cut:")
+        for l in lines[max(0, at - 3):at + 3]:
+            print(f"    | {l[:110]}")
+
+    # A saving can never exceed what the notice actually cost beyond the fixed
+    # overhead and its remaining text: the one truncated notice was only ever
+    # sent 60,000 characters, so its list beyond the cap cost nothing to strip.
+    def saving(r, s):
+        spent = tokens[r["notice_id"]]
+        floor = OVERHEAD + b_all * (len(r["title"]) + min(len(s.text), 60_000))
+        return max(0.0, min(list_tpc * s.chars_removed, spent - floor))
+    saved = sorted(saving(r, s) for r, s in changed)
+    total_saved = sum(saved)
+    run_tokens = sum(tokens[r["notice_id"]] - saving(r, s) for r, s in changed)
+    top = sorted(rows, key=lambda r: -tokens[r["notice_id"]])[:max(1, len(rows) // 100)]
+    touched = {r["notice_id"] for r, _ in changed}
+    print(f"\nTOP 1% BY INPUT TOKENS ({len(top)} notices, >= {tokens[top[-1]['notice_id']]:,} "
+          f"tokens): {sum(r['notice_id'] in touched for r in top)} carry a strippable list; "
+          f"their tokens {sum(tokens[r['notice_id']] for r in top):,} of which list text "
+          f"~{sum(saving(r, s) for r, s in changed if r['notice_id'] in {t['notice_id'] for t in top}):,.0f}")
+    print(f"\nTOKEN SAVING (estimate - no call made)")
+    print(f"  tokens/char: corpus slope {b_all:.4f}; slope within changed notices {b_ch:.4f}; "
+          f"list text specifically {list_tpc:.4f}")
+    print(f"  per changed notice: mean {st.mean(saved):,.0f}, median {st.median(saved):,.0f}, "
+          f"p99 {saved[int(0.99 * (len(saved) - 1))]:,.0f}, max {saved[-1]:,.0f}")
+    print(f"  across the corpus: {total_saved:,.0f} tokens "
+          f"= {total_saved / 90_111_081:.1%} of the phase 1 spend "
+          f"(${total_saved / 1e6 * E.PRICE_PER_MILLION_INPUT:.2f})")
+    print(f"\nCOST OF A VARIANT B RUN: only the {len(changed):,} changed notices need a call "
+          f"(an unchanged notice's request is byte-identical and hits the cache).")
+    print(f"  ~{run_tokens:,.0f} input tokens = ${run_tokens / 1e6 * E.PRICE_PER_MILLION_INPUT:.2f} "
+          f"at {E.PRICE_SOURCE}")
+    print("  Requires first: a variant B record with its own pre-registered rule. Not run.")
+    return 0
+
+
+GAP_FAMILIES = ("8010", "8016")
+
+
+def cmd_profile_gap(args) -> int:
+    """
+    ref-005 scoping: coded notices rejected on their codes that carry a code
+    in 8010 (other than the profile's 80101507) or 8016. Cache and archive
+    only. The other active stages are evaluated through filter_audit's own
+    predicates, so the count says how many would get past everything else.
+    """
+    import sqlite3
+    from collections import Counter
+    from filter_audit import predicates as P
+    q, rows = _scored_rows()
+    families = ingest.parse_profile(ingest.DEFAULT_PROFILE)["unspsc_families"]
+    criteria = ingest.parse_profile(ingest.DEFAULT_PROFILE)
+
+    def gap_codes(codes):
+        return [c for c in codes if c[:4] in GAP_FAMILIES and not
+                ingest.matches_unspsc_families({c}, families)]
+
+    gap = [r for r in rows if not r["publisher_admit"] and gap_codes(r["codes"])]
+    conn = sqlite3.connect(f"file:{E.NOTICES_DB.as_posix()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    other_stage_drop = Counter()
+    passes_other = 0
+    for r in gap:
+        row = conn.execute("SELECT * FROM notices WHERE reference_number=?",
+                           (r["notice_id"],)).fetchone()
+        n = P.Notice.from_archive_row(row)
+        dropped = [s.name for s in P.STAGES
+                   if s.active and s.name in ("exclusion", "construction", "jurisdiction")
+                   and s.evaluate(n, criteria, None).drops]
+        other_stage_drop.update(dropped)
+        passes_other += not dropped
+        r["_passes_other"] = not dropped
+
+    fam = Counter(f for r in gap for f in {c[:4] for c in gap_codes(r["codes"])})
+    l4 = Counter(c for r in gap for c in gap_codes(r["codes"]))
+    print("Population: WS/cb coded notices. Rejected today at relevance (coded, no profile family),")
+    print(f"carrying a code in {' or '.join(GAP_FAMILIES)} (excluding the profile's 80101507).")
+    print(f"\nnotices: {len(gap):,}   by family: " + ", ".join(f"{k} {v:,}" for k, v in sorted(fam.items())))
+    print(f"  8010 only {sum(1 for r in gap if {c[:4] for c in gap_codes(r['codes'])} == {'8010'}):,}; "
+          f"8016 only {sum(1 for r in gap if {c[:4] for c in gap_codes(r['codes'])} == {'8016'}):,}; "
+          f"both {sum(1 for r in gap if {c[:4] for c in gap_codes(r['codes'])} == {'8010', '8016'}):,}")
+    print(f"  by source: " + ", ".join(f"{k} {v:,}" for k, v in Counter(r['source'] for r in gap).items()))
+    print(f"  would also be dropped by another active stage: {dict(other_stage_drop)}; "
+          f"pass exclusion, construction and jurisdiction: {passes_other:,}")
+    print("  (closed is not evaluated: the archive is historical and every notice would fail it)")
+    print(f"\ntop 15 gap codes (a notice can carry several):")
+    ref = __import__("family_imputer.options", fromlist=["x"])
+    reference = ref.load_reference()
+    print(f"  {'code':10}{'notices':>8}{'Jev top':>9}{'mass>=.02':>10}  description")
+    for code, n in l4.most_common(15):
+        sub = [r for r in gap if code in r["codes"]]
+        print(f"  {code:10}{n:8,}{sum(r['jev_admit'] for r in sub):9,}"
+              f"{sum(r['p_profile'] >= 0.02 for r in sub):10,}  {ref.describe_code(code, reference)}")
+    for label, sub in (("all gap notices", gap),
+                       ("gap notices passing the other stages", [r for r in gap if r["_passes_other"]])):
+        print(f"\nJev on {label} (n={len(sub):,}):")
+        print(f"  admits by top choice   {sum(r['jev_admit'] for r in sub):6,}")
+        for t in (0.02, 0.01):
+            print(f"  admits by mass >= {t}  {sum(r['p_profile'] >= t for r in sub):6,}")
+        print(f"  keyword branch would fire (production never asks) {sum(r['kw_admit'] for r in sub):,}")
+        print("  Jev's top choice: " + ", ".join(
+            f"{k.split(' (')[0][:34]} {v:,}" for k, v in Counter(r['choice'] for r in sub).most_common(6)))
+    return 0
+
+
 def cmd_label(args) -> int:
-    rec = E.record_label(args.notice_id, args.kind, args.note or "")
-    print(f"recorded {rec['notice_id']} as {rec['kind']} -> {E.LABELS_JSONL}")
+    rec = E.record_label(args.notice_id, args.kind, args.note or "",
+                         labelled_by=args.labelled_by, why_unsure=args.why or "")
+    print(f"recorded {rec['notice_id']} as {rec['kind']} "
+          f"(labelled_by={rec['labelled_by']}) -> {E.LABELS_JSONL}")
+    return 0
+
+
+def cmd_ingest_labels(args) -> int:
+    from pathlib import Path
+    records = E.ingest_label_sheet(Path(args.path), args.labelled_by)
+    print(f"recorded {len(records)} labels (labelled_by={args.labelled_by}) "
+          f"from {records[0]['source']['path'] if records else args.path} "
+          f"sha256 {records[0]['source']['sha256'][:16] if records else ''}.. "
+          f"-> {E.LABELS_JSONL}")
+    return cmd_labels(args)
+
+
+def cmd_labels(args) -> int:
+    table = E.label_table(E.load_labels())
+    if not table:
+        print("no labels recorded")
+        return 0
+    dirs = list(E.DIRECTION_TEXT)
+    for who, kinds in table.items():
+        total = sum(sum(c.values()) for c in kinds.values())
+        print(f"\nlabelled_by={who}  (n={total}; never summed with another labeller)")
+        print(f"  {'kind':20}{'Jev admits/pub didnt':>22}{'pub admits/Jev didnt':>22}{'total':>7}")
+        for kind in E.LABEL_KINDS:
+            c = kinds.get(kind, {})
+            print(f"  {kind:20}{c.get(dirs[0], 0):22}{c.get(dirs[1], 0):22}"
+                  f"{sum(c.values()):7}")
+        col = [sum(kinds.get(k, {}).get(d, 0) for k in E.LABEL_KINDS) for d in dirs]
+        print(f"  {'total':20}{col[0]:22}{col[1]:22}{total:7}")
     return 0
 
 
@@ -365,8 +626,19 @@ def main(argv=None) -> None:
     p = sub.add_parser("label")
     p.add_argument("notice_id")
     p.add_argument("kind", choices=E.LABEL_KINDS)
+    p.add_argument("--labelled-by", required=True, choices=E.LABELLERS,
+                   help="who made this judgement; no default, on purpose")
     p.add_argument("--note")
+    p.add_argument("--why", help="required for unsure: the candidate kinds and what the call turns on")
     p.set_defaults(fn=cmd_label)
+    p = sub.add_parser("ingest-labels")
+    p.add_argument("path")
+    p.add_argument("--labelled-by", required=True, choices=E.LABELLERS)
+    p.set_defaults(fn=cmd_ingest_labels)
+    sub.add_parser("labels").set_defaults(fn=cmd_labels)
+    sub.add_parser("ceiling").set_defaults(fn=cmd_ceiling)
+    sub.add_parser("strip-preview").set_defaults(fn=cmd_strip_preview)
+    sub.add_parser("profile-gap").set_defaults(fn=cmd_profile_gap)
     args = ap.parse_args(argv)
     try:
         sys.exit(args.fn(args))
