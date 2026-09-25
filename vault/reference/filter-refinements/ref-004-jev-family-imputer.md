@@ -329,6 +329,25 @@ The measurable version is a random sample from the cache, with both the
 publisher's code and Jev's choice hidden, judged from the description and
 then revealed (the `blinding.py` machinery). It has not been run.
 
+## Variant B parked, 2026-09-24
+
+Variant B, stripping invited-supplier lists from the state, is **parked, not
+run**. The stripper exists (`strip.py`, frozen by `STRIP_RULES_SHA256`) and was
+costed with `strip-preview`.
+
+**Why it is parked:**
+- **The token case failed.** Stripping saves about 359k tokens across the
+  corpus, 0.4% of the phase 1 spend. Only 53 of the 233 notices in the top 1%
+  by tokens carry a strippable list, because the fixed 3,471-token question
+  dominates every call.
+- **The accuracy case is untested.** It is the claim that removing the lists
+  reduces context rot. It would need its own pre-registered record before any
+  run.
+
+**Revival condition:** evidence that notices carrying invited-supplier lists
+classify worse than others. That means a measured gap in agreement or in
+labelled error rate, not an argument about token counts.
+
 ## Status
 
 PROPOSED, and naming no variant. Phase 1 is an evaluation of an imputer, not a

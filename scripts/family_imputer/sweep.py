@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import csv
 import random
+from collections import Counter
 
 from .evaluate import SEED, wilson
 
@@ -115,6 +116,72 @@ def split_half(rows, key="jev_mass") -> dict:
     return {"chosen_t": chosen["t"],
             "half_a": {"recall": chosen[key]["recall"], "precision": chosen[key]["precision"]},
             "half_b": {"recall": on_b[key]["recall"], "precision": on_b[key]["precision"]}}
+
+
+def split_spread(rows, thresholds=THRESHOLDS, n_splits: int = 50) -> list:
+    """
+    How optimistic is a number read off the same data a threshold was picked
+    on? For each t, split the notices in half n_splits times (seeded) and
+    record half B minus half A for recall, precision and admit rate.
+
+    A threshold here is picked on CORPUS SIZE, not recall, so there is no
+    selection on the scored quantity at a fixed t; the spread is the noise any
+    single-sample figure carries. `pick_on_a` separately emulates picking t on
+    half A to hit a recall target and scoring it on half B, which is the
+    optimism the original check was built to catch.
+    """
+    ids = sorted(r["notice_id"] for r in rows)
+    out = {t: {"recall": [], "precision": [], "admit_rate": []} for t in thresholds}
+    for k in range(n_splits):
+        rng = random.Random(SEED + k)
+        half_a = set(rng.sample(ids, len(ids) // 2))
+        a = [r for r in rows if r["notice_id"] in half_a]
+        b = [r for r in rows if r["notice_id"] not in half_a]
+        for t in thresholds:
+            ma = _metrics(a, lambda r, t=t: r["p_profile"] >= t)
+            mb = _metrics(b, lambda r, t=t: r["p_profile"] >= t)
+            for q in ("recall", "precision"):
+                va, vb = ma[q]["value"], mb[q]["value"]
+                if va is not None and vb is not None:
+                    out[t][q].append(vb - va)
+            out[t]["admit_rate"].append(mb["admits"] / len(b) - ma["admits"] / len(a))
+    table = []
+    for t in thresholds:
+        row = {"t": t}
+        for q, diffs in out[t].items():
+            s = sorted(diffs)
+            row[q] = {"mean_abs": sum(abs(d) for d in s) / len(s),
+                      "lo": s[int(0.025 * (len(s) - 1))], "hi": s[int(0.975 * (len(s) - 1))]}
+        table.append(row)
+    return table
+
+
+def pick_on_a(rows, target: float, n_splits: int = 50) -> dict:
+    """Pick the highest t reaching `target` recall on half A; score on half B.
+    Returns mean optimism (A recall minus B recall) over seeded splits."""
+    ids = sorted(r["notice_id"] for r in rows)
+    gaps, picks, b_recalls = [], [], []
+    for k in range(n_splits):
+        rng = random.Random(SEED + k)
+        half_a = set(rng.sample(ids, len(ids) // 2))
+        a = [r for r in rows if r["notice_id"] in half_a]
+        b = [r for r in rows if r["notice_id"] not in half_a]
+        ok = [t for t in THRESHOLDS
+              if (_metrics(a, lambda r, t=t: r["p_profile"] >= t)["recall"]["value"] or 0) >= target]
+        if not ok:
+            continue
+        t = max(ok)
+        ra = _metrics(a, lambda r, t=t: r["p_profile"] >= t)["recall"]["value"]
+        rb = _metrics(b, lambda r, t=t: r["p_profile"] >= t)["recall"]["value"]
+        gaps.append(ra - rb)
+        picks.append(t)
+        b_recalls.append(rb)
+    if not gaps:
+        return {"target": target, "splits": 0}
+    return {"target": target, "splits": len(gaps),
+            "mean_optimism": sum(gaps) / len(gaps),
+            "b_below_target": sum(1 for rb in b_recalls if rb < target) / len(b_recalls),
+            "t_picked": dict(Counter(picks))}
 
 
 def write_csv(points, path) -> None:

@@ -497,6 +497,167 @@ def cmd_strip_preview(args) -> int:
     return 0
 
 
+def cmd_budget(args) -> int:
+    """
+    ref-006 scoping, cache and feed only: split-half spread per threshold, and
+    what the corpus becomes at each t.
+
+    THE PROXY, stated. Per-t admit rates are measured on coded archive notices
+    that pass exclusion/construction/jurisdiction. The gate will run on
+    UNCODED feed notices, which Jev has never seen. The keyword branch is the
+    calibration check: its rate on the archive proxy is printed beside its
+    rate actually observed on the feed's uncoded notices.
+    """
+    import json
+    import sqlite3
+    from datetime import date
+    from filter_audit import predicates as P
+    from filter_audit import replay
+    from . import sweep as S
+
+    q, rows = _scored_rows()
+    criteria = ingest.parse_profile(ingest.DEFAULT_PROFILE)
+    conn = sqlite3.connect(f"file:{E.NOTICES_DB.as_posix()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    pre = ("exclusion", "construction", "jurisdiction")
+    stage = {s.name: s for s in P.STAGES}
+    passing = []
+    for r in rows:
+        n = P.Notice.from_archive_row(conn.execute(
+            "SELECT * FROM notices WHERE reference_number=?", (r["notice_id"],)).fetchone())
+        if not any(stage[s].evaluate(n, criteria, None).drops for s in pre):
+            passing.append(r)
+
+    meta = json.loads((replay.FEED_CSV.parent / "tenders.csv.http.json").read_text())
+    as_of = date.fromisoformat(meta["fetched_at"][:10])
+    feed = {"total": 0, "uncoded": 0, "uncoded_at_relevance": 0, "uncoded_kw_admit": 0,
+            "coded_at_relevance": 0, "coded_admit": 0}
+    for n, _ in replay.iter_feed():
+        feed["total"] += 1
+        coded = bool(ingest.parse_unspsc_codes(n.unspsc))
+        feed["uncoded"] += not coded
+        if any(stage[s].evaluate(n, criteria, as_of).drops for s in ("closed",) + pre):
+            continue
+        rel = stage["relevance"].evaluate(n, criteria, as_of)
+        if coded:
+            feed["coded_at_relevance"] += 1
+            feed["coded_admit"] += not rel.drops
+        else:
+            feed["uncoded_at_relevance"] += 1
+            feed["uncoded_kw_admit"] += not rel.drops
+
+    npass = len(passing)
+    kw_rate = sum(r["kw_admit"] for r in passing) / npass
+    feed_kw_rate = feed["uncoded_kw_admit"] / max(1, feed["uncoded_at_relevance"])
+    today = feed["coded_admit"] + feed["uncoded_kw_admit"]
+    print(f"FEED .cache/tenders.csv fetched {meta['fetched_at']} (as_of {as_of}):")
+    print(f"  {feed['total']:,} notices; {feed['uncoded']:,} uncoded; reaching the relevance "
+          f"gate: {feed['uncoded_at_relevance']:,} uncoded, {feed['coded_at_relevance']:,} coded")
+    print(f"  today's corpus: {feed['coded_admit']:,} coded admits + "
+          f"{feed['uncoded_kw_admit']:,} uncoded keyword admits = {today:,}")
+    print(f"\nPROXY CHECK - keyword admit rate: archive coded proxy {kw_rate:.3f} "
+          f"vs feed uncoded observed {feed_kw_rate:.3f} "
+          f"(ratio {feed_kw_rate / kw_rate:.2f}). The Jev rates below carry the same "
+          f"proxy and have no observed counterpart.")
+    print(f"archive proxy population: {npass:,} coded notices passing {', '.join(pre)}")
+
+    spread = {row["t"]: row for row in S.split_spread(rows)}
+    print(f"\n{'t':>6} {'archive':>8} {'per 970':>8} {'feed':>6} {'corpus':>7} {'vs today':>9}"
+          f"   {'recall':>6} {'prec':>6}   split-half spread B-A, 95% of 50 splits")
+    print(f"{'':>6} {'rate':>8} {'uncoded':>8} {'uncod.':>6} {'total':>7} {'':>9}"
+          f"   {'':>6} {'':>6}   recall | precision | admit rate")
+    for t in S.THRESHOLDS:
+        admit = [r for r in passing if r["p_profile"] >= t]
+        rate = len(admit) / npass
+        feed_admit = rate * feed["uncoded_at_relevance"]
+        corpus = feed["coded_admit"] + feed_admit
+        m = S._metrics(rows, lambda r, t=t: r["p_profile"] >= t)
+        sp = spread[t]
+        print(f"{t:6.3f} {rate:8.4f} {rate * 970:8.1f} {feed_admit:6.0f} {corpus:7.0f} "
+              f"{corpus - today:+9.0f}   {m['recall']['value']:6.3f} {m['precision']['value']:6.3f}"
+              f"   {sp['recall']['lo']:+.3f}..{sp['recall']['hi']:+.3f} | "
+              f"{sp['precision']['lo']:+.3f}..{sp['precision']['hi']:+.3f} | "
+              f"{sp['admit_rate']['lo']:+.4f}..{sp['admit_rate']['hi']:+.4f}")
+    print("\nOPTIMISM when t is picked on half A to hit a recall target, scored on B (50 splits):")
+    for target in (0.85, 0.90):
+        p = S.pick_on_a(rows, target)
+        if not p["splits"]:
+            print(f"  target {target}: never reached on half A")
+            continue
+        print(f"  target {target}: mean A-minus-B recall {p['mean_optimism']:+.4f}; "
+              f"half B misses the target in {p['b_below_target']:.0%} of splits; "
+              f"t picked {p['t_picked']}")
+    print("\n" + textwrap.fill(E.POPULATION_CAVEAT, 100))
+    return 0
+
+
+def _feed_uncoded_at_relevance():
+    """The feed's uncoded notices that pass closed/exclusion/construction/
+    jurisdiction, as of the feed's own download date, with keyword hits."""
+    import json
+    from datetime import date
+    from filter_audit import predicates as P
+    from filter_audit import replay
+    from .comparator import keyword_hits
+    from .state import ImputerState
+    criteria = ingest.parse_profile(ingest.DEFAULT_PROFILE)
+    meta = json.loads((replay.FEED_CSV.parent / "tenders.csv.http.json").read_text())
+    as_of = date.fromisoformat(meta["fetched_at"][:10])
+    stage = {s.name: s for s in P.STAGES}
+    out = []
+    for n, _ in replay.iter_feed():
+        if ingest.parse_unspsc_codes(n.unspsc):
+            continue
+        if any(stage[s].evaluate(n, criteria, as_of).drops
+               for s in ("closed", "exclusion", "construction", "jurisdiction")):
+            continue
+        state = ImputerState(title=n.title, description=n.description)
+        out.append((n.notice_id, state, keyword_hits(state, criteria["competencies"])))
+    return meta, out
+
+
+def cmd_observe_feed(args) -> int:
+    """
+    Impute the feed's uncoded notices that reach the relevance gate - the
+    population the ref-006 gate would serve - so the corpus table rests on an
+    observation rather than the coded-archive proxy. Makes API calls (the
+    ledger records them as `feed-observe`); cached, so a re-run is free.
+    """
+    from collections import Counter
+    from . import sweep as S
+    q = _gate()
+    meta, items = _feed_uncoded_at_relevance()
+    conn = cache.connect()
+    before = cache.spend(conn).get("feed-observe", {"calls": 0, "input_tokens": 0})
+    stats = E.impute([(nid, st) for nid, st, _ in items], q, "feed-observe",
+                     JevClient(), conn, workers=4)
+    after = cache.spend(conn)["feed-observe"]
+    kinds = {o.key: o.kind for o in q.options}
+    from .state import prepare
+    rows = []
+    for nid, st, kw in items:
+        v = cache.get(conn, nid, prepare(st).content_sha256, E.MODEL, q.sha256)
+        mass = sum(p for k, p in v["probabilities"].items() if kinds[k] == "profile")
+        rows.append((nid, st, kw, v, mass))
+    spent = after["input_tokens"] - before["input_tokens"]
+    print(f"\nfeed {meta['fetched_at']}: {len(items)} uncoded notices at the relevance gate; "
+          f"{stats['called']} called, {stats['cache_hits']} cached, {stats['errors']} errors")
+    print(f"this run: {after['calls'] - before['calls']} calls, {spent:,} input tokens "
+          f"= ${spent / 1e6 * E.PRICE_PER_MILLION_INPUT:.4f}")
+    print(f"\nsources: {dict(Counter(ingest._source_system(nid) for nid, *_ in rows))}")
+    print(f"keyword branch admits today: {sum(bool(kw) for _, _, kw, _, _ in rows)}")
+    print(f"\n{'t':>6} {'Jev admits':>11} {'kw admits':>10} {'union':>6} {'Jev only':>9} {'kw only':>8}")
+    for t in S.THRESHOLDS:
+        j = {nid for nid, _, _, _, m in rows if m >= t}
+        k = {nid for nid, _, kw, _, _ in rows if kw}
+        print(f"{t:6.3f} {len(j):11} {len(k):10} {len(j | k):6} {len(j - k):9} {len(k - j):8}")
+    print("\nper notice (for the human reader only - never shown to Claude's tools):")
+    for nid, st, kw, v, mass in sorted(rows, key=lambda r: -r[4]):
+        print(f"  {nid[:28]:28} mass={mass:.2f}  jev={v['choice'][:40]:40} "
+              f"kw={','.join(kw) or '-':22} | {' '.join(st.title.split())[:70]}")
+    return 0
+
+
 GAP_FAMILIES = ("8010", "8016")
 
 
@@ -639,6 +800,8 @@ def main(argv=None) -> None:
     sub.add_parser("ceiling").set_defaults(fn=cmd_ceiling)
     sub.add_parser("strip-preview").set_defaults(fn=cmd_strip_preview)
     sub.add_parser("profile-gap").set_defaults(fn=cmd_profile_gap)
+    sub.add_parser("budget").set_defaults(fn=cmd_budget)
+    sub.add_parser("observe-feed").set_defaults(fn=cmd_observe_feed)
     args = ap.parse_args(argv)
     try:
         sys.exit(args.fn(args))
