@@ -17,3 +17,12 @@ versions:
   note: Baseline. Working tree at the time the audit package was built, including
     the uncommitted directed-contract mapping (33 notices change which gate stops
     them; net admission change measured at zero across all 30,527 archive rows).
+- label: fv-8f069d13
+  profile_sha256: 5898ecd124fe5e0063414948c7debcd7d6495ab7fcc92ecb243ccd709b9466b2
+  predicates_sha256: 28e83abe376652d766910f0c7836a8c485d9db0e7744db2082c05e3dfaa0e835
+  stage_manifest_sha256: 11e1c82f191db85284c921e2c6920d6db4798508984f6a5155578df36c1e6084
+  profile_path: vault/profiles/my-company.md
+  declared: '2026-09-24'
+  note: 'ref-006: uncoded relevance admits on imputed profile-family mass >= 0.20
+    when an imputation is supplied; keyword branch unchanged otherwise. Stage manifest
+    unchanged.'

@@ -17,13 +17,17 @@ only place fit is decided.
 ------------------------------------------------------------------------------
 BOUNDARIES - STRUCTURAL, NOT REMEMBERED
 ------------------------------------------------------------------------------
-  * NOTHING IN THE PRODUCT IMPORTS THIS PACKAGE. tender_tools, mcp_server,
-    ingest and filter_audit.predicates are scanned by
-    tests/test_family_imputer.py for any import of it or any mention of its
-    data directory. That is what keeps a Jev number out of the briefing and the
-    dossier: those surfaces are built from tender_tools, and tender_tools
-    cannot reach it. Moving an imputed family into a product surface is a
-    separate decision with its own review, not a follow-on commit.
+  * ONE PRODUCT MODULE IMPORTS ONE MODULE OF THIS PACKAGE (ref-006):
+    scripts/ingest/cli.py imports `family_imputer.gate`, and hands the imputer
+    to filter_tenders as an argument. Nothing else in the product may import
+    from here - not tender_tools, not mcp_server, not the rest of ingest, not
+    filter_audit.predicates (which receives an Imputation as data). And no
+    Claude-read surface (tender_tools, mcp_server, .claude/skills) may name,
+    compute or locate the probability. tests/test_family_imputer.py enforces
+    both with AST scans. The corpus carries only relevance_basis,
+    imputed_family and imputer_model; the probability stays in the gate cache.
+    Until ref-006 the rule was "nothing imports this package"; that was the
+    evaluation phase, and it is recorded in ref-004.
 
   * THE IMPUTER IS BLIND TO THE ANSWER. The client accepts only an
     ImputerState, which has two fields: title and description. The publisher's

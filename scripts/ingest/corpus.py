@@ -21,6 +21,26 @@ import pandas as pd
 from . import paths
 
 
+# The ONLY relevance fields that reach the corpus, and therefore the only ones
+# anything Claude reads can see (list-corpus, get, search, promote, the
+# briefing, the dossier). A probability is deliberately absent: a mass of 0.91
+# beside one of 0.06 is a fit score in disguise, which is what the briefing
+# rules exist to prevent. The mass lives in .cache/family_imputer_gate.db, the
+# audit trail - see ref-006. tests/test_family_imputer.py pins this key set.
+RELEVANCE_METADATA_KEYS = ("relevance_basis", "imputed_family", "imputer_model")
+
+
+def relevance_metadata(row) -> dict:
+    """How relevance was decided, for Chroma: basis always; family and model
+    only when the imputer decided. Omitted rather than blank when absent."""
+    basis = row.get("_relevance_basis") or "unspsc"
+    out = {"relevance_basis": str(basis)}
+    if basis == "imputed":
+        out["imputed_family"] = str(row.get("_imputed_family") or "")
+        out["imputer_model"] = str(row.get("_imputer_model") or "")
+    return out
+
+
 def _meta_str(value, limit: int) -> str:
     """NaN-safe string for ChromaDB metadata. float('nan') is truthy, so the
     obvious `str(x) or ''` yields the literal string 'nan'."""
@@ -438,6 +458,7 @@ def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
         }
         if row["_jurisdiction"].get("org_keys"):
             metadata["org_keys"] = row["_jurisdiction"]["org_keys"]
+        metadata.update(relevance_metadata(row))
 
         # Present ONLY when the prose contradicts the closing date. An absent
         # key means no conflict was found, not that the date was verified.
@@ -499,6 +520,11 @@ def _write_chroma(df: pd.DataFrame, db_path: Path, cols: dict,
     # machines that downloaded the same feed at different moments. Already
     # omit-when-unknown by construction - see corpus_identity.
     provenance.update(identity or {})
+    # Which relevance mode ran (ref-006), with counts. Two machines with the
+    # same feed and profile hashes can still differ here - one imputed, one
+    # fell back to keywords - and this is where that difference is visible.
+    # Counts and a status only; never a per-notice probability.
+    provenance.update(getattr(df, "attrs", {}).get("relevance_mode", {}))
 
     collection = client.create_collection(
         name="tenders",

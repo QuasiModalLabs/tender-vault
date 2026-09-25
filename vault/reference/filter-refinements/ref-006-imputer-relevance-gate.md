@@ -128,7 +128,73 @@ recall 0.843 and precision 0.616 against publisher codes.
   the 15 imputed admits has been labelled. They are Jev's judgment, and the
   briefing is where they get read.
 
+## Gate implemented, 2026-09-24
+
+The gate is implemented on `family-imputer-phase2` as filter version
+**fv-8f069d13**. **It is live wherever that code runs: any local ingest
+immediately, and CI once the branch is merged to `main`.** The profile hash is
+unchanged, the predicates hash has changed, and the stage manifest is unchanged,
+so audit records remain comparable across the change.
+
+**How it is wired:**
+- `scripts/ingest/cli.py` builds the imputer from `family_imputer.gate` and
+  passes it to `filter_tenders`. That module is the only product importer,
+  and only of the gate.
+- `filter_tenders` sends only uncoded notices that survived the closed,
+  exclusion, construction and jurisdiction gates.
+- `predicates.stage_relevance` receives an `Imputation` as data and admits
+  when its summed profile-family probability is at least `IMPUTER_THRESHOLD`
+  (0.20). `predicates.py` imports nothing from the imputer.
+- The gate reads the committed `frozen_question.json`, which is checked
+  against `QUESTION_SHA256` on load. It stands down (falls back to keywords)
+  when the question is unavailable or no longer matches the profile's
+  families.
+- The verdict cache is `.cache/family_imputer_gate.db`, which CI restores. The
+  gate uses no more than two retries per notice and has a ten-minute budget
+  per run.
+- **`imputed_family` means the most likely profile family, not Jev's overall
+  top choice.** A notice admitted on 0.23 of summed probability whose top
+  choice was 8115 is recorded under its most likely profile family (here 8111).
+
+**Corpus and provenance:**
+- Chroma carries `relevance_basis` (`unspsc`, `imputed` or `keyword`), plus
+  `imputed_family` and `imputer_model` when imputed. It carries no probability.
+- Collection provenance adds `relevance_imputed`, `relevance_imputed_admitted`,
+  `relevance_keyword_fallback`, `relevance_keyword_admitted`, `imputer_status`,
+  `imputer_threshold`, `imputer_model` and `imputer_question_sha256`.
+- The digest frontmatter adds `imputer_status`, `relevance_imputed` and
+  `relevance_keyword_fallback`. Zero counts are included.
+
+**Enforced in `tests/test_family_imputer.py`:**
+- A coded notice produces no API call.
+- Only uncoded notices past gates 1–4 reach the imputer.
+- Summed probability admits two profile options at 0.20 each behind a 0.25
+  non-profile option, and rejects a profile option sitting second at 0.02.
+- The ingest falls back to keywords, and completes, on: no key, an API error,
+  an auth error (not retried per notice), an imputer that raises, a profile
+  that no longer matches the question, and a tampered frozen question.
+- A re-run is served from the cache.
+- The funnel prints the split at zero.
+- The import boundary holds.
+- No Claude-read surface names the probability. The scan is proven non-vacuous
+  on a planted leak.
+- The corpus relevance keys are pinned.
+
+**Trial ingest, isolated from the working corpus:**
+- It used the 2026-09-13 feed judged as of 2026-09-24, so 358 notices had
+  already closed and the counts are not comparable to the 72 above.
+- 33 uncoded notices reached the gate. All 33 were imputed, with 0 fallbacks,
+  132,743 input tokens and about $0.006. **8 were admitted.**
+- The corpus was 55: 47 by UNSPSC family and 8 by imputed family. The keyword
+  branch decided none.
+- No metadata key names a probability.
+
+**The CI secret `TYPESAFE_API_KEY` is set.** The ingest workflow passes it to
+the ingest step only.
+
 ## Status
 
-PROPOSED: decisions recorded, gate not yet live. `promoted_to_production` is
-set in the commit that turns the gate on.
+PROPOSED in the refinement lifecycle's terms, because its ACCEPTED state
+presumes a `variants.py` variant and this change is not one.
+`promoted_to_production` is set in the merge to `main`, which is when CI, and
+therefore the committed digest, starts running the gate.

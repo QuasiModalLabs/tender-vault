@@ -60,7 +60,7 @@ def _source_system(tender_id) -> str:
 
 
 def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
-                   value_extractor=None, as_of=None) -> pd.DataFrame:
+                   value_extractor=None, as_of=None, imputer=None) -> pd.DataFrame:
     """
     Apply profile filters. Prints a funnel so you can tune the profile.
 
@@ -91,6 +91,11 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
 
     value_extractor: callable(description) -> Optional[float], or None. None
     means no value is extracted and none is stored — see estimate_value.
+
+    imputer: callable(items) -> GateRun, or None - see
+    scripts/family_imputer/gate.py and ref-006. None means every uncoded
+    notice is decided by keywords, which is also what happens to any notice
+    the imputer could not answer for.
     """
     from filter_audit import predicates as _pred
 
@@ -268,15 +273,84 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     # no keyword fired" imply different fixes and split 21,471 / 6,121 on the
     # archive. This funnel line reports only the survivors; the audit reports
     # both failures.
+    #
+    # THE IMPUTER (ref-006). Uncoded notices that reached this point - after
+    # closed, exclusion, construction and jurisdiction - go to the injected
+    # imputer, and ONLY those: a coded notice is judged on its codes and never
+    # produces a call. Where the imputer answers, stage_relevance admits on
+    # summed profile-family probability >= IMPUTER_THRESHOLD; where it does
+    # not (no key, API error, drifted question, or no imputer at all), the
+    # notice is decided by keywords exactly as before, and the funnel says how
+    # many went each way on every run, zeros included.
+    #
+    # The imputer is passed in rather than imported, so this module and
+    # filter_audit.predicates never import scripts/family_imputer. It must not
+    # raise; if it does anyway, the whole uncoded branch falls back to keywords.
+    uncoded_rows = df.loc[~has_codes]
+    imputations, gate = {}, None
+    gate_note = "no imputer configured"
+    if imputer is not None and len(uncoded_rows):
+        items = [(_pred._s(r[cols["tender_id"]]), _pred._s(r[cols["title"]]),
+                  _pred._s(r[cols["description"]])) for _, r in uncoded_rows.iterrows()]
+        try:
+            gate = imputer(items)
+            imputations = gate.imputations
+            gate_note = gate.status
+        except Exception as exc:  # noqa: BLE001 - the ingest never fails here
+            gate_note = f"disabled: imputer raised {type(exc).__name__}"
+    elif imputer is not None:
+        gate_note = "ok"
+
+    tid = df[cols["tender_id"]].apply(_pred._s)
+    df["_relevance_basis"] = [
+        "unspsc" if coded else ("imputed" if t in imputations else "keyword")
+        for t, coded in zip(tid, has_codes)]
+    df["_imputed_family"] = [imputations[t].family if t in imputations else ""
+                             for t in tid]
+    df["_imputer_model"] = [imputations[t].model if t in imputations else ""
+                            for t in tid]
+
     if families or criteria["competencies"]:
-        keep = _pred.stage_mask(df, cols, criteria, _pred.stage_relevance)
+        keep = _pred.stage_mask(df, cols, criteria, _pred.stage_relevance,
+                                imputations=imputations)
         relevant = pd.Series(keep, index=df.index)
+        imputed_mask = df["_relevance_basis"] == "imputed"
+        keyword_mask = df["_relevance_basis"] == "keyword"
         df = df[relevant]
         kept_coded = int((has_codes & relevant).sum())
-        kept_uncoded = int((~has_codes & relevant).sum())
+        kept_imputed = int((imputed_mask & relevant).sum())
+        kept_keyword = int((keyword_mask & relevant).sum())
         print(f"  After relevance filter: {len(df):,}  "
-              f"({kept_coded:,} by UNSPSC family, {kept_uncoded:,} by keyword "
-              f"where no codes were filed)")
+              f"({kept_coded:,} by UNSPSC family, {kept_imputed:,} by imputed "
+              f"family, {kept_keyword:,} by keyword where no codes were filed)")
+    else:
+        imputed_mask = df["_relevance_basis"] == "imputed"
+        keyword_mask = df["_relevance_basis"] == "keyword"
+        kept_imputed = kept_keyword = 0
+
+    # ALWAYS printed, including at zero - an absent line would make "the
+    # imputer decided nothing" indistinguishable from "the imputer never ran".
+    n_imp, n_kw = int(imputed_mask.sum()), int(keyword_mask.sum())
+    print(f"  Uncoded relevance: {n_imp:,} imputed ({kept_imputed:,} admitted at "
+          f"mass >= {_pred.IMPUTER_THRESHOLD}), {n_kw:,} keyword fallback "
+          f"({kept_keyword:,} admitted)  [imputer: {gate_note}]")
+    if gate is not None and (gate.called or gate.cached):
+        print(f"    imputer calls {gate.called:,}, cached {gate.cached:,}, "
+              f"input tokens {gate.input_tokens:,}, model {gate.model}")
+    if gate is not None and gate.fallback:
+        print("    fallback reasons: " + "; ".join(
+            f"{k} {v}" for k, v in sorted(gate.fallback.items())))
+    relevance_mode = {
+        "relevance_imputed": n_imp,
+        "relevance_imputed_admitted": kept_imputed,
+        "relevance_keyword_fallback": n_kw,
+        "relevance_keyword_admitted": kept_keyword,
+        "imputer_status": gate_note,
+        "imputer_threshold": float(_pred.IMPUTER_THRESHOLD),
+    }
+    if gate is not None:
+        relevance_mode["imputer_model"] = gate.model
+        relevance_mode["imputer_question_sha256"] = gate.question_sha256
 
     # --- Value: retired from the default path -------------------------------
     # No step is printed when nothing is filtered. A funnel line that always
@@ -336,4 +410,8 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
             print(f"    body says {row['_date_conflict']}, field says "
                   f"{row['_closing'].strftime('%Y-%m-%d')} — "
                   f"{str(row[cols['title']])[:52]}")
+    # Carried to build_chroma for the provenance block: which relevance mode
+    # ran, with counts, so a keyword-fallback build is never mistaken for an
+    # imputed one (ref-006). Counts and a status only - no probability.
+    df.attrs["relevance_mode"] = relevance_mode
     return df

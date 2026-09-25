@@ -228,6 +228,15 @@ def generate_digest() -> str:
     stamps = [(key, provenance[key])
               for key in ("corpus_built_at", "feed_downloaded_at", "feed_sha256")
               if provenance.get(key)]
+    # Which relevance mode built this corpus (ref-006). Same feed and profile
+    # hashes can hide an imputed build on one machine and a keyword-fallback
+    # build on another; these make the difference visible in the one record
+    # that is committed. Presence-checked rather than truthiness-checked:
+    # a count of zero is a finding, not an absence. Counts and a status only.
+    stamps += [(key, provenance[key])
+               for key in ("imputer_status", "relevance_imputed",
+                           "relevance_keyword_fallback")
+               if key in provenance]
 
     lines: list[str] = []
     if stamps:

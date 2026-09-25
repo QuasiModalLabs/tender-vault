@@ -129,6 +129,39 @@ def check_frozen(question: Question, recorded: str = None) -> None:
             f"re-record deliberately, in a new refinement, or revert the change.")
 
 
+# The question as committed data, for the ingest gate (ref-006). The gate must
+# not depend on .cache/unspsc_reference.csv, which CI does not have; it reads
+# this file instead, and the file is checked against QUESTION_SHA256 on load.
+FROZEN_PAYLOAD = Path(__file__).resolve().parent / "frozen_question.json"
+
+
+def write_frozen_payload(path: Path = FROZEN_PAYLOAD) -> Path:
+    """Write the frozen question as data. Refuses unless it is the frozen one."""
+    q = frozen_question()
+    path.write_text(json.dumps({
+        "question_sha256": q.sha256,
+        "payload": q.payload,
+        "options": [{"key": o.key, "kind": o.kind, "prefix": o.prefix}
+                    for o in q.options],
+    }, indent=1, ensure_ascii=False) + "\n",   # NOT sorted: criteria order is what was evaluated
+        encoding="utf-8", newline="\n")
+    return path
+
+
+def load_frozen_payload(path: Path = FROZEN_PAYLOAD) -> dict:
+    """The committed question, refused if its payload does not hash to the
+    recorded literal - an edited file cannot pass as the frozen question."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    live = question_sha256(data["payload"])
+    if live != QUESTION_SHA256 or data.get("question_sha256") != QUESTION_SHA256:
+        raise FrozenQuestionDrift(
+            f"{path.name} hashes to {live[:16]}.., recorded {QUESTION_SHA256[:16]}..")
+    keys = [o["key"] for o in data["options"]]
+    if keys != list(data["payload"]["criteria"]):
+        raise FrozenQuestionDrift(f"{path.name}: option list and criteria disagree")
+    return data
+
+
 def frozen_question(**kwargs) -> Question:
     """The ONLY way run paths obtain the question. Refuses on drift."""
     question = build_question(**kwargs)

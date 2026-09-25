@@ -204,6 +204,14 @@ jobs:
         # from nothing. It also guarantees one digest a week even in a week the
         # feed never moved, which is a heartbeat: silence then means the job is
         # broken rather than the market being quiet.
+        #
+        # TYPESAFE_API_KEY drives the uncoded relevance gate (ref-006). Scoped to
+        # this one step, not the job. If the secret is absent or the API fails,
+        # the ingest falls back to keywords and the funnel and provenance say so;
+        # it never fails the run. Its verdict cache lives under .cache/, which
+        # the cache step above restores, so a notice is paid for once.
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: |
           if [ "${FULL_RUN}" = "true" ]; then
             python scripts/ingest --force --status-file .cache/ingest-status

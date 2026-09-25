@@ -1,0 +1,589 @@
+{
+ "question_sha256": "c5725ac4e364c103e429025214c7d4b1cb718f1d89cca5f750be59f17a055158",
+ "payload": {
+  "type": "choice",
+  "instructions": "This is a Government of Canada procurement notice: `title` and `description`. Which UNSPSC commodity family or segment best describes the main goods or services the notice is buying? Judge what is being purchased, not who is buying it or where the work happens. If the notice buys several things, choose the one that is the principal purchase. Choose 'none of these' only when the principal purchase belongs to none of the other options.",
+  "criteria": {
+   "8111 Computer services": {
+    "what": "Computer services",
+    "includes": [
+     "Software or hardware engineering",
+     "Computer programmers",
+     "Management information systems MIS",
+     "System and system component administration services",
+     "Information retrieval systems",
+     "Data services",
+     "Internet services",
+     "Software maintenance and support",
+     "Computer hardware maintenance and support",
+     "Computer hardware rental or leasing services",
+     "Computer software licensing rental or leasing service"
+    ]
+   },
+   "8116 Information Technology Service Delivery": {
+    "what": "Information Technology Service Delivery",
+    "includes": [
+     "Access management services",
+     "Electronic mail and messaging services",
+     "Telecommunication Services",
+     "Data voice or multimedia network equipment or platform rental or leasing services",
+     "Cloud-based hardware as a service",
+     "Cloud-based software as a service",
+     "Cloud-based platform as a service",
+     "Cloud-based infrastructure as a service",
+     "Cloud-based business process as a service"
+    ]
+   },
+   "4323 Software": {
+    "what": "Software",
+    "includes": [
+     "Business function specific software",
+     "Finance accounting and enterprise resource planning ERP software",
+     "Computer game or entertainment software",
+     "Content authoring and editing software",
+     "Content management software",
+     "Data management and query software",
+     "Development software",
+     "Educational or reference software",
+     "Industry specific software",
+     "Network applications software",
+     "Network management software",
+     "Networking software",
+     "Operating environment software",
+     "Security and protection software",
+     "Utility and device driver software",
+     "Information exchange software",
+     "Electrical Equipment software",
+     "System management software"
+    ]
+   },
+   "80101507 Information technology consultation services": {
+    "what": "Information technology consultation services"
+   },
+   "4319 Communications Devices and Accessories": {
+    "what": "Communications Devices and Accessories",
+    "includes": [
+     "Personal communication devices",
+     "Personal communications device accessories or parts"
+    ]
+   },
+   "4320 Components for information technology or broadcasting or telecommunications": {
+    "what": "Components for information technology or broadcasting or telecommunications",
+    "includes": [
+     "System Cards",
+     "System boards processors interfaces or modules",
+     "Chassis components",
+     "Media storage devices",
+     "Media storage device accessories",
+     "Removable storage media",
+     "Removable storage media accessories",
+     "Sub assemblies for electronic devices"
+    ]
+   },
+   "4321 Computer Equipment and Accessories": {
+    "what": "Computer Equipment and Accessories",
+    "includes": [
+     "Computers",
+     "Computer accessories",
+     "Computer data input devices",
+     "Computer data input device accessories",
+     "Computer displays",
+     "Computer display accessories",
+     "Computer printers",
+     "Computer data storage management systems"
+    ]
+   },
+   "4322 Data Voice or Multimedia Network Equipment or Platforms and Accessories": {
+    "what": "Data Voice or Multimedia Network Equipment or Platforms and Accessories",
+    "includes": [
+     "Call management systems or accessories",
+     "Digital subscriber loop DSL access equipment and components and accessories",
+     "Fixed network equipment and components",
+     "Optical network devices",
+     "Network security equipment",
+     "Network service equipment",
+     "Telegraph equipment",
+     "Telephony equipment",
+     "Telephony equipment accessories",
+     "Teletype equipment",
+     "Digital mobile network infrastructure equipment and components",
+     "Mobile messaging platforms",
+     "Datacom and network connectivity installation devices and equipment"
+    ]
+   },
+   "8010 Management advisory services (other than 80101507)": {
+    "what": "Management advisory services",
+    "includes": [
+     "Business and corporate management consultation services",
+     "Project management",
+     "Industrial management"
+    ],
+    "not_for": [
+     "Information technology consultation services (80101507), which is a separate option"
+    ]
+   },
+   "8011 Human resources services": {
+    "what": "Human resources services",
+    "includes": [
+     "Human resource development",
+     "Temporary personnel services",
+     "Personnel recruitment"
+    ]
+   },
+   "8012 Legal services": {
+    "what": "Legal services",
+    "includes": [
+     "Criminal law services",
+     "Business law services",
+     "Civil liability services",
+     "Family law services",
+     "Compensated legal participation services",
+     "Legal review and inquiry services",
+     "Administrative law services",
+     "Constitutional law services",
+     "International law services"
+    ]
+   },
+   "8013 Real estate services": {
+    "what": "Real estate services",
+    "includes": [
+     "Lease and rental of property or building",
+     "Sale of property and building",
+     "Escrow and title services",
+     "Real estate management services"
+    ]
+   },
+   "8014 Marketing and distribution": {
+    "what": "Marketing and distribution",
+    "includes": [
+     "Market research",
+     "Sales and business promotion activities",
+     "Distribution",
+     "Mailing services",
+     "Trade shows and exhibits",
+     "Customer relationship management services"
+    ]
+   },
+   "8015 Trade policy and services": {
+    "what": "Trade policy and services",
+    "includes": [
+     "Trade facilitation",
+     "International trade services"
+    ]
+   },
+   "8016 Business administration services": {
+    "what": "Business administration services",
+    "includes": [
+     "Management support services",
+     "Business facilities oversight",
+     "Asset recovery service",
+     "Office equipment rental or leasing services"
+    ]
+   },
+   "8017 Public relations and professional communications services": {
+    "what": "Public relations and professional communications services",
+    "includes": [
+     "Situation and stakeholder analysis and communications planning services",
+     "Publicity and marketing support services",
+     "Reputation and brand management services",
+     "Media relations services",
+     "Stakeholder management and relations services",
+     "Professional communication services",
+     "Issues and crisis management services",
+     "Sponsorships"
+    ]
+   },
+   "8110 Professional engineering services": {
+    "what": "Professional engineering services",
+    "includes": [
+     "Civil engineering",
+     "Mechanical engineering",
+     "Electrical and electronic engineering",
+     "Chemical engineering",
+     "Oil and gas engineering",
+     "Mining engineering",
+     "Ocean engineering",
+     "Transportation engineering",
+     "Aeronautical engineering",
+     "Electrical power transmission engineering",
+     "Permitting services",
+     "Sampling services",
+     "Instrumented control systems design and engineering services",
+     "Minefield and demining services",
+     "Cultural conservation-restoration engineering services"
+    ]
+   },
+   "8112 Economics": {
+    "what": "Economics",
+    "includes": [
+     "Economic analysis",
+     "Monetary systems and issues"
+    ]
+   },
+   "8113 Statistics": {
+    "what": "Statistics",
+    "includes": [
+     "Methodology and analysis"
+    ]
+   },
+   "8114 Manufacturing technologies": {
+    "what": "Manufacturing technologies",
+    "includes": [
+     "Quality control",
+     "Supply chain management",
+     "Production planning and control",
+     "Facilities management",
+     "Manufacturing technology research and development services"
+    ]
+   },
+   "8115 Earth science services": {
+    "what": "Earth science services",
+    "includes": [
+     "Meteorology",
+     "Cartography",
+     "Geology",
+     "Oceanography and hydrology",
+     "Geophysics"
+    ]
+   },
+   "8117 Biological science services": {
+    "what": "Biological science services",
+    "includes": [
+     "Marine biology services",
+     "Ecological science services",
+     "Botanical science services",
+     "Agricultural science services",
+     "Aerobiological science services"
+    ]
+   },
+   "72 Building and Facility Construction and Maintenance Services": {
+    "what": "Building and Facility Construction and Maintenance Services",
+    "includes": [
+     "Building and facility maintenance and repair services",
+     "Residential building construction services",
+     "Nonresidential building construction services",
+     "Heavy construction services",
+     "Specialized trade construction and maintenance services"
+    ]
+   },
+   "25 Commercial and Military and Private Vehicles and their Accessories and Components": {
+    "what": "Commercial and Military and Private Vehicles and their Accessories and Components",
+    "includes": [
+     "Motor vehicles",
+     "Marine transport",
+     "Railway and tramway machinery and equipment",
+     "Aircraft",
+     "Spacecraft",
+     "Non motorized cycles",
+     "Transportation components and systems",
+     "Vehicle bodies and trailers",
+     "Transportation services equipment",
+     "Aerospace systems and components and equipment"
+    ]
+   },
+   "41 Laboratory and Measuring and Observing and Testing Equipment": {
+    "what": "Laboratory and Measuring and Observing and Testing Equipment",
+    "includes": [
+     "Laboratory and scientific equipment",
+     "Measuring and observing and testing instruments",
+     "Laboratory supplies and fixtures",
+     "Blood manufacturing and hematology systems, components and supplies",
+     "Clinical chemistry testing systems, components, and supplies",
+     "Clinical laboratory and toxicology testing systems, components, and supplies",
+     "Cellular culture products",
+     "Diagnostic and microbiological devices",
+     "Immunological testing systems, components, and supplies",
+     "Pathology instrumentation and accessories",
+     "Serological and specimen preparation test systems, components and supplies"
+    ]
+   },
+   "56 Furniture and Furnishings": {
+    "what": "Furniture and Furnishings",
+    "includes": [
+     "Accommodation furniture",
+     "Commercial and industrial furniture",
+     "Classroom and instructional and institutional furniture and fixtures",
+     "Merchandising furniture and accessories",
+     "Decorative adornments"
+    ]
+   },
+   "78 Transportation and Storage and Mail Services": {
+    "what": "Transportation and Storage and Mail Services",
+    "includes": [
+     "Mail and cargo transport",
+     "Passenger transport",
+     "Material packing and handling",
+     "Storage",
+     "Transport services",
+     "Transportation repair or maintenance services"
+    ]
+   },
+   "46 Defense and Law Enforcement and Security and Safety Equipment and Supplies": {
+    "what": "Defense and Law Enforcement and Security and Safety Equipment and Supplies",
+    "includes": [
+     "Light weapons and ammunition",
+     "Conventional war weapons",
+     "Missiles",
+     "Rockets and subsystems",
+     "Launchers",
+     "Law enforcement",
+     "Public safety and control",
+     "Security surveillance and detection",
+     "Personal safety and protection",
+     "Fire protection",
+     "Defense and law enforcement and security and safety training equipment",
+     "Workplace safety equipment and supplies and training materials",
+     "Military weapon and ammunition disarmament and disposal equipment and related products"
+    ]
+   },
+   "86 Education and Training Services": {
+    "what": "Education and Training Services",
+    "includes": [
+     "Vocational training",
+     "Alternative educational systems",
+     "Educational institutions",
+     "Specialized educational services",
+     "Educational facilities"
+    ]
+   },
+   "24 Material Handling and Conditioning and Storage Machinery and their Accessories and Supplies": {
+    "what": "Material Handling and Conditioning and Storage Machinery and their Accessories and Supplies",
+    "includes": [
+     "Material handling machinery and equipment",
+     "Containers and storage",
+     "Packaging materials",
+     "Industrial refrigeration",
+     "Packing supplies"
+    ]
+   },
+   "76 Industrial Cleaning Services": {
+    "what": "Industrial Cleaning Services",
+    "includes": [
+     "Decontamination services",
+     "Cleaning and janitorial services",
+     "Refuse disposal and treatment",
+     "Toxic and hazardous waste cleanup"
+    ]
+   },
+   "40 Distribution and Conditioning Systems and Equipment and Components": {
+    "what": "Distribution and Conditioning Systems and Equipment and Components",
+    "includes": [
+     "Heating and ventilation and air circulation",
+     "Fluid and gas distribution",
+     "Industrial pumps and compressors",
+     "Industrial filtering and purification",
+     "Pipe piping and pipe fittings",
+     "Tubes tubing and tube fittings"
+    ]
+   },
+   "30 Structures and Building and Construction and Manufacturing Components and Supplies": {
+    "what": "Structures and Building and Construction and Manufacturing Components and Supplies",
+    "includes": [
+     "Structural components and basic shapes",
+     "Concrete and cement and plaster",
+     "Roads and landscape",
+     "Structural building products",
+     "Insulation",
+     "Exterior finishing materials",
+     "Interior finishing materials",
+     "Doors and windows and glass",
+     "Plumbing fixtures",
+     "Construction and maintenance support equipment",
+     "Portable Structure Building Components",
+     "Underground mining structures and materials",
+     "Structural materials"
+    ]
+   },
+   "77 Environmental Services": {
+    "what": "Environmental Services",
+    "includes": [
+     "Environmental management",
+     "Environmental protection",
+     "Pollution tracking and monitoring and rehabilitation",
+     "Pollutants tracking and monitoring and rehabilitation services",
+     "Environmental laboratory services"
+    ]
+   },
+   "none of these": {
+    "what": "The main goods or services being bought fall in none of the other listed families or segments."
+   }
+  }
+ },
+ "options": [
+  {
+   "key": "8111 Computer services",
+   "kind": "profile",
+   "prefix": "8111"
+  },
+  {
+   "key": "8116 Information Technology Service Delivery",
+   "kind": "profile",
+   "prefix": "8116"
+  },
+  {
+   "key": "4323 Software",
+   "kind": "profile",
+   "prefix": "4323"
+  },
+  {
+   "key": "80101507 Information technology consultation services",
+   "kind": "profile",
+   "prefix": "80101507"
+  },
+  {
+   "key": "4319 Communications Devices and Accessories",
+   "kind": "sibling",
+   "prefix": "4319"
+  },
+  {
+   "key": "4320 Components for information technology or broadcasting or telecommunications",
+   "kind": "sibling",
+   "prefix": "4320"
+  },
+  {
+   "key": "4321 Computer Equipment and Accessories",
+   "kind": "sibling",
+   "prefix": "4321"
+  },
+  {
+   "key": "4322 Data Voice or Multimedia Network Equipment or Platforms and Accessories",
+   "kind": "sibling",
+   "prefix": "4322"
+  },
+  {
+   "key": "8010 Management advisory services (other than 80101507)",
+   "kind": "sibling",
+   "prefix": "8010"
+  },
+  {
+   "key": "8011 Human resources services",
+   "kind": "sibling",
+   "prefix": "8011"
+  },
+  {
+   "key": "8012 Legal services",
+   "kind": "sibling",
+   "prefix": "8012"
+  },
+  {
+   "key": "8013 Real estate services",
+   "kind": "sibling",
+   "prefix": "8013"
+  },
+  {
+   "key": "8014 Marketing and distribution",
+   "kind": "sibling",
+   "prefix": "8014"
+  },
+  {
+   "key": "8015 Trade policy and services",
+   "kind": "sibling",
+   "prefix": "8015"
+  },
+  {
+   "key": "8016 Business administration services",
+   "kind": "sibling",
+   "prefix": "8016"
+  },
+  {
+   "key": "8017 Public relations and professional communications services",
+   "kind": "sibling",
+   "prefix": "8017"
+  },
+  {
+   "key": "8110 Professional engineering services",
+   "kind": "sibling",
+   "prefix": "8110"
+  },
+  {
+   "key": "8112 Economics",
+   "kind": "sibling",
+   "prefix": "8112"
+  },
+  {
+   "key": "8113 Statistics",
+   "kind": "sibling",
+   "prefix": "8113"
+  },
+  {
+   "key": "8114 Manufacturing technologies",
+   "kind": "sibling",
+   "prefix": "8114"
+  },
+  {
+   "key": "8115 Earth science services",
+   "kind": "sibling",
+   "prefix": "8115"
+  },
+  {
+   "key": "8117 Biological science services",
+   "kind": "sibling",
+   "prefix": "8117"
+  },
+  {
+   "key": "72 Building and Facility Construction and Maintenance Services",
+   "kind": "segment",
+   "prefix": "72"
+  },
+  {
+   "key": "25 Commercial and Military and Private Vehicles and their Accessories and Components",
+   "kind": "segment",
+   "prefix": "25"
+  },
+  {
+   "key": "41 Laboratory and Measuring and Observing and Testing Equipment",
+   "kind": "segment",
+   "prefix": "41"
+  },
+  {
+   "key": "56 Furniture and Furnishings",
+   "kind": "segment",
+   "prefix": "56"
+  },
+  {
+   "key": "78 Transportation and Storage and Mail Services",
+   "kind": "segment",
+   "prefix": "78"
+  },
+  {
+   "key": "46 Defense and Law Enforcement and Security and Safety Equipment and Supplies",
+   "kind": "segment",
+   "prefix": "46"
+  },
+  {
+   "key": "86 Education and Training Services",
+   "kind": "segment",
+   "prefix": "86"
+  },
+  {
+   "key": "24 Material Handling and Conditioning and Storage Machinery and their Accessories and Supplies",
+   "kind": "segment",
+   "prefix": "24"
+  },
+  {
+   "key": "76 Industrial Cleaning Services",
+   "kind": "segment",
+   "prefix": "76"
+  },
+  {
+   "key": "40 Distribution and Conditioning Systems and Equipment and Components",
+   "kind": "segment",
+   "prefix": "40"
+  },
+  {
+   "key": "30 Structures and Building and Construction and Manufacturing Components and Supplies",
+   "kind": "segment",
+   "prefix": "30"
+  },
+  {
+   "key": "77 Environmental Services",
+   "kind": "segment",
+   "prefix": "77"
+  },
+  {
+   "key": "none of these",
+   "kind": "none",
+   "prefix": ""
+  }
+ ]
+}

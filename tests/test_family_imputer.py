@@ -303,28 +303,96 @@ def test_abort_logs_every_sent_call() -> None:
         conn.close()
 
 
-def test_nothing_in_the_product_reaches_the_imputer() -> None:
-    print("\nNo product surface imports family_imputer or names its data")
-    targets = (list((SCRIPTS / "tender_tools").rglob("*.py"))
-               + [SCRIPTS / "mcp_server.py"]
-               + list((SCRIPTS / "ingest").rglob("*.py"))
+def _imports(source: str) -> list:
+    names = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names.append(node.module or "")
+    return names
+
+
+# What Claude reads: the tools, the MCP server, and the skills that drive the
+# briefing and the pre-mortem. None of it may reach a probability.
+CLAUDE_READ_PY = (lambda: list((SCRIPTS / "tender_tools").rglob("*.py"))
+                  + [SCRIPTS / "mcp_server.py"])
+CLAUDE_READ_MD = (lambda: list((Path(__file__).parent.parent / ".claude" / "skills")
+                               .rglob("*.md")))
+# Names that carry, compute or locate the probability. Absent from every
+# Claude-read surface as identifiers, attributes or string literals.
+PROBABILITY_TOKENS = ("imputed_mass", "p_profile", "IMPUTER_THRESHOLD", "Imputation",
+                      "family_imputer_gate", "probabilities", "family_imputer")
+
+
+def test_import_boundary() -> None:
+    print("\nOnly ingest/cli.py imports the imputer, and only its gate (ref-006)")
+    product = (CLAUDE_READ_PY() + list((SCRIPTS / "ingest").rglob("*.py"))
                + [SCRIPTS / "filter_audit" / "predicates.py"])
+    allowed = {("cli.py", "ingest"): {"family_imputer.gate"}}
     offenders = []
-    for path in targets:
-        source = path.read_text(encoding="utf-8")
-        if "family_imputer" in source:
-            offenders.append(f"{path.name}: names family_imputer")
-            continue
-        for node in ast.walk(ast.parse(source)):
-            if isinstance(node, ast.Import):
-                names = [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                names = [node.module or ""]
-            else:
-                continue
-            if any(n.split(".")[0] == "family_imputer" for n in names):
-                offenders.append(f"{path.name}: imports it")
-    check(f"{len(targets)} product modules scanned; none reaches the imputer", offenders, [])
+    for path in product:
+        mods = [m for m in _imports(path.read_text(encoding="utf-8"))
+                if m.split(".")[0] == "family_imputer"]
+        ok = allowed.get((path.name, path.parent.name), set())
+        offenders += [f"{path.parent.name}/{path.name}: imports {m}"
+                      for m in mods if m not in ok]
+    check(f"{len(product)} product modules scanned; only ingest/cli.py -> "
+          f"family_imputer.gate", offenders, [])
+    cli_mods = [m for m in _imports((SCRIPTS / "ingest" / "cli.py").read_text(encoding="utf-8"))
+                if m.startswith("family_imputer")]
+    check("...and ingest/cli.py does import exactly the gate", cli_mods,
+          ["family_imputer.gate"])
+
+
+def _probability_hits(source: str) -> list:
+    hits = []
+    for node in ast.walk(ast.parse(source)):
+        text = (node.id if isinstance(node, ast.Name) else
+                node.attr if isinstance(node, ast.Attribute) else
+                node.value if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                else None)
+        if text and any(t in text for t in PROBABILITY_TOKENS):
+            hits.append(f"{node.lineno} {text[:40]!r}")
+    return hits
+
+
+def test_probability_never_reaches_claude() -> None:
+    print("\nNo Claude-read surface names, computes or locates the probability")
+    planted = ("def show(meta):\n    return meta.get('imputed_mass')\n"
+               "x = row.p_profile\n")
+    check("the scan catches a planted leak (not a vacuous pass)",
+          len(_probability_hits(planted)), 2)
+    offenders = []
+    for path in CLAUDE_READ_PY():
+        offenders += [f"{path.parent.name}/{path.name}:{h}"
+                      for h in _probability_hits(path.read_text(encoding="utf-8"))]
+        offenders += [f"{path.name}: imports {m}" for m in _imports(path.read_text(encoding="utf-8"))
+                      if m.startswith("filter_audit.predicates") or m.startswith("family_imputer")]
+    for path in CLAUDE_READ_MD():
+        text = path.read_text(encoding="utf-8")
+        offenders += [f"{path.parent.name}/{path.name}: {t}" for t in PROBABILITY_TOKENS
+                      if t in text]
+    check(f"{len(CLAUDE_READ_PY())} tool modules and {len(CLAUDE_READ_MD())} skill "
+          f"files carry none of {len(PROBABILITY_TOKENS)} probability names", offenders, [])
+
+    from ingest.corpus import RELEVANCE_METADATA_KEYS, relevance_metadata
+    check("the corpus relevance keys are exactly basis, family, model",
+          RELEVANCE_METADATA_KEYS, ("relevance_basis", "imputed_family", "imputer_model"))
+    row = {"_relevance_basis": "imputed", "_imputed_family": "8111",
+           "_imputer_model": "jev-1.13.0", "_imputed_mass": 0.91, "p_profile": 0.91}
+    meta = relevance_metadata(row)
+    check("an imputed row writes only the allowed keys, even when the row "
+          "carries a mass", sorted(meta), sorted(RELEVANCE_METADATA_KEYS))
+    check("...and no value in it is a number", any(isinstance(v, float) for v in meta.values()),
+          False)
+    check("a coded row writes only its basis",
+          relevance_metadata({"_relevance_basis": "unspsc"}), {"relevance_basis": "unspsc"})
+    corpus_src = (SCRIPTS / "ingest" / "corpus.py").read_text(encoding="utf-8")
+    consts = [n.value for n in ast.walk(ast.parse(corpus_src))
+              if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    check("corpus.py holds no string literal naming a mass or probability",
+          [c for c in consts if "mass" in c.lower() or "probab" in c.lower()], [])
 
 
 def test_imputed_fields_are_withheld() -> None:
@@ -565,6 +633,161 @@ def test_strip_and_ceiling() -> None:
     check("'See Attached.' is short", C.flags("See Attached.")["short"], True)
 
 
+def _feed_frame():
+    """Four feed rows: one coded, three uncoded - of which only one survives
+    closed/exclusion/construction/jurisdiction and reaches relevance."""
+    import pandas as pd
+    base = {"contractingEntityName-nomEntitContractante-eng": "Shared Services Canada (SSC)",
+            "endUserEntitiesName-nomEntitesUtilisateurFinal-eng": "",
+            "noticeType-avisType-eng": "Request for Proposal",
+            "procurementCategory-categorieApprovisionnement": "*SRV",
+            "tenderClosingDate-appelOffresDateCloture": "2026-12-01T14:00:00",
+            "unspsc": ""}
+    rows = [
+        dict(base, **{"referenceNumber-numeroReference": "CODED-1", "unspsc": "*81111500",
+                      "title-titre-eng": "Application support services",
+                      "tenderDescription-descriptionAppelOffres-eng": "Support a line-of-business application."}),
+        dict(base, **{"referenceNumber-numeroReference": "UNCODED-LIVE",
+                      "title-titre-eng": "Local Internet Access Services",
+                      "tenderDescription-descriptionAppelOffres-eng": "Managed internet access for regional offices."}),
+        dict(base, **{"referenceNumber-numeroReference": "UNCODED-CLOSED",
+                      "tenderClosingDate-appelOffresDateCloture": "2026-01-01T14:00:00",
+                      "title-titre-eng": "Closed notice", "tenderDescription-descriptionAppelOffres-eng": "Old."}),
+        dict(base, **{"referenceNumber-numeroReference": "UNCODED-CNST",
+                      "procurementCategory-categorieApprovisionnement": "*CNST",
+                      "title-titre-eng": "Roof replacement", "tenderDescription-descriptionAppelOffres-eng": "Replace a roof."}),
+    ]
+    df = pd.DataFrame(rows)
+    cols = ingest.resolve_columns(list(df.columns), ingest.TENDER_COLUMNS,
+                                  ingest.TENDER_REQUIRED, "test")
+    return df, cols
+
+
+class _SpyClient:
+    """Stands in for JevClient. Records every call; answers with a fixed
+    distribution, or raises."""
+    def __init__(self, probs=None, raise_with=None):
+        self.calls, self.probs, self.raise_with = [], probs, raise_with
+
+    def ask(self, state, payload):
+        self.calls.append(state)
+        if self.raise_with is not None:
+            raise self.raise_with
+        keys = list(payload["criteria"])
+        probs = {k: 0.0 for k in keys}
+        probs.update(self.probs or {})
+        rest = 1.0 - sum(probs.values())
+        probs[keys[-1]] += rest
+        top = max(probs, key=probs.get)
+        return {"model": "jev-1.13.0",
+                "answers": {Q.QUESTION_ID: {"type": "choice", "choice": top,
+                                            "probabilities": probs, "confidence": 0.5}},
+                "usage": {"input_tokens": 3500, "output_tokens": 0}}
+
+
+def test_gate_in_the_ingest() -> None:
+    print("\nThe ingest gate: coded never called, order enforced, mass rule, fallbacks")
+    import contextlib
+    import io
+    from datetime import date
+    from family_imputer import gate as G
+    frozen = Q.load_frozen_payload()
+    key_of = {o["prefix"]: o["key"] for o in frozen["options"]}
+    families = ingest.parse_profile(ingest.DEFAULT_PROFILE)["unspsc_families"]
+    criteria = ingest.parse_profile(ingest.DEFAULT_PROFILE)
+    as_of = date(2026, 9, 24)
+
+    def run(imputer):
+        df, cols = _feed_frame()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            out = ingest.filter_tenders(df, criteria, cols, as_of=as_of, imputer=imputer)
+        return out, buf.getvalue()
+
+    seen = []
+
+    def spy_imputer(items):
+        seen.extend(items)
+        return G.GateRun()
+    run(spy_imputer)
+    check("only the uncoded notice past gates 1-4 reaches the imputer",
+          [i[0] for i in seen], ["UNCODED-LIVE"])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cache_path = Path(tmp) / "gate.db"
+        # two profile options at 0.20 each, behind a 0.25 non-profile option
+        split = _SpyClient({key_of["8111"]: 0.20, key_of["8116"]: 0.20, key_of["72"]: 0.25})
+        imp = G.make_imputer(families, key="k", client=split, cache_path=cache_path)
+        out, log = run(imp)
+        check("a coded notice never produces an API call: one call, for the uncoded one",
+              len(split.calls), 1)
+        check("two profile options at 0.20 behind a 0.25 non-profile option is admitted",
+              "UNCODED-LIVE" in set(out[ingest.TENDER_COLUMNS["tender_id"][0]]), True)
+        check("...recorded as imputed, with the top profile family",
+              out.set_index(ingest.TENDER_COLUMNS["tender_id"][0])
+                 .loc["UNCODED-LIVE", ["_relevance_basis", "_imputed_family"]].tolist(),
+              ["imputed", "8111"])
+        check("the funnel prints the imputed split", "1 imputed (1 admitted" in log, True)
+        check("provenance carries the mode, with no probability in it",
+              (out.attrs["relevance_mode"]["relevance_imputed"],
+               any("mass" in k for k in out.attrs["relevance_mode"])), (1, False))
+        again = _SpyClient({key_of["8111"]: 0.99})
+        run(G.make_imputer(families, key="k", client=again, cache_path=cache_path))
+        check("a re-run is served from the cache: no call", len(again.calls), 0)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # the profile option sits second at 0.02 behind a non-profile option
+        low = _SpyClient({key_of["72"]: 0.98, key_of["8111"]: 0.02})
+        out, _ = run(G.make_imputer(families, key="k", client=low,
+                                    cache_path=Path(tmp) / "g.db"))
+        check("a profile option second at 0.02 is rejected (mass 0.02 < 0.20)",
+              "UNCODED-LIVE" in set(out[ingest.TENDER_COLUMNS["tender_id"][0]]), False)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        spy = _SpyClient({key_of["8111"]: 1.0})
+        _, log = run(G.make_imputer(families, key="", client=None,
+                                    cache_path=Path(tmp) / "g.db"))
+        check("no key: stands down, says so, falls back to keywords",
+              ("TYPESAFE_API_KEY not set" in log, "0 imputed" in log, "1 keyword fallback" in log),
+              (True, True, True))
+        broken = _SpyClient(raise_with=client.JevError("HTTP 500"))
+        out, log = run(G.make_imputer(families, key="k", client=broken,
+                                      cache_path=Path(tmp) / "g2.db"))
+        check("an API error falls back per notice and the ingest completes",
+              ("1 keyword fallback" in log, "api error" in log, len(out) >= 1), (True, True, True))
+        denied = _SpyClient(raise_with=client.JevAuthError("HTTP 401"))
+        run(G.make_imputer(families, key="k", client=denied, cache_path=Path(tmp) / "g3.db"))
+        check("an auth error is not retried per notice", len(denied.calls), 1)
+
+        def exploding(items):
+            raise RuntimeError("boom")
+        out, log = run(exploding)
+        check("an imputer that raises anyway never fails the ingest",
+              ("imputer raised RuntimeError" in log, len(out) >= 1), (True, True))
+        _, log = run(G.make_imputer(families + ["9999"], key="k", client=spy,
+                                    cache_path=Path(tmp) / "g4.db"))
+        check("a profile that no longer matches the frozen question stands down",
+              ("profile families differ" in log, len(spy.calls)), (True, 0))
+        _, log = run(None)
+        check("with no imputer the split still prints, at zero",
+              "Uncoded relevance: 0 imputed" in log, True)
+
+        tampered = Path(tmp) / "fq.json"
+        data = json.loads(Q.FROZEN_PAYLOAD.read_text(encoding="utf-8"))
+        data["payload"]["instructions"] += " Prefer IT."
+        tampered.write_text(json.dumps(data), encoding="utf-8")
+        raises("an edited frozen question is refused on load", Q.FrozenQuestionDrift,
+               lambda: Q.load_frozen_payload(tampered))
+
+    n = P.Notice.from_frozen_row({"reference_number": "X", "title": "t", "description": "d",
+                                  "unspsc": "*72101504", "closing_date": None})
+    r = P.stage_relevance(n, {"unspsc_families": families, "competencies": []}, None,
+                          imputation=P.Imputation("8111", 1.0, "jev-1.13.0", "q"))
+    check("an imputation handed in for a coded notice is ignored and flagged",
+          (r.outcome, r.detail["relevance_basis"], r.detail["imputation_ignored_on_coded"]),
+          ("drop", "unspsc", True))
+
+
 def test_sweep_definitions() -> None:
     print("\nPhase 2 sweep: low tail present; 'neither' means both methods missed")
     from family_imputer import sweep as S
@@ -599,13 +822,15 @@ def main() -> int:
     test_comparator_is_production()
     test_cache_is_append_only()
     test_abort_logs_every_sent_call()
-    test_nothing_in_the_product_reaches_the_imputer()
+    test_import_boundary()
+    test_probability_never_reaches_claude()
     test_imputed_fields_are_withheld()
     test_label_writes_only_the_scratch_file()
     test_decision_rule()
     test_three_label_kinds_and_the_sheet()
     test_label_ingest()
     test_strip_and_ceiling()
+    test_gate_in_the_ingest()
     test_sweep_definitions()
     test_wilson()
 
