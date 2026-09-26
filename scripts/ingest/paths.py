@@ -23,6 +23,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 DEFAULT_PROFILE = PROJECT_ROOT / "vault" / "profiles" / "my-company.md"
 DEFAULT_CACHE = PROJECT_ROOT / ".cache" / "tenders.csv"
 DEFAULT_DB = PROJECT_ROOT / "chroma_db"
+# ref-007's committed flag store. Written only under --record-flags; see
+# ingest/flag_store.py.
+CODED_FLAGS = PROJECT_ROOT / "data" / "coded_flags.jsonl"
 
 # ---------------------------------------------------------------------------
 # The corpus is a CONTAINER holding one or more build directories and a

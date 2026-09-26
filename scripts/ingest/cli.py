@@ -27,6 +27,30 @@ from .schema import TENDER_COLUMNS, TENDER_REQUIRED
 from .value import make_llm_value_extractor
 
 
+def _record_flags(flag_records: list, args) -> None:
+    """
+    ref-007's store, written only under --record-flags.
+
+    UNLIKE THE IMPUTER, A FAILURE HERE RAISES. A flagger that cannot answer
+    leaves notices unevaluated and the funnel counts them; a store that cannot
+    be written would leave a hole in the promotion evidence that nothing
+    reports. The one writer is CI, and a red run is the right signal there.
+    """
+    if not args.record_flags:
+        print(f"  Coded flags not recorded ({len(flag_records):,} this run): "
+              f"--record-flags not given")
+        return
+    from datetime import date
+    from filter_audit.version import filter_version
+    from . import flag_store
+    label = filter_version(args.profile)["label"]
+    seen = date.today().isoformat()
+    counts = flag_store.append([flag_store.to_record(r["flag"], r["title"], label, seen)
+                                for r in flag_records])
+    print(f"  Coded flags recorded: {counts['written']:,} new, "
+          f"{counts['already_recorded']:,} already in the store")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE)
@@ -52,6 +76,13 @@ def main():
         help="Write `rebuilt` or `unchanged` here. Lets a scheduled job decide "
              "whether there is anything to digest without parsing stdout, and "
              "without this script knowing what a CI runner is.",
+    )
+    parser.add_argument(
+        "--record-flags", action="store_true",
+        help="Append ref-007's coded-notice flags to data/coded_flags.jsonl. "
+             "CI passes this and commits the file with the digest; local runs "
+             "print the count without writing, so one committed file has one "
+             "writer.",
     )
     parser.add_argument(
         "--extract-values",
@@ -125,15 +156,21 @@ def main():
     # operational failure (missing key, API error, drifted question): those
     # notices fall back to keywords and the funnel says so. An import failure is
     # the same case one level up, and is reported the same way.
-    imputer = None
+    #
+    # The flagger (ref-007) is a second instance of the same gate, so it has its
+    # own time budget and runs after the imputer. It sees only coded notices
+    # whose codes reject, and what it returns becomes flags, never admissions.
+    imputer = flagger = None
     try:
         from family_imputer.gate import make_imputer
         imputer = make_imputer(criteria["unspsc_families"])
+        flagger = make_imputer(criteria["unspsc_families"])
     except Exception as exc:  # noqa: BLE001 - never fail the ingest on the imputer
         print(f"  Imputer unavailable ({type(exc).__name__}: {exc}); uncoded "
-              f"notices fall back to keywords")
+              f"notices fall back to keywords, and no coded flags are evaluated")
     df = filter_tenders(df, criteria, cols, value_extractor=value_extractor,
-                        imputer=imputer)
+                        imputer=imputer, flagger=flagger)
+    _record_flags(df.attrs.get("_coded_flag_records", []), args)
 
     if len(df) == 0:
         print("\nNo tenders passed the filter. Loosen your criteria.", file=sys.stderr)

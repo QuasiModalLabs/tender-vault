@@ -60,7 +60,8 @@ def _source_system(tender_id) -> str:
 
 
 def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
-                   value_extractor=None, as_of=None, imputer=None) -> pd.DataFrame:
+                   value_extractor=None, as_of=None, imputer=None,
+                   flagger=None) -> pd.DataFrame:
     """
     Apply profile filters. Prints a funnel so you can tune the profile.
 
@@ -96,6 +97,12 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     scripts/family_imputer/gate.py and ref-006. None means every uncoded
     notice is decided by keywords, which is also what happens to any notice
     the imputer could not answer for.
+
+    flagger: the same kind of callable, for ref-007's flags - or None. It is
+    handed only coded notices past gates 1-4 whose codes REJECT, after the
+    imputer has run. Its answers become flags in df.attrs["_coded_flag_records"]
+    and change no admission: the frame returned is the frame that would be
+    returned without it, which tests/test_family_imputer.py asserts.
     """
     from filter_audit import predicates as _pred
 
@@ -310,6 +317,35 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     df["_imputer_model"] = [imputations[t].model if t in imputations else ""
                             for t in tid]
 
+    # FLAGS ON CODED NOTICES (ref-007) - FLAG ONLY. Coded notices past gates 1-4
+    # whose codes REJECT go to the flagger, after the uncoded imputer has run
+    # and in a separate call, so the flag backfill can never spend the uncoded
+    # gate's time budget. A coded notice its codes admit is never sent: it
+    # cannot be flagged, so the call would be waste. The flagger's answers go
+    # to predicates.coded_flag and nowhere else - never into `imputations`,
+    # never into stage_mask - so they cannot reach an admission decision.
+    coded_rejects = (df.loc[has_codes & ~df["_unspsc_families"].apply(bool)]
+                     if families else df.iloc[0:0])
+    flag_records, flag_gate = [], None
+    flag_note = "no flagger configured"
+    if flagger is not None and len(coded_rejects):
+        items = [(_pred._s(r[cols["tender_id"]]), _pred._s(r[cols["title"]]),
+                  _pred._s(r[cols["description"]])) for _, r in coded_rejects.iterrows()]
+        try:
+            flag_gate = flagger(items)
+            flag_note = flag_gate.status
+        except Exception as exc:  # noqa: BLE001 - a flag never fails the ingest
+            flag_note = f"disabled: flagger raised {type(exc).__name__}"
+        if flag_gate is not None:
+            for n in _pred.notices_from_frame(coded_rejects, cols):
+                flag = _pred.coded_flag(n, criteria, flag_gate.imputations.get(n.notice_id))
+                if flag is not None:
+                    flag_records.append({"flag": flag, "title": n.title})
+    elif flagger is not None:
+        flag_note = "ok"
+    n_flag_asked = len(coded_rejects) if flagger is not None else 0
+    n_flag_answered = len(flag_gate.imputations) if flag_gate is not None else 0
+
     if families or criteria["competencies"]:
         keep = _pred.stage_mask(df, cols, criteria, _pred.stage_relevance,
                                 imputations=imputations)
@@ -351,6 +387,24 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     if gate is not None:
         relevance_mode["imputer_model"] = gate.model
         relevance_mode["imputer_question_sha256"] = gate.question_sha256
+
+    # ALWAYS printed, including at zero, for the same reason as the line above.
+    # Counts only: the store holds the flags, and a count is not a probability.
+    print(f"  Coded flags (ref-007, flag only, none admitted): {len(flag_records):,} "
+          f"of {len(coded_rejects):,} coded rejects; {n_flag_answered:,} evaluated, "
+          f"{n_flag_asked - n_flag_answered:,} not evaluated  [flagger: {flag_note}]")
+    if flag_gate is not None and (flag_gate.called or flag_gate.cached):
+        print(f"    flagger calls {flag_gate.called:,}, cached {flag_gate.cached:,}, "
+              f"input tokens {flag_gate.input_tokens:,}")
+    if flag_gate is not None and flag_gate.fallback:
+        print("    not evaluated: " + "; ".join(
+            f"{k} {v}" for k, v in sorted(flag_gate.fallback.items())))
+    relevance_mode.update({
+        "flags_coded": len(flag_records),
+        "flags_coded_rejects": len(coded_rejects),
+        "flags_not_evaluated": n_flag_asked - n_flag_answered,
+        "flagger_status": flag_note,
+    })
 
     # --- Value: retired from the default path -------------------------------
     # No step is printed when nothing is filtered. A funnel line that always
@@ -414,4 +468,7 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     # ran, with counts, so a keyword-fallback build is never mistaken for an
     # imputed one (ref-006). Counts and a status only - no probability.
     df.attrs["relevance_mode"] = relevance_mode
+    # For the ref-007 store (ingest/flag_store.py), which the CLI writes only
+    # under --record-flags. Not read by build_chroma.
+    df.attrs["_coded_flag_records"] = flag_records
     return df

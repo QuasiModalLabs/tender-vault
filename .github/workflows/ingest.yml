@@ -210,13 +210,18 @@ jobs:
         # the ingest falls back to keywords and the funnel and provenance say so;
         # it never fails the run. Its verdict cache lives under .cache/, which
         # the cache step above restores, so a notice is paid for once.
+        #
+        # --record-flags: this job is the ONE writer of data/coded_flags.jsonl
+        # (ref-007), committed below with the digest. Deliberately not under
+        # .cache/: a missed restore of that rolling cache would reset a month
+        # of flags without an error. A failed write fails this step, loudly.
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: |
           if [ "${FULL_RUN}" = "true" ]; then
-            python scripts/ingest --force --status-file .cache/ingest-status
+            python scripts/ingest --force --record-flags --status-file .cache/ingest-status
           else
-            python scripts/ingest --skip-unchanged --status-file .cache/ingest-status
+            python scripts/ingest --skip-unchanged --record-flags --status-file .cache/ingest-status
           fi
           echo "status=$(cat .cache/ingest-status)" >> "$GITHUB_OUTPUT"
 
@@ -265,7 +270,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add vault/digests/ vault/crosswalk/attestation.yaml
+          git add vault/digests/ vault/crosswalk/attestation.yaml data/coded_flags.jsonl
           if git diff --cached --quiet; then
             echo "No new digest to commit"
           else

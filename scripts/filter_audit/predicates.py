@@ -486,6 +486,7 @@ class Imputation:
     mass: float             # summed probability across the profile options
     model: str              # the versioned model that answered
     question_sha256: str
+    content_sha256: str = ""  # the gate cache key: hash of the exact state sent
 
 
 def stage_relevance(notice: Notice, criteria: dict, as_of,
@@ -573,6 +574,63 @@ def stage_relevance(notice: Notice, criteria: dict, as_of,
             "gate_configured": True,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Flags on coded notices (ref-007) - FLAG ONLY, never an admission
+# ---------------------------------------------------------------------------
+#
+# A coded notice whose filed codes reject, and which the imputer places in the
+# profile's families with summed mass >= FLAG_THRESHOLD, is recorded as a
+# flag. It is NOT admitted: stage_relevance ignores any imputation on a coded
+# notice, and this function is not a stage and is never consulted by one.
+#
+# THE MASS STOPS HERE. CodedFlag carries a band, not the mass, and has no
+# admit field, so nothing downstream of this function can hold the number or
+# mistake a flag for a decision. The band is what the committed store keeps.
+#
+# 0.90 was chosen on the same 23,314 archive notices the ref-004 sweep was
+# fitted on; ref-007 requires a split-half check before any promotion.
+FLAG_THRESHOLD = 0.90
+MASS_BANDS = ((0.99, "0.99+"), (0.95, "0.95-0.99"), (FLAG_THRESHOLD, "0.90-0.95"))
+
+
+@dataclass(frozen=True)
+class CodedFlag:
+    notice_id: str
+    filed_codes: tuple      # the publisher's codes, sorted
+    jev_choice: str         # top profile family; at mass >= 0.90 also Jev's overall top choice
+    mass_band: str          # one of MASS_BANDS' labels - never the mass itself
+    model: str
+    question_sha256: str
+    content_sha256: str
+
+
+def mass_band(mass: float) -> Optional[str]:
+    """The band a mass falls in, at 0.01 resolution; None below FLAG_THRESHOLD."""
+    for floor, label in MASS_BANDS:
+        if mass_reaches(mass, floor):
+            return label
+    return None
+
+
+def coded_flag(notice: Notice, criteria: dict,
+               imputation: Optional[Imputation]) -> Optional[CodedFlag]:
+    """
+    A flag, or None. None for an uncoded notice, a coded notice its codes
+    admit, a notice with no imputation, and a mass under FLAG_THRESHOLD.
+    """
+    codes = ingest.parse_unspsc_codes(notice.unspsc)
+    if not codes or imputation is None:
+        return None
+    if ingest.matches_unspsc_families(codes, criteria.get("unspsc_families") or []):
+        return None
+    band = mass_band(imputation.mass)
+    if band is None:
+        return None
+    return CodedFlag(notice.notice_id, tuple(sorted(codes)), imputation.family, band,
+                     imputation.model, imputation.question_sha256,
+                     imputation.content_sha256)
 
 
 def stage_value(notice: Notice, criteria: dict, as_of) -> StageResult:

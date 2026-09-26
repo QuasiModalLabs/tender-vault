@@ -301,3 +301,38 @@ kinds.
 ## Status
 
 PROPOSED in lifecycle terms, `mode: flag_only`, promotion NOT EVALUATED.
+
+## Flag code implemented, 2026-09-25
+
+Added below the record committed before the code; nothing above is changed.
+
+The flag code is filter version **fv-dee8e8a8**. The predicates hash moved; the
+stage manifest did not, because `coded_flag` is not a stage.
+
+**How it is wired:**
+- `predicates.coded_flag` and `CodedFlag` are as recorded under Structure.
+  `Imputation` gains `content_sha256`, the gate cache key, so the store records
+  the exact state Jev saw rather than a second hash that could drift from it.
+- `ingest/cli.py` builds the flagger as a second `make_imputer` instance.
+  `filter_tenders` calls it after the imputer, on coded rejects past gates 1–4
+  only.
+- `ingest/flag_store.py` writes `data/coded_flags.jsonl`, whose path is owned
+  by `ingest/paths.py`. It writes only under `--record-flags`, which CI passes
+  on both the daily and the Monday run and commits with the digest. **A failed
+  write raises**, unlike an imputer failure. A store that cannot be written
+  would leave an unreported hole in the evidence.
+- The funnel prints `Coded flags (ref-007, flag only, none admitted): N of M
+  coded rejects; E evaluated, U not evaluated` on every run, zeros included.
+  Provenance and the digest frontmatter add `flags_coded`,
+  `flags_not_evaluated` and `flagger_status`: counts and a status only.
+
+**Corpus unchanged, verified on the real feed.** `filter_tenders` was replayed
+over the cached 2026-09-13 feed with a stand-in flagger that answered mass 1.0
+for every coded reject, the worst case, and made no API calls. It flagged 594
+of 594 coded rejects. The frame it returned is identical to the run without a
+flagger: 72 rows, and `DataFrame.equals` is True. 594 independently matches
+the backfill count in item 2.
+
+**Not run: a live ingest.** No Jev call has been made for this rule. The first
+CI run after merge is the backfill: about 594 calls and about $0.10 on the
+open feed (order of magnitude; see the caveats above).

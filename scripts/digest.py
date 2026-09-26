@@ -235,7 +235,9 @@ def generate_digest() -> str:
     # a count of zero is a finding, not an absence. Counts and a status only.
     stamps += [(key, provenance[key])
                for key in ("imputer_status", "relevance_imputed",
-                           "relevance_keyword_fallback")
+                           "relevance_keyword_fallback",
+                           # ref-007: counts and a status, never a band or a mass
+                           "flags_coded", "flags_not_evaluated", "flagger_status")
                if key in provenance]
 
     lines: list[str] = []
