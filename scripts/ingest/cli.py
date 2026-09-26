@@ -27,28 +27,44 @@ from .schema import TENDER_COLUMNS, TENDER_REQUIRED
 from .value import make_llm_value_extractor
 
 
-def _record_flags(flag_records: list, args) -> None:
+def _record_flags(flag_records: list, args) -> str:
     """
-    ref-007's store, written only under --record-flags.
+    ref-007's store, written only under --record-flags. Returns the store
+    status, which the caller puts in provenance (and so in the digest).
 
-    UNLIKE THE IMPUTER, A FAILURE HERE RAISES. A flagger that cannot answer
-    leaves notices unevaluated and the funnel counts them; a store that cannot
-    be written would leave a hole in the promotion evidence that nothing
-    reports. The one writer is CI, and a red run is the right signal there.
+    NEVER LOSE A FLAG SILENTLY - NOT "NEVER LOSE A FLAG". A write failure is
+    logged to stderr and returned as `write failed: ...`, which reaches the
+    provenance block and the committed digest frontmatter, and the run
+    continues. The rule is NOT EVALUATED and its promotion window extends
+    while n < 20, so a known gap is survivable; a red run with no digest would
+    trade the thing that works for evidence about a rule nobody relies on yet.
+    (An earlier version raised here; ref-007 records the change.)
     """
     if not args.record_flags:
         print(f"  Coded flags not recorded ({len(flag_records):,} this run): "
               f"--record-flags not given")
-        return
-    from datetime import date
-    from filter_audit.version import filter_version
-    from . import flag_store
-    label = filter_version(args.profile)["label"]
-    seen = date.today().isoformat()
-    counts = flag_store.append([flag_store.to_record(r["flag"], r["title"], label, seen)
-                                for r in flag_records])
+        return "not recorded: --record-flags not given"
+    try:
+        from datetime import date
+        from filter_audit.version import filter_version
+        from . import flag_store
+        label = filter_version(args.profile)["label"]
+        seen = date.today().isoformat()
+        counts = flag_store.append([flag_store.to_record(r["flag"], r["title"], label, seen)
+                                    for r in flag_records])
+    except Exception as exc:  # noqa: BLE001 - visible gap, not a failed run
+        # The marker carries the exception TYPE only. The digest writes values
+        # inside double quotes, so a message holding a quote or a Windows path
+        # (a backslash escape) would break its frontmatter. The full message
+        # goes to stderr, which is the CI log.
+        status = f"write failed: {type(exc).__name__}"
+        print(f"\n  !! CODED FLAGS NOT RECORDED ({len(flag_records):,} this run) - "
+              f"{type(exc).__name__}: {exc}. The gap is marked in provenance and "
+              f"the digest as flag_store_status.\n", file=sys.stderr)
+        return status
     print(f"  Coded flags recorded: {counts['written']:,} new, "
           f"{counts['already_recorded']:,} already in the store")
+    return f"recorded: {counts['written']} new, {counts['already_recorded']} already stored"
 
 
 def main():
@@ -170,7 +186,10 @@ def main():
               f"notices fall back to keywords, and no coded flags are evaluated")
     df = filter_tenders(df, criteria, cols, value_extractor=value_extractor,
                         imputer=imputer, flagger=flagger)
-    _record_flags(df.attrs.get("_coded_flag_records", []), args)
+    # Into relevance_mode, which build_chroma copies into provenance and the
+    # digest copies into its frontmatter: a write failure is visible in both.
+    df.attrs.setdefault("relevance_mode", {})["flag_store_status"] = _record_flags(
+        df.attrs.get("_coded_flag_records", []), args)
 
     if len(df) == 0:
         print("\nNo tenders passed the filter. Loosen your criteria.", file=sys.stderr)

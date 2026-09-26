@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import sqlite3
 import sys
 import tempfile
+from collections import Counter
 from dataclasses import fields
 from pathlib import Path
 
@@ -960,13 +962,186 @@ def test_coded_flags() -> None:
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                ingest_cli._record_flags([{"flag": f2, "title": "B"}],
-                                         argparse.Namespace(record_flags=False,
-                                                            profile=ingest.DEFAULT_PROFILE))
-            check("without --record-flags nothing is written",
-                  paths.CODED_FLAGS.exists(), False)
+                status = ingest_cli._record_flags(
+                    [{"flag": f2, "title": "B"}],
+                    argparse.Namespace(record_flags=False, profile=ingest.DEFAULT_PROFILE))
+            check("without --record-flags nothing is written, and the status says why",
+                  (paths.CODED_FLAGS.exists(), status.startswith("not recorded")),
+                  (False, True))
+
+            # A directory where the file should be: every write fails.
+            paths.CODED_FLAGS = Path(tmp) / "a-directory"
+            paths.CODED_FLAGS.mkdir()
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                status = ingest_cli._record_flags(
+                    [{"flag": f2, "title": "B"}],
+                    argparse.Namespace(record_flags=True, profile=ingest.DEFAULT_PROFILE))
+            check("a failed write does not raise: it returns a failure marker",
+                  status.startswith("write failed: "), True)
+            check("...logged loudly to stderr", "CODED FLAGS NOT RECORDED" in err.getvalue(),
+                  True)
+            check("...and the marker is safe inside the digest's double-quoted YAML",
+                  any(ch in status for ch in '"\\\n'), False)
         finally:
             paths.CODED_FLAGS = original
+    digest_src = (SCRIPTS / "digest.py").read_text(encoding="utf-8")
+    check("the digest frontmatter carries flag_store_status, so a gap is visible there",
+          '"flag_store_status"' in digest_src, True)
+    cli_src = (SCRIPTS / "ingest" / "cli.py").read_text(encoding="utf-8")
+    check("...and the ingest puts it into relevance_mode, which provenance copies",
+          '["flag_store_status"] = _record_flags(' in cli_src, True)
+
+
+def test_flag_labelling() -> None:
+    print("\nref-007 labelling: four kinds, blind via blinding.py, 1:1 controls, reveal gated")
+    import contextlib
+    import io
+    import pandas as pd
+    from family_imputer import flag_labels as F
+    from ingest import flag_store
+
+    check("the vocabulary is exactly ref-007's four kinds, in precedence order",
+          F.FLAG_LABEL_KINDS, ("vehicle", "jev_wrong", "miscoded", "out_of_scope"))
+    ref007 = (Path(__file__).parent.parent / "vault" / "reference" / "filter-refinements"
+              / "ref-007-coded-imputer-flags.md").read_text(encoding="utf-8")
+    vocab = ref007.split("## Label vocabulary", 1)[1].split("\n## ", 1)[0]
+    check("...and ref-007's vocabulary section defines the same kinds, in the same order",
+          re.findall(r"^\d\. \*\*`([a-z_]+)`\*\*", vocab, re.M), list(F.FLAG_LABEL_KINDS))
+    check("unassigned is not a kind", F.UNASSIGNED in F.FLAG_LABEL_KINDS, False)
+
+    base = {"contractingEntityName-nomEntitContractante-eng": "Shared Services Canada (SSC)",
+            "endUserEntitiesName-nomEntitesUtilisateurFinal-eng": "",
+            "noticeType-avisType-eng": "Request for Proposal",
+            "procurementCategory-categorieApprovisionnement": "*SRV",
+            "tenderClosingDate-appelOffresDateCloture": "2026-12-01T14:00:00",
+            "unspsc": "*81171500"}
+
+    def row(nid, title, **kw):
+        return dict(base, **{"referenceNumber-numeroReference": nid, "title-titre-eng": title,
+                             "tenderDescription-descriptionAppelOffres-eng": f"About {title}."},
+                    **kw)
+    rows = [row("FLAG-A", "GIS hub"), row("FLAG-B", "Data platform"),
+            row("CTRL-1", "Soil survey"), row("CTRL-2", "Lab reagents"),
+            row("CTRL-3", "Fish counts"), row("ADMIT", "App support", unspsc="*81111500")]
+
+    def flag(nid, band):
+        return P.CodedFlag(nid, ("81171500",), "4323", band, "jev-1.13.0", "q", "c")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        feed = t / "tenders.csv"
+        pd.DataFrame(rows).to_csv(feed, index=False)
+        (t / "tenders.csv.http.json").write_text('{"fetched_at": "2026-09-24T12:00:00"}')
+        store = t / "coded_flags.jsonl"
+        flag_store.append([flag_store.to_record(flag("FLAG-A", "0.99+"), "GIS hub", "fv", "2026-09-25"),
+                           flag_store.to_record(flag("FLAG-B", "0.95-0.99"), "Data platform",
+                                                "fv", "2026-09-26")], store)
+        kw = dict(store_path=store, feed_path=feed, feed_paths=[feed],
+                  sheet_path=t / "sheet.md", queue_path=t / "queue.json",
+                  labels_path=t / "labels.jsonl", ref={})
+
+        queue = F.write_sheet(**kw)
+        roles = Counter(it["role"] for it in queue["items"])
+        check("two flags mixed 1:1 with two controls", (roles["flag"], roles["control"]), (2, 2))
+        check("controls are unflagged coded rejects only (never the admit or a flag)",
+              {it["notice_id"] for it in queue["items"] if it["role"] == "control"}
+              <= {"CTRL-1", "CTRL-2", "CTRL-3"}, True)
+        sheet = kw["sheet_path"].read_text(encoding="utf-8")
+        # Blocks only: the header defines jev_wrong by listing the profile
+        # families, which a choice like 4323 is one of.
+        blocks = re.split(r"^## (?=\S+\n\n\*\*\d\d of)", sheet, flags=re.M)[1:]
+        check("one block per notice, headed by its notice id",
+              sorted(b.split("\n", 1)[0] for b in blocks),
+              sorted(it["notice_id"] for it in queue["items"]))
+        check("no band and no model choice appear in any block",
+              [s for s in ("0.99+", "0.95-0.99", "4323") if any(s in b for b in blocks)], [])
+        check("...both are marked withheld on every block",
+              sheet.count(F.WITHHELD_TEXT), 2 * len(blocks))
+        check("...and no block says whether it is a flag or a control",
+              any("control" in b.lower() or "role" in b.lower() for b in blocks), False)
+        check("each block carries title, filed codes, blank label: and note:",
+              all(("**Title:**" in b and "`81171500`" in b and "\nlabel:\n" in b
+                   and "\nnote:\n" in b) for b in blocks), True)
+
+        # The render goes through blinding.assert_blinded, not a copy of it.
+        real = blinding.blind
+
+        class Leaky:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def to_dict(self):
+                return dict(self.inner.to_dict(), mass_band="0.99+")
+        blinding.blind = lambda item_id, row: Leaky(real(item_id, row))
+        try:
+            raises("a payload carrying the band is refused by blinding.assert_blinded",
+                   AssertionError, lambda: F.render_sheet(queue, {}, {}))
+        finally:
+            blinding.blind = real
+
+        ids = [b.split("\n", 1)[0] for b in blocks]
+
+        def filled(labels):
+            text = sheet
+            for nid, (label, note) in labels.items():
+                head, rest = text.split(f"## {nid}\n", 1)
+                block, tail = (rest.split("\n---\n", 1) + [""])[:2]
+                block = block.replace("\nlabel:\n", f"\nlabel: {label}\n", 1).replace(
+                    "\nnote:\n", f"\nnote: {note}\n", 1)
+                text = head + f"## {nid}\n" + block + ("\n---\n" + tail if tail else "")
+            return text
+
+        answers = {ids[0]: ("miscoded", "GIS work filed as biology"),
+                   ids[1]: ("", "no description to judge"),
+                   ids[2]: ("", ""),
+                   ids[3]: ("unsure", "")}
+        bad = t / "bad.md"
+        bad.write_text(filled(answers), encoding="utf-8")
+        raises("a label outside the four kinds is refused", F.FlagSheetError,
+               lambda: F.ingest_sheet(bad, "human", queue_path=kw["queue_path"],
+                                      labels_path=kw["labels_path"]))
+        check("...and nothing was written", kw["labels_path"].exists(), False)
+        stray = t / "stray.md"
+        stray.write_text(filled(dict(answers, **{ids[3]: ("vehicle", "")}))
+                         + "\n---\n\n## NOT-ON-SHEET\n\n**05 of 4**\n\nlabel: vehicle\n\nnote:\n",
+                         encoding="utf-8")
+        raises("an id not on the sheet is refused", F.FlagSheetError,
+               lambda: F.ingest_sheet(stray, "human", queue_path=kw["queue_path"],
+                                      labels_path=kw["labels_path"]))
+
+        good = t / "good.md"
+        good.write_text(filled(dict(answers, **{ids[3]: ("out_of_scope", "IT audit")})),
+                        encoding="utf-8")
+        out = F.ingest_sheet(good, "human", queue_path=kw["queue_path"],
+                             labels_path=kw["labels_path"])
+        check("three dispositions (one unassigned with its reason); the blank block skipped",
+              out, {"written": 3, "skipped_unread": 1, "unassigned": 1})
+        raises("a second disposition by the same labeller is refused: the first stands",
+               F.FlagSheetError, lambda: F.ingest_sheet(good, "human",
+                                                        queue_path=kw["queue_path"],
+                                                        labels_path=kw["labels_path"]))
+        raises("reveal without a disposition is refused by blinding.RevealRefused",
+               blinding.RevealRefused,
+               lambda: F.reveal({"notice_id": ids[2], "role": "flag"}, None, {}))
+        shown = F.write_revealed("human", queue_path=kw["queue_path"],
+                                 labels_path=kw["labels_path"], store_path=store,
+                                 out_path=t / "revealed.md")
+        check("reveal shows the three labelled and withholds the unread one",
+              (shown["revealed"], shown["withheld"]), (3, 1))
+        revealed = (t / "revealed.md").read_text(encoding="utf-8")
+        labelled_flags = [i for i in (ids[0], ids[1], ids[3]) if i.startswith("FLAG")]
+        check("...every revealed flag shows its choice and band, and no control does",
+              revealed.count("model's choice 4323, band "), len(labelled_flags))
+        check("...and the unread notice is not in it", f"## {ids[2]}" in revealed, False)
+        raises("a new sheet is refused while the current one has an unlabelled notice",
+               F.FlagSheetError, lambda: F.write_sheet(**kw))
+
+        flag_store.append([flag_store.to_record(flag(f"FLAG-{i}", "0.99+"), "x", "fv",
+                                                "2026-09-27") for i in range(5)], store)
+        raises("a queue that cannot be matched 1:1 with controls is refused",
+               F.FlagSheetError, lambda: F.write_sheet(**dict(kw, labels_path=t / "none.jsonl"),
+                                                       replace=True))
 
 
 def test_sweep_definitions() -> None:
@@ -1013,6 +1188,7 @@ def main() -> int:
     test_strip_and_ceiling()
     test_gate_in_the_ingest()
     test_coded_flags()
+    test_flag_labelling()
     test_sweep_definitions()
     test_wilson()
 

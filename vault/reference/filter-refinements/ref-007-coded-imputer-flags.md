@@ -336,3 +336,78 @@ the backfill count in item 2.
 **Not run: a live ingest.** No Jev call has been made for this rule. The first
 CI run after merge is the backfill: about 594 calls and about $0.10 on the
 open feed (order of magnitude; see the caveats above).
+
+## Changes after review, 2026-09-25
+
+Added below everything above; nothing above is changed. Where this section
+and "Flag code implemented" disagree, this section is current.
+
+### A failed store write no longer fails the ingest
+
+The implemented version raised on a failed write to `data/coded_flags.jsonl`.
+On CI that meant a red run and **no digest that day**, which traded the thing
+that works for evidence about a rule that is NOT EVALUATED.
+
+**The property wanted is "never lose a flag silently", not "never lose a
+flag".** Now, on a write failure:
+- The error is logged to stderr, which is the CI log, with the full message.
+- `flag_store_status` records `write failed: <ExceptionType>` in provenance and
+  in the committed digest frontmatter, so the gap is visible in both. Only the
+  type is recorded, because the digest writes values inside double quotes and a
+  message could break them.
+- The run continues and the digest is committed.
+- CI adds `data/coded_flags.jsonl` only if it exists, so a write that failed
+  before creating the file cannot turn into a failed commit.
+
+**Why a known gap is survivable:** the promotion window already extends while
+n < 20. A half-written trailing line would make every later run report
+`write failed: JSONDecodeError` until it is fixed by hand, which is visible
+rather than silent. The lines are appended in a single write to make that
+unlikely.
+
+### CI time budget for the backfill
+
+`.github/workflows/ingest.yml` sets no `timeout-minutes`, so GitHub's default
+of **360 minutes** applies. Recent runs took about 3 minutes. The worst case:
+- **Per call:** at most 3 attempts × 30 s plus up to 9 s of backoff, about
+  99 s.
+- **Per gate:** the 600 s deadline is checked before each call, so a gate
+  stops within about 700 s.
+- **Both gates:** about 23 minutes, so about 27 minutes for the whole job.
+
+**No change was needed.** The expected backfill is about 594 calls at about
+0.5 s, around 5 minutes.
+
+### The labelling tool, built before there is anything to label
+
+`scripts/family_imputer/flag_labels.py`. The kinds are code
+(`FLAG_LABEL_DEFINITIONS`), and a test asserts they are exactly this file's
+four kinds in this order.
+
+**Commands:**
+
+| command | what it does |
+|---|---|
+| `flag-sheet [--limit N]` | Writes `data/family_imputer/flag-sheet.md` from the store. One block per notice, headed by the notice id: title, buyer, filed codes with English descriptions, the model's choice and band shown as withheld, the description, and blank `label:` and `note:` lines. |
+| `flag-labels <sheet> --labelled-by human` | Validates the whole sheet before writing anything. Refuses a kind outside the four, an id not on the current sheet, and a second disposition for the same notice; the first stands. A blank label with a note is recorded as `unassigned`. A block with both lines blank is skipped as unread. |
+| `flag-reveal` | Shows role, choice and band only for notices with a disposition. The rest are refused with `blinding.RevealRefused`. |
+
+**Blind, through `filter_audit.blinding`, not a copy of it:**
+- Every block is rendered from `blinding.blind()`.
+- Each block passes `blinding.assert_blinded()`. A test proves a payload
+  carrying the band is refused.
+- Flags are mixed 1:1 with coded rejects that are not in the store. The queue
+  refuses to build if it cannot match them 1:1, and records membership in
+  `flag-queue.json`, not on the sheet.
+
+**Limits:**
+- **Controls:** a control is "not in the store", which also describes a notice
+  CI never reached.
+- **Dates:** controls come from the local feed's date, while flags span
+  months.
+- **Inference:** blinding cannot stop a reader inferring from the content
+  whether a notice is IT work.
+- **Descriptions** are looked up in the current feed, then the snapshots, then
+  `notices.db`. The sheet says when none was found.
+- **Storage:** dispositions go to `data/family_imputer/flag-labels.jsonl`,
+  alongside REF-004's labels, which are not committed.

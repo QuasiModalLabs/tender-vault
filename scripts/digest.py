@@ -237,7 +237,8 @@ def generate_digest() -> str:
                for key in ("imputer_status", "relevance_imputed",
                            "relevance_keyword_fallback",
                            # ref-007: counts and a status, never a band or a mass
-                           "flags_coded", "flags_not_evaluated", "flagger_status")
+                           "flags_coded", "flags_not_evaluated", "flagger_status",
+                           "flag_store_status")
                if key in provenance]
 
     lines: list[str] = []

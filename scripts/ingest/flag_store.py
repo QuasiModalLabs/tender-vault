@@ -15,6 +15,10 @@ ONE WRITER. Only an ingest run with --record-flags writes here, and CI is the
 one that passes it, committing the file with the digest. Two machines
 appending to one committed file would meet in a rebase conflict.
 
+A FAILED WRITE NEVER FAILS THE INGEST, AND IS NEVER SILENT. The caller
+(ingest/cli.py::_record_flags) logs it and marks flag_store_status in
+provenance and the digest; see ref-007.
+
 ONCE PER NOTICE. Keyed on (notice_id, model, question_sha256). A notice open
 for six weeks is flagged once; an amended notice is not re-flagged, and one
 amended out of range is not un-flagged. The line keeps the content hash it was
@@ -35,6 +39,15 @@ from . import paths
 
 def _key(record: dict) -> tuple:
     return (record["notice_id"], record["model"], record["question_sha256"])
+
+
+def load(path: Path | None = None) -> list:
+    """Every recorded flag, in the order recorded. Missing store is empty."""
+    path = path or paths.CODED_FLAGS
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8") as fh:
+        return [json.loads(line) for line in fh if line.strip()]
 
 
 def existing_keys(path: Path | None = None) -> set:
@@ -71,7 +84,11 @@ def append(records: list, path: Path | None = None) -> dict:
         if _key(record) not in seen:
             seen.add(_key(record))
             new.append(record)
+    # One write call, so a failure mid-append is unlikely to leave half a line.
+    # If one ever is left, the next run's existing_keys cannot parse it and the
+    # ingest marks `write failed: JSONDecodeError` in provenance and the digest
+    # every day until it is fixed by hand - visible, never silent.
     with path.open("a", encoding="utf-8", newline="\n") as fh:
-        for record in new:
-            fh.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
+        fh.write("".join(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n"
+                         for record in new))
     return {"written": len(new), "already_recorded": len(records) - len(new)}
