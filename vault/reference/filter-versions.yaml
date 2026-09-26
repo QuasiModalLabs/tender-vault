@@ -26,3 +26,12 @@ versions:
   note: 'ref-006: uncoded relevance admits on imputed profile-family mass >= 0.20
     when an imputation is supplied; keyword branch unchanged otherwise. Stage manifest
     unchanged.'
+- label: fv-a698eee0
+  profile_sha256: 5898ecd124fe5e0063414948c7debcd7d6495ab7fcc92ecb243ccd709b9466b2
+  predicates_sha256: 379eaea27550a1f24c21705e9439753f78af507e7a45766fd8c51e0f750d2c04
+  stage_manifest_sha256: 11e1c82f191db85284c921e2c6920d6db4798508984f6a5155578df36c1e6084
+  profile_path: vault/profiles/my-company.md
+  declared: '2026-09-25'
+  note: 'ref-006 defect fix: imputed mass compared at 0.01 resolution (round(mass,
+    2) >= t), so a sum landing one ulp under 0.20 is admitted. Measured 1 coded archive
+    row at 0.20, 7 at 0.90. Stage manifest unchanged.'

@@ -787,6 +787,17 @@ def test_gate_in_the_ingest() -> None:
           (r.outcome, r.detail["relevance_basis"], r.detail["imputation_ignored_on_coded"]),
           ("drop", "unspsc", True))
 
+    # ref-006 defect: the float sum of 0.01-quantised probabilities lands one ulp
+    # under the threshold. cb-97-2152788's profile options were 0.08/0.09/0.03.
+    edge = 0.08 + 0.09 + 0.03
+    check("the edge is real: 0.08 + 0.09 + 0.03 < 0.20 in floats", edge < 0.20, True)
+    u = P.Notice.from_frozen_row({"reference_number": "U", "title": "t", "description": "d",
+                                  "unspsc": "", "closing_date": None})
+    r = P.stage_relevance(u, {"unspsc_families": families, "competencies": []}, None,
+                          imputation=P.Imputation("8111", edge, "jev-1.13.0", "q"))
+    check("...and a mass summing to 0.20 is admitted at t = 0.20", r.outcome, "pass")
+    check("0.19 is still rejected", P.mass_reaches(0.19, 0.20), False)
+
 
 def test_sweep_definitions() -> None:
     print("\nPhase 2 sweep: low tail present; 'neither' means both methods missed")

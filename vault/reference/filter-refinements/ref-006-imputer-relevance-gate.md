@@ -198,3 +198,40 @@ PROPOSED in the refinement lifecycle's terms, because its ACCEPTED state
 presumes a `variants.py` variant and this change is not one.
 `promoted_to_production` is set in the merge to `main`, which is when CI, and
 therefore the committed digest, starts running the gate.
+
+## Defect: the threshold comparison was off by one ulp, 2026-09-25
+
+Recorded as a defect, not a tuning choice. Added below the committed rule;
+nothing above is changed.
+
+**What was wrong.** Jev quantises each probability to 0.01, and the summed
+profile mass is a float sum of those. A sum that is exactly the threshold can
+land one ulp under it: 0.08 + 0.09 + 0.03 is `0.19999999999999998`, which
+`mass >= 0.20` rejects. There is no error; the notice is just decided the other
+way.
+
+**Measured** over the 23,314 coded archive notices in the ref-004 cache
+(question `c5725ac4..`, `jev-1.13.0`), from the cache, with no API calls:
+
+| threshold | rows on the wrong side | example |
+|---|---|---|
+| 0.20 (this gate) | 1 | `cb-97-2152788`: 0.08 + 0.09 + 0.03 |
+| 0.90 (ref-007, not live) | 7 | all `0.8999999999999999` |
+
+These are coded notices, which this gate never judges, so the measurement
+shows the defect exists at this threshold rather than counting live misses. The
+uncoded feed notices it does judge have not been checked.
+
+**Fix.** `predicates.mass_reaches(mass, t)` compares `round(mass, 2) >= t`,
+and `stage_relevance` uses it. Rounding to 0.01 discards nothing, because no
+input is finer. The same function will serve ref-007's 0.90. Tested in
+`tests/test_family_imputer.py` on the `cb-97-2152788` composition.
+
+**This changes the uncoded branch.** A notice summing to exactly 0.20 is now
+admitted. The predicates hash moves, so the filter version is now **fv-a698eee0**
+(registered in `vault/reference/filter-versions.yaml`). The stage manifest does not, so audit
+records remain comparable.
+
+**Not re-run.** The ref-004 sweep and the budget figures above were computed on
+raw sums. At 0.20 they differ by the one row in the table. They stand as
+recorded.

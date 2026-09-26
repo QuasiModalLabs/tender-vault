@@ -464,6 +464,22 @@ def stage_jurisdiction(notice: Notice, criteria: dict, as_of) -> StageResult:
 IMPUTER_THRESHOLD = 0.20
 
 
+def mass_reaches(mass: float, threshold: float) -> bool:
+    """
+    Summed profile mass compared at Jev's own resolution, 0.01.
+
+    A DEFECT, NOT A TUNING CHOICE (recorded in ref-006). Jev quantises each
+    probability to 0.01, and the mass is a float sum of those, so a sum that is
+    exactly a threshold can land one ulp under it: 0.08 + 0.09 + 0.03 is
+    0.19999999999999998 and was rejected at t = 0.20. Measured over the 23,314
+    coded archive notices in the ref-004 cache on 2026-09-25: 1 row sat on the
+    wrong side at 0.20 (cb-97-2152788) and 7 at 0.90, every one of them
+    0.8999999999999999. Silent - no error, just a notice decided the other way.
+    Rounding to 2 places loses nothing, because no input carries finer detail.
+    """
+    return round(mass, 2) >= threshold
+
+
 @dataclass(frozen=True)
 class Imputation:
     family: str             # the highest-probability profile option's prefix
@@ -519,7 +535,7 @@ def stage_relevance(notice: Notice, criteria: dict, as_of,
     elif imputation is not None:
         family_result = "no_codes_filed"
         keyword_result = "matched" if matched_keywords else "no_hit"
-        relevant = imputation.mass >= IMPUTER_THRESHOLD
+        relevant = mass_reaches(imputation.mass, IMPUTER_THRESHOLD)
         branch = "uncoded"
         relevance_basis = "imputed"
         basis = "imputed family mass"
