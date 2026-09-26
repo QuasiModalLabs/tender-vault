@@ -52,6 +52,14 @@ WITHHELD_UNTIL_DISPOSED = (
     "has_codes",
     "stratum",
     "sampling_strategy",
+    # A model's imputed commodity family is a verdict about the notice exactly
+    # as the filter's is, and anchors a reviewer the same way. Nothing joins
+    # these onto a review item today (scripts/family_imputer, ref-004); listing
+    # them here means the day something does, they are withheld by the type
+    # rather than by someone remembering to.
+    "imputed_family",
+    "imputed_family_probability",
+    "imputed_family_distribution",
 )
 
 

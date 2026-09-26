@@ -28,3 +28,8 @@ anthropic>=0.40.0,<1
 pdfplumber>=0.11,<1
 python-docx>=1.1,<2
 openpyxl>=3.1,<4
+
+# Reads TYPESAFE_API_KEY from the gitignored .env. Used only by
+# scripts/family_imputer, an evaluation tool that nothing in ingest, tender_tools
+# or the MCP server imports; the default paths need no credentials.
+python-dotenv>=1.0,<2

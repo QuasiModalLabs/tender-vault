@@ -119,7 +119,21 @@ def main():
     cols = resolve_columns(
         list(df.columns), TENDER_COLUMNS, TENDER_REQUIRED, "scripts/ingest"
     )
-    df = filter_tenders(df, criteria, cols, value_extractor=value_extractor)
+    # The uncoded relevance gate (ref-006). This is the ONE product module that
+    # imports from scripts/family_imputer, and only its `gate`; the boundary is
+    # enforced by tests/test_family_imputer.py. The imputer never raises for an
+    # operational failure (missing key, API error, drifted question): those
+    # notices fall back to keywords and the funnel says so. An import failure is
+    # the same case one level up, and is reported the same way.
+    imputer = None
+    try:
+        from family_imputer.gate import make_imputer
+        imputer = make_imputer(criteria["unspsc_families"])
+    except Exception as exc:  # noqa: BLE001 - never fail the ingest on the imputer
+        print(f"  Imputer unavailable ({type(exc).__name__}: {exc}); uncoded "
+              f"notices fall back to keywords")
+    df = filter_tenders(df, criteria, cols, value_extractor=value_extractor,
+                        imputer=imputer)
 
     if len(df) == 0:
         print("\nNo tenders passed the filter. Loosen your criteria.", file=sys.stderr)

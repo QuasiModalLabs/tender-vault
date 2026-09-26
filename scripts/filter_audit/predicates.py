@@ -236,15 +236,28 @@ def notices_from_frame(df, cols: dict, closing_col: str = "_closing"):
 
 
 def stage_mask(df, cols: dict, criteria: dict, stage_fn, as_of=None,
-               closing_col: str = "_closing"):
+               closing_col: str = "_closing", imputations: Optional[dict] = None):
     """
     A keep-mask for one stage, aligned to the frame's index.
 
     True means the row survives. Returned as a plain list so the caller applies
     it exactly as it applied its old inline expression.
+
+    `imputations` (notice_id -> Imputation) is passed through to the relevance
+    stage only. A notice absent from it is decided as if no imputer existed.
     """
-    return [not stage_fn(n, criteria, as_of).drops
+    if imputations is None:
+        return [not stage_fn(n, criteria, as_of).drops
+                for n in notices_from_frame(df, cols, closing_col)]
+    return [not stage_fn(n, criteria, as_of,
+                         imputation=imputations.get(n.notice_id)).drops
             for n in notices_from_frame(df, cols, closing_col)]
+
+
+def _evaluate(stage, notice, criteria, as_of, imputation):
+    if stage.name == "relevance":
+        return stage.evaluate(notice, criteria, as_of, imputation=imputation)
+    return stage.evaluate(notice, criteria, as_of)
 
 
 def closing_date_shapes(values) -> dict:
@@ -430,9 +443,44 @@ def stage_jurisdiction(notice: Notice, criteria: dict, as_of) -> StageResult:
     )
 
 
-def stage_relevance(notice: Notice, criteria: dict, as_of) -> StageResult:
+# ---------------------------------------------------------------------------
+# The imputed relevance gate (ref-006)
+# ---------------------------------------------------------------------------
+#
+# Uncoded notices are admitted when an imputer's summed probability across the
+# profile's families reaches IMPUTER_THRESHOLD. The imputation arrives as DATA:
+# this module imports nothing from scripts/family_imputer and makes no call,
+# so replay stays deterministic and a missing imputation is simply the keyword
+# branch, recorded as such.
+#
+# t = 0.20 was chosen on corpus size, not recall - see ref-006. Summed mass,
+# not top choice and not top-2: top-2 admits a profile option sitting second at
+# 0.02 and rejects two profile options at 0.20 each behind a 0.25 non-profile
+# option. Mass handles both.
+#
+# THE MASS NEVER LEAVES THE AUDIT SIDE. It is recorded in StageResult.evidence
+# for the filter audit; ingest writes only the basis, family and model to the
+# corpus. Anything Claude reads must never see a probability - see ref-006.
+IMPUTER_THRESHOLD = 0.20
+
+
+@dataclass(frozen=True)
+class Imputation:
+    family: str             # the highest-probability profile option's prefix
+    mass: float             # summed probability across the profile options
+    model: str              # the versioned model that answered
+    question_sha256: str
+
+
+def stage_relevance(notice: Notice, criteria: dict, as_of,
+                    imputation: Optional[Imputation] = None) -> StageResult:
     """
-    Publisher first, keywords only where the publisher classified nothing.
+    Publisher first; for uncoded notices, the imputer where one answered and
+    keywords where none did.
+
+    `relevance_basis` in the detail says which decided: `unspsc`, `imputed` or
+    `keyword`. An imputation handed in for a CODED notice is ignored and
+    flagged - codes are the publisher's answer and nothing overrides them.
 
     NOT COLLAPSED TO ONE BOOLEAN, and that is the single most important thing in
     this module. "Coded into a family we don't buy" and "uncoded and no keyword
@@ -460,24 +508,43 @@ def stage_relevance(notice: Notice, criteria: dict, as_of) -> StageResult:
         return StageResult("relevance", 5, "pass", "no families or competencies configured",
                            detail={"gate_configured": False})
 
+    imputed_evidence = {}
     if has_codes:
         family_result = "matched" if matched_families else "wrong_family"
         keyword_result = "matched" if matched_keywords else "no_hit"
         relevant = bool(matched_families)
         branch = "coded"
+        relevance_basis = "unspsc"
+        basis = "unspsc"
+    elif imputation is not None:
+        family_result = "no_codes_filed"
+        keyword_result = "matched" if matched_keywords else "no_hit"
+        relevant = imputation.mass >= IMPUTER_THRESHOLD
+        branch = "uncoded"
+        relevance_basis = "imputed"
+        basis = "imputed family mass"
+        imputed_evidence = {"imputed_family": imputation.family,
+                            "imputed_mass": imputation.mass,
+                            "imputer_model": imputation.model,
+                            "imputer_threshold": IMPUTER_THRESHOLD}
     else:
         family_result = "no_codes_filed"
         keyword_result = "matched" if matched_keywords else "no_hit"
         relevant = bool(matched_keywords)
         branch = "uncoded"
+        relevance_basis = "keyword"
+        basis = "title+description"
 
     return StageResult(
         "relevance", 5, "pass" if relevant else "drop",
-        "unspsc" if has_codes else "title+description",
+        basis,
         evidence={"codes": sorted(codes), "matched_families": matched_families,
                   "matched_keywords": matched_keywords,
-                  "source_system": ingest._source_system(notice.notice_id)},
+                  "source_system": ingest._source_system(notice.notice_id),
+                  **imputed_evidence},
         detail={
+            "relevance_basis": relevance_basis,
+            "imputation_ignored_on_coded": has_codes and imputation is not None,
             "branch": branch,
             "has_codes": has_codes,
             "expected_families": list(families),
@@ -485,7 +552,8 @@ def stage_relevance(notice: Notice, criteria: dict, as_of) -> StageResult:
             "keyword_match": bool(matched_keywords),
             "keyword_result": keyword_result,
             # False on every coded notice: the audit looked, production did not.
-            "keyword_consulted_in_production": not has_codes,
+            # False on coded notices, and on uncoded ones the imputer decided.
+            "keyword_consulted_in_production": relevance_basis == "keyword",
             "gate_configured": True,
         },
     )
@@ -560,7 +628,8 @@ FILTER_TENDERS_STAGES: tuple = tuple(
 # The two decisions
 # ---------------------------------------------------------------------------
 
-def production_decision(notice: Notice, criteria: dict, as_of) -> ProductionDecision:
+def production_decision(notice: Notice, criteria: dict, as_of,
+                        imputation: Optional[Imputation] = None) -> ProductionDecision:
     """
     Short-circuit, in stage order, stopping at the first drop.
 
@@ -572,7 +641,7 @@ def production_decision(notice: Notice, criteria: dict, as_of) -> ProductionDeci
     for stage in STAGES:
         if not stage.active:
             continue
-        result = stage.evaluate(notice, criteria, as_of)
+        result = _evaluate(stage, notice, criteria, as_of, imputation)
         evaluated.append(result)
         if result.drops:
             return ProductionDecision(notice.notice_id, False, stage.name,
@@ -580,7 +649,8 @@ def production_decision(notice: Notice, criteria: dict, as_of) -> ProductionDeci
     return ProductionDecision(notice.notice_id, True, None, tuple(evaluated))
 
 
-def audit_decision(notice: Notice, criteria: dict, as_of) -> AuditDecision:
+def audit_decision(notice: Notice, criteria: dict, as_of,
+                   imputation: Optional[Imputation] = None) -> AuditDecision:
     """
     Every stage, against the original notice, never short-circuiting.
 
@@ -589,7 +659,8 @@ def audit_decision(notice: Notice, criteria: dict, as_of) -> AuditDecision:
     that 2,174 construction drops would ALSO have failed relevance, or that some
     would have passed it.
     """
-    results = tuple(stage.evaluate(notice, criteria, as_of) for stage in STAGES)
+    results = tuple(_evaluate(stage, notice, criteria, as_of, imputation)
+                    for stage in STAGES)
     admitted = not any(
         r.drops for r, stage in zip(results, STAGES) if stage.active
     )
