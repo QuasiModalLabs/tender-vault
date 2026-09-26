@@ -6,7 +6,7 @@ Canadian government procurement is public, enormous, and almost impossible to re
 
 This project started as a way to read the tender feed faster. It ended up somewhere more interesting: an attempt to move backwards through the procurement lifecycle until you arrive *before* the RFP — at the point where a department is still deciding what it wants.
 
-Claude does the reasoning. An [Obsidian](https://obsidian.md) vault of plain markdown files is the memory.
+Claude does the reasoning. An [Obsidian](https://obsidian.md) vault of plain markdown files is the memory. And [Jev](https://typesafe.ai) reads the notices the government forgot to classify.
 
 <details>
 <summary><strong>Briefing Outputs</strong></summary>
@@ -301,6 +301,52 @@ Review is blinded, and structurally rather than by agreement: the reviewer is ha
 The worked example is the one the package ships as a command: `explain SSC-22-00019111:T` is Shared Services Canada's *Invitation to Qualify for the Cyber Security Procurement Vehicle*, and the filter rejects it. It files no UNSPSC codes, so it falls to keywords, and the profile spelled the competency `cybersecurity` while the notice says `cyber security`. That is a false negative on the largest federal IT buyer, caused by a space. It's written up as [`ref-002`](vault/reference/filter-refinements/ref-002-cyber-security-spacing.md), scored against the golden set — one false negative recovered, no regressions — and it is still `TESTING`, because scoring well is not the same as being promoted and promotion is a human commit.
 
 What it still can't do is tell you what was in the feed on a past day. CanadaBuys publishes no history and `.cache/tenders.csv` was overwritten on every download until 2026-08-28, when the ingest started keeping the outgoing file. From that date forward the feed as downloaded is in `.cache/snapshots/`; before it, no set of notices open on a given day can be reconstructed. The replay prints that boundary date rather than implying it can see past it.
+
+## Then I pointed a model at the branch keywords couldn't reach
+
+The audit named the problem and couldn't fix it. 6,121 of the rejects carry no commodity codes at all, so they fall to keyword matching, and three source systems — MX, PW and SSC — file no codes ever. One of them is the largest federal IT buyer in the country. `ref-002` is the whole failure in miniature: a notice rejected because the profile spelled a competency `cybersecurity` and the notice said `cyber security`. Refining the word list buys you the next spelling, not the branch.
+
+So the uncoded branch now asks a model the question the publisher didn't answer: **which commodity family is this?** Not *is this a fit* — the imputer never sees the profile, and a filed code and an imputed one are then judged by exactly the same rule. The profile stays the only place fit is decided, which is the same line the pre-mortem draws when it quotes the profile beside a probe instead of comparing them in code.
+
+The model is [TypeSafe's Jev](https://typesafe.ai), which returns typed probabilities instead of prose. It gets a title and a description in a frozen dataclass carrying nothing else, and returns one choice across 35 commodity options. The question's text and criteria are hashed and recorded as a literal; if the live hash and the literal disagree the run refuses, the same guard the backtest puts on the classifier's vocabulary. Editing the profile's families trips it too, which is correct: that is a different question.
+
+**The decision rule was committed before the first call.** Relative to the thing it replaces, not to a number I'd have invented: proceed only if recall beat the keyword branch by ten points, precision fell by no more than five, and recall cleared 0.60 absolutely — that last one because "ten points better" can be cleared by a comparator that is itself terrible. The commit predates the first verdict by eight minutes, which is why the branch was merged rather than rebased later: rewriting that history would have moved the timestamp the whole claim rests on.
+
+Measured over all 23,314 coded notices, blind to their codes, it returned PROCEED. Recall 0.796 against the keyword branch's 0.565, precision 0.703 against 0.469, zero errors, $3.78. Both numbers carry the same caveat, printed under every table: every coded notice is WS or cb, so this is evidence about the model and not a measurement on the PW, SSC and MX notices the imputer actually serves. And the comparator is handicapped — `matched_competencies` never runs on coded notices in production, so part of that gap is the evaluation population rather than a fact about procurement prose.
+
+### The measurement's own ground truth is ambiguous
+
+The result that mattered came from reading thirty disagreements by hand. **Fifteen of them are labelled `unsure`,** and the fifteen that got a definite call split six to five between the publisher being wrong and the model being wrong.
+
+Not close calls in the usual sense. In most of them two codes are each true about the same contract — a data subscription that is also analyst access, a study delivering both harmonised databases and manuscripts, a Zoom licence bought alongside human translators. In others the question isn't who is right but whether the profile wants that work at all.
+
+That reframes every number above. Recall was measured against publisher codes as though they were ground truth, and about half the time there is no single right answer to agree with. The ceiling — no threshold gets past about 0.925 — is the point where the model stops agreeing with a labeller that is itself ambiguous, not a limit on the model. **Which means recall against publisher codes can't be what the next version optimises**, and no refinement of the question fixes it.
+
+Two label kinds had to be invented before the reading was recordable, and inventing them mid-read is how you learn to define the vocabulary first. `profile_gap`: publisher right, model right, scored as a disagreement only because the code sits in a family the profile doesn't list. `no_description`: four of the thirty have an empty description or nothing but Ariba boilerplate, so they were classified from a title and bound every method equally.
+
+### What went live, and what deliberately didn't
+
+On the live uncoded feed the gate admits 16 of 48 notices where keywords admitted 5 — PeopleSoft managed services, EUC managed services and helpdesk, storage support, two GCNS qualification vehicles, internet access services. Eleven of those 48 are SSC, which is why the archive-derived estimate predicted five to eight and was wrong by half: the uncoded feed is not the coded archive, and the difference is the buyer that matters most.
+
+The threshold is summed probability across the profile's families rather than the model's top choice, because SSC's Next Generation 9-1-1 ITQ — a hosted, Protected-B, ITSG-33 solution delivery, in exactly the shape the profile says it wants — sits second at 0.29 behind network equipment at 0.68. Top choice rejects it. **It was chosen against a corpus budget, not against recall:** the table I picked from is how many notices land in the briefing at each threshold, because the briefing's value is that a person reads all of it. 72 notices becomes 82.
+
+False positives are acceptable here by design — widening is the gate's job and narrowing is Claude's — but the probability never reaches anything Claude reads. It lives in `relevance_basis` for the audit trail, and an AST scan enforces that rather than a promise, because a mass of 0.95 sitting next to one of 0.23 is a fit score wearing a different hat.
+
+**Running it as a second opinion on coded notices is the thing I didn't do.** It would have cost about $3.50 a month, which is nothing. But on coded notices the model disagrees with the publisher constantly, and the labelling above establishes that when it does, about half the time nobody is wrong. Widening the funnel on that is widening it on noise.
+
+So the coded branch appends nothing and records instead. When the filed codes reject **and** the summed profile mass is 0.90 or higher, the notice is flagged, never admitted, and a test asserts the corpus is bit-identical with the flagger on. That's 297 of 23,314 on the archive, about nine on the backfill and one every four days after. The mass is stored as a band rather than a number, because a committed file full of confidence scores is a fit score that escaped.
+
+There is **no promotion number yet**, and that's the point. Reading twenty flags showed four different things in one stream: real miscodes, work correctly coded and outside the profile, model errors, and TBIPS qualification vehicles. A single "was this worth reading" rate would have merged them, and fifteen positives driven entirely by vehicles would have promoted a rule that admits staff augmentation as a side effect. The record says `NOT EVALUATED` until twenty flags exist, and the threshold for promotion gets pre-registered in its own commit after I've read the first ten — because picking it now, against a pile whose composition I don't know, is the same error as the scoring weights I deleted at the start of this project.
+
+### Three things I was wrong about, recorded because they were cheap to check
+
+**Supplier lists don't drive the cost.** Some notices are mostly a 170-name list of invited suppliers, and I was sure stripping them would cut the bill and sharpen the answers. Total saving: 0.4%. Only 53 of the top 1% token notices carry a list at all, because a fixed 3,471-token question dominates every call. The variant is parked with its revival condition rather than deleted.
+
+**The input ceiling barely moves anything.** Excluding the 1,930 notices with descriptions under 200 characters shifts recall from 0.796 to 0.810.
+
+**An archive-derived rate transferred badly to the live feed** — by about 2×, in the direction that mattered. Every volume and cost figure in these records is now stamped as order-of-magnitude, and the observed feed numbers supersede the extrapolated ones for anything that sets a threshold.
+
+What none of this establishes is whether the extra ten notices a day are worth reading. That isn't answerable by another analysis; it's answerable by a few weeks of briefings, which is the same thing the vehicle-gating series had to do before it said anything.
 
 ## Who's already in the room
 
@@ -611,7 +657,7 @@ Its test suite still runs on Monday, and still catches the thing most likely to 
 ## Files worth reading, in order
 
 <details>
-<summary><strong>All fifteen, with what each one is for</strong></summary>
+<summary><strong>All sixteen, with what each one is for</strong></summary>
 
 1. [`vault/CLAUDE.md`](vault/CLAUDE.md) — the agent's instructions. The most important design document in the repo; everything else is plumbing.
 2. [`vault/profiles/my-company.md`](vault/profiles/my-company.md) — how user context is stored, and the key-by-key filter spec in its own comments. [`docs/PROFILE.md`](docs/PROFILE.md) is the companion on tuning it.
@@ -626,8 +672,9 @@ Its test suite still runs on Monday, and still catches the thing most likely to 
 11. [`scripts/oag_ingest.py`](scripts/oag_ingest.py) — the audit pull, relevance scoring, and department attribution.
 12. [`scripts/lobbying_ingest.py`](scripts/lobbying_ingest.py) — the lobbying registry, and the classification problem underneath it. The published institution field mixes five populations that look alike as strings and are nothing alike as evidence, and the biggest single value in the file is "House of Commons" — MPs are designated office holders and have no procurement authority whatever. The module docstring is mostly about what the data *can't* be used to say.
 13. [`scripts/filter_audit/`](scripts/filter_audit) — replaying the filter over the archive and reviewing what it rejected. Start at [`predicates.py`](scripts/filter_audit/predicates.py): the seven admission gates, one per function, each evaluated independently so a notice rejected at gate 3 still gets a real verdict from gate 5. That independence is what makes "what is this gate worth" answerable at all. [`blinding.py`](scripts/filter_audit/blinding.py) is the shortest argument in the package — the reviewer gets a type that does not carry the withheld fields, rather than a rule about not printing them.
-14. [`scripts/tender_tools/premortem.py`](scripts/tender_tools/premortem.py) — the pre-mortem, and the module docstring is most of why it is shaped this way: two lenses that are never merged, probes that read the notice while the profile is only quoted, and the argument for why a tally of fired probes is a score with the arithmetic hidden. The paragraph on why there is no lobbying section is the one to read.
-15. [`.github/workflows/ingest.yml`](.github/workflows/ingest.yml) — how data stays fresh without me remembering, and why one job carries two crons.
+14. [`scripts/family_imputer/`](scripts/family_imputer) — the commodity-family imputer, and the pre-registration around it. [`question.py`](scripts/family_imputer/question.py) is the short one: a frozen hash of the question's own text and criteria, which refuses to run when the literal and the live value disagree. The records are [`ref-004`](vault/reference/filter-refinements), ref-006 and ref-007 — a decision rule committed eight minutes before the first verdict, a threshold chosen against a corpus budget, and a flag rule with no promotion number in it yet.
+15. [`scripts/tender_tools/premortem.py`](scripts/tender_tools/premortem.py) — the pre-mortem, and the module docstring is most of why it is shaped this way: two lenses that are never merged, probes that read the notice while the profile is only quoted, and the argument for why a tally of fired probes is a score with the arithmetic hidden. The paragraph on why there is no lobbying section is the one to read.
+16. [`.github/workflows/ingest.yml`](.github/workflows/ingest.yml) — how data stays fresh without me remembering, and why one job carries two crons.
 
 </details>
 
