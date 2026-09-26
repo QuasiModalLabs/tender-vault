@@ -764,6 +764,42 @@ def cmd_labels(args) -> int:
     return 0
 
 
+def cmd_flag_sheet(args) -> int:
+    """ref-007: a blind reading sheet of pending flags, mixed 1:1 with controls."""
+    from collections import Counter
+    from . import flag_labels as F
+    queue = F.write_sheet(limit=args.limit, seed=args.seed, replace=args.replace)
+    roles = Counter(it["role"] for it in queue["items"])
+    print(f"wrote {len(queue['items'])} notices to {F.SHEET_MD} "
+          f"({roles['flag']} flags + {roles['control']} controls, seed {queue['seed']}); "
+          f"membership is in {F.QUEUE_JSON.name}, not on the sheet")
+    if queue["missing_text"]:
+        print(f"  {len(queue['missing_text'])} with no description found locally: "
+              f"{', '.join(queue['missing_text'])}")
+    return 0
+
+
+def cmd_flag_labels(args) -> int:
+    from pathlib import Path
+    from . import flag_labels as F
+    out = F.ingest_sheet(Path(args.path), args.labelled_by)
+    print(f"recorded {out['written']} dispositions ({out['unassigned']} unassigned), "
+          f"{out['skipped_unread']} blocks left blank -> {F.ingest_paths.CODED_FLAG_LABELS}")
+    print("  commit it: these dispositions are standing evidence for ref-007's "
+          "promotion decision, kept beside the flag store")
+    return 0
+
+
+def cmd_flag_reveal(args) -> int:
+    from . import flag_labels as F
+    out = F.write_revealed(args.labelled_by)
+    print(f"revealed {out['revealed']}, withheld {out['withheld']} (no disposition) "
+          f"-> {F.REVEALED_MD}")
+    for key, n in sorted(out["table"].items()):
+        print(f"  {key:28} {n}")
+    return 0
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="family_imputer",
                                  description=__doc__.split("\n\n")[0])
@@ -802,6 +838,19 @@ def main(argv=None) -> None:
     sub.add_parser("profile-gap").set_defaults(fn=cmd_profile_gap)
     sub.add_parser("budget").set_defaults(fn=cmd_budget)
     sub.add_parser("observe-feed").set_defaults(fn=cmd_observe_feed)
+    p = sub.add_parser("flag-sheet", help="ref-007: blind sheet of pending flags + controls")
+    p.add_argument("--limit", type=int, default=None, help="oldest N pending flags")
+    p.add_argument("--seed", type=int, default=20260925)
+    p.add_argument("--replace", action="store_true",
+                   help="discard a current sheet that still has unlabelled notices")
+    p.set_defaults(fn=cmd_flag_sheet)
+    p = sub.add_parser("flag-labels", help="ref-007: record a labelled flag sheet")
+    p.add_argument("path")
+    p.add_argument("--labelled-by", required=True, choices=E.LABELLERS)
+    p.set_defaults(fn=cmd_flag_labels)
+    p = sub.add_parser("flag-reveal", help="ref-007: choice and band, for labelled notices only")
+    p.add_argument("--labelled-by", default="human", choices=E.LABELLERS)
+    p.set_defaults(fn=cmd_flag_reveal)
     args = ap.parse_args(argv)
     try:
         sys.exit(args.fn(args))

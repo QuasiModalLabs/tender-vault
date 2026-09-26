@@ -13,8 +13,13 @@ missing key, a drifted question, an auth error, a timeout. Each of those
 leaves the notice without an imputation, and predicates.stage_relevance then
 decides it by keywords, exactly as before the gate existed.
 
-Coded notices never reach this module. filter_tenders sends only uncoded rows,
-and tests/test_family_imputer.py asserts a coded notice produces no call.
+The ingest builds TWO of these (ref-007). The `imputer` gets only uncoded
+notices, as above, and runs first. The `flagger` gets only coded notices past
+the same four gates WHOSE CODES REJECT, and runs after; its answers become
+flags (predicates.coded_flag) and never admissions. A coded notice its codes
+admit reaches neither, and tests/test_family_imputer.py asserts it produces no
+call. Separate instances mean separate time budgets, so the flag backfill can
+never spend the budget the uncoded gate needs.
 
 THE QUESTION is the committed frozen_question.json, checked against
 QUESTION_SHA256 on load, not rebuilt from the PSPC reference file (CI does not
@@ -156,7 +161,8 @@ def make_imputer(profile_families, *, key=None, client=None,
                 top = max(profile_probs, key=profile_probs.get)
                 run.imputations[nid] = Imputation(
                     family=prefix_of[top], mass=sum(profile_probs.values()),
-                    model=MODEL, question_sha256=QUESTION_SHA256)
+                    model=MODEL, question_sha256=QUESTION_SHA256,
+                    content_sha256=prepared.content_sha256)
         finally:
             conn.commit()
             conn.close()

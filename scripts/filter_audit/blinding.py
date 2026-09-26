@@ -60,6 +60,12 @@ WITHHELD_UNTIL_DISPOSED = (
     "imputed_family",
     "imputed_family_probability",
     "imputed_family_distribution",
+    # ref-007's flags. Being flagged is itself Jev's verdict, so the flag, its
+    # choice and its band are withheld too; ref-007 also mixes flags with
+    # unflagged coded rejects so a queue's membership does not give it away.
+    "coded_flag",
+    "jev_choice",
+    "mass_band",
 )
 
 
