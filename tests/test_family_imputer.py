@@ -1010,6 +1010,15 @@ def test_flag_labelling() -> None:
           re.findall(r"^\d\. \*\*`([a-z_]+)`\*\*", vocab, re.M), list(F.FLAG_LABEL_KINDS))
     check("unassigned is not a kind", F.UNASSIGNED in F.FLAG_LABEL_KINDS, False)
 
+    import subprocess
+    from ingest import paths as ingest_paths
+    check("dispositions live beside the committed flag store",
+          ingest_paths.CODED_FLAG_LABELS.parent, ingest_paths.CODED_FLAGS.parent)
+    ignored = [subprocess.run(["git", "check-ignore", "-q", str(p)],
+                              cwd=Path(__file__).parent.parent).returncode
+               for p in (ingest_paths.CODED_FLAG_LABELS, ingest_paths.CODED_FLAGS)]
+    check("...and git ignores neither file (check-ignore exits 1: no match)", ignored, [1, 1])
+
     base = {"contractingEntityName-nomEntitContractante-eng": "Shared Services Canada (SSC)",
             "endUserEntitiesName-nomEntitesUtilisateurFinal-eng": "",
             "noticeType-avisType-eng": "Request for Proposal",
@@ -1117,6 +1126,10 @@ def test_flag_labelling() -> None:
                              labels_path=kw["labels_path"])
         check("three dispositions (one unassigned with its reason); the blank block skipped",
               out, {"written": 3, "skipped_unread": 1, "unassigned": 1})
+        recorded = F.load_labels(kw["labels_path"])
+        role_of = {it["notice_id"]: it["role"] for it in queue["items"]}
+        check("each committed disposition carries its role, so it reads without the queue",
+              [r["role"] for r in recorded], [role_of[r["notice_id"]] for r in recorded])
         raises("a second disposition by the same labeller is refused: the first stands",
                F.FlagSheetError, lambda: F.ingest_sheet(good, "human",
                                                         queue_path=kw["queue_path"],

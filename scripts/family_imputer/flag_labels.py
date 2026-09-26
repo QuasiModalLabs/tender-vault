@@ -29,9 +29,17 @@ not flagging it looks like - but it is also what a notice CI never reached
 machine's disk, so they are from the day it was fetched, while flags accumulate
 across months.
 
-WRITES: the sheet, the queue and the revealed sheet under data/family_imputer/,
-and dispositions to FLAG_LABELS_JSONL - append-only, first disposition
-immutable. Never the flag store, the corpus, the golden set or the profile.
+WRITES: the sheet, the queue and the revealed sheet under data/family_imputer/
+(working files, not committed), and dispositions to data/coded_flag_labels.jsonl
+(ingest.paths.CODED_FLAG_LABELS) - append-only, first disposition immutable.
+Never the flag store, the corpus, the golden set or the profile.
+
+THE DISPOSITIONS ARE COMMITTED, BESIDE THE FLAG STORE, unlike REF-004's labels.
+Those were a one-off analysis; these are the standing evidence a promotion
+decision rests on, and a durable store interpreted by a disposable file is the
+wrong way round. So each record also carries its ROLE (flag or control), taken
+from the queue when the disposition is written: the labels file stands alone
+and does not need the uncommitted flag-queue.json to be read.
 """
 from __future__ import annotations
 
@@ -48,6 +56,7 @@ import ingest
 from filter_audit import blinding
 from filter_audit import predicates as P
 from ingest import flag_store
+from ingest import paths as ingest_paths
 
 from . import cache
 from .evaluate import LABELLERS, NOTICES_DB, PROJECT_ROOT
@@ -78,7 +87,6 @@ SEED = 20260925
 SHEET_MD = cache.DATA_DIR / "flag-sheet.md"
 QUEUE_JSON = cache.DATA_DIR / "flag-queue.json"
 REVEALED_MD = cache.DATA_DIR / "flag-revealed.md"
-FLAG_LABELS_JSONL = cache.DATA_DIR / "flag-labels.jsonl"
 WITHHELD_TEXT = "withheld until this notice is labelled"
 
 
@@ -161,7 +169,8 @@ def control_pool(flagged_ids, criteria=None, feed_path=None) -> list:
 # Dispositions
 # ---------------------------------------------------------------------------
 
-def load_labels(path: Path = FLAG_LABELS_JSONL) -> list:
+def load_labels(path: Path | None = None) -> list:
+    path = path or ingest_paths.CODED_FLAG_LABELS
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
@@ -265,7 +274,7 @@ def render_sheet(queue: dict, rows: dict, ref: dict | None) -> str:
 def write_sheet(*, limit: int | None = None, seed: int = SEED, replace: bool = False,
                 store_path: Path | None = None, feed_path=None, feed_paths=None,
                 sheet_path: Path = SHEET_MD, queue_path: Path = QUEUE_JSON,
-                labels_path: Path = FLAG_LABELS_JSONL, ref=None) -> dict:
+                labels_path: Path | None = None, ref=None) -> dict:
     """Build the queue, render the sheet, and record the queue beside it.
     Refuses to replace a queue that still has undisposed items unless asked."""
     labels = load_labels(labels_path)
@@ -357,7 +366,7 @@ def parse_sheet(text: str, queue_ids: list) -> tuple[list, list, list]:
 
 
 def ingest_sheet(path: Path, labelled_by: str, *, queue_path: Path = QUEUE_JSON,
-                 labels_path: Path = FLAG_LABELS_JSONL) -> dict:
+                 labels_path: Path | None = None) -> dict:
     """
     Validate everything, then append. A notice already disposed by this
     labeller is refused: the first disposition is the one that counts, as in
@@ -381,9 +390,16 @@ def ingest_sheet(path: Path, labelled_by: str, *, queue_path: Path = QUEUE_JSON,
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     source = {"sheet_sha256": hashlib.sha256(raw).hexdigest(),
               "queue_sheet_sha256": queue.get("sheet_sha256")}
+    # Role is written WITH the disposition, never before it: the committed file
+    # must be readable without the uncommitted queue, and at this point the
+    # reader has already decided.
+    role = {it["notice_id"]: it["role"] for it in queue["items"]}
+    source["queue_seed"] = queue.get("seed")
     records = [{"notice_id": p["notice_id"], "kind": p["kind"], "note": p["note"],
-                "labelled_by": labelled_by, "labelled_at": now, "source": source}
+                "role": role[p["notice_id"]], "labelled_by": labelled_by,
+                "labelled_at": now, "source": source}
                for p in parsed]
+    labels_path = labels_path or ingest_paths.CODED_FLAG_LABELS
     labels_path.parent.mkdir(parents=True, exist_ok=True)
     with labels_path.open("a", encoding="utf-8", newline="\n") as fh:
         fh.write("".join(json.dumps(r, sort_keys=True) + "\n" for r in records))
@@ -409,7 +425,7 @@ def reveal(item: dict, disposition: dict | None, flags_by_id: dict) -> dict:
 
 
 def write_revealed(labelled_by: str = "human", *, queue_path: Path = QUEUE_JSON,
-                   labels_path: Path = FLAG_LABELS_JSONL, store_path: Path | None = None,
+                   labels_path: Path | None = None, store_path: Path | None = None,
                    out_path: Path = REVEALED_MD) -> dict:
     queue = json.loads(queue_path.read_text(encoding="utf-8"))
     first = {}

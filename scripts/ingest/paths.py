@@ -26,6 +26,10 @@ DEFAULT_DB = PROJECT_ROOT / "chroma_db"
 # ref-007's committed flag store. Written only under --record-flags; see
 # ingest/flag_store.py.
 CODED_FLAGS = PROJECT_ROOT / "data" / "coded_flags.jsonl"
+# ...and the dispositions that interpret it, beside it and committed for the
+# same reason: standing evidence for a promotion decision, not one-off
+# analysis. Written by family_imputer/flag_labels.py, never by the ingest.
+CODED_FLAG_LABELS = PROJECT_ROOT / "data" / "coded_flag_labels.jsonl"
 
 # ---------------------------------------------------------------------------
 # The corpus is a CONTAINER holding one or more build directories and a

@@ -784,7 +784,9 @@ def cmd_flag_labels(args) -> int:
     from . import flag_labels as F
     out = F.ingest_sheet(Path(args.path), args.labelled_by)
     print(f"recorded {out['written']} dispositions ({out['unassigned']} unassigned), "
-          f"{out['skipped_unread']} blocks left blank -> {F.FLAG_LABELS_JSONL}")
+          f"{out['skipped_unread']} blocks left blank -> {F.ingest_paths.CODED_FLAG_LABELS}")
+    print("  commit it: these dispositions are standing evidence for ref-007's "
+          "promotion decision, kept beside the flag store")
     return 0
 
 

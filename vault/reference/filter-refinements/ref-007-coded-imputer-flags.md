@@ -411,3 +411,29 @@ four kinds in this order.
   `notices.db`. The sheet says when none was found.
 - **Storage:** dispositions go to `data/family_imputer/flag-labels.jsonl`,
   alongside REF-004's labels, which are not committed.
+
+## Dispositions are committed, beside the flag store, 2026-09-25
+
+Added below everything above. This supersedes the last bullet of "The
+labelling tool" (dispositions going to `data/family_imputer/`).
+
+Dispositions now go to **`data/coded_flag_labels.jsonl`**, next to
+`data/coded_flags.jsonl`, and are **committed**. The path is owned by
+`ingest/paths.py` (`CODED_FLAG_LABELS`). A test asserts that the two files sit
+side by side and that git ignores neither. The file was committed empty, so a
+labelling session shows up in `git status` as a change to commit.
+
+**Why these are committed when REF-004's labels are not.**
+- REF-004's disagreement labels were a **one-off analysis**. They answered a
+  question once, and the answer is written into REF-004 itself.
+- These dispositions are **standing evidence**. The promotion decision rests on
+  them, they accumulate over months, and they are read again every time the
+  rule is reconsidered.
+- The flag store was already durable. A durable store interpreted by a
+  disposable file is the wrong way round.
+
+**Each disposition also carries its role** (flag or control). The role is
+written with the disposition, never before it, so the committed file can be
+read without the uncommitted `flag-queue.json`. The sheet, the queue and the
+revealed sheet are still uncommitted working files under
+`data/family_imputer/`.
