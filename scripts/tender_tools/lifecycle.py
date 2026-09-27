@@ -4,6 +4,13 @@ The tender lifecycle: listing the corpus, and moving a notice through the vault.
 promote → watching/, park → parked/, archive → archived/. These are the only
 commands that write markdown into the vault, which is why paths.py is read by
 attribute here and why tests/conftest.py exists.
+
+THE FOLDER IS THE LIFECYCLE STATE, AND NOTHING ELSE RECORDS IT. promote once
+wrote `status: watching` into the frontmatter, and park and archive moved the
+file without changing it, so an archived tender claimed to be watched (issue
+#3). The fix is that the field is never written, not that the movers rewrite
+it: frontmatter is never edited after promote (vault/CLAUDE.md). The test
+test_promote asserts the field is absent.
 """
 from __future__ import annotations
 
@@ -95,7 +102,6 @@ def cmd_list_watching(args) -> dict:
             "tender_id": fields.get("tender_id", ""),
             "title": fields.get("title", ""),
             "closing_date": fields.get("closing_date", ""),
-            "status": fields.get("status", ""),
             # Both department fields, so "which departments are we watching" and
             # "what did the registry fail to resolve" are answerable from the
             # tool rather than by grepping the vault. The second is the evidence
@@ -195,7 +201,6 @@ matched_competencies: [{', '.join(matched_list)}]
 unspsc_families: [{', '.join(family_list)}]
 opportunity_kind: {kind}
 kind_basis: {meta.get('kind_basis', 'unclassified')}
-status: watching
 promoted_at: {datetime.now().strftime('%Y-%m-%d')}
 ---
 

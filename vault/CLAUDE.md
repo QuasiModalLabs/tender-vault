@@ -59,6 +59,8 @@ A tender's `department` field links the **node**, never the intel file. Don't ha
 - `parked/` — not now, but maybe later. Each has a `## Parked` section with a reason and a "Revisit when:" trigger. **Always check `parked/` when I mention an event that might match a trigger** ("we just got the clearance," "the partnership came through").
 - `archived/` — done, decision final. Useful for pattern recognition, not actionable. Don't surface unless I ask about historical patterns.
 
+**The folder is the only record of which state a tender is in.** There is no `status` field in the frontmatter, and nothing should add one. Promote used to write `status: watching`. Park and archive can't update it without editing frontmatter, which they never do, so an archived tender went on claiming to be watched. To know a tender's state, look at which folder it is in.
+
 ### Five field gotchas that apply to every tender
 
 **`department` is a list of wikilinks on the canonical key, and `entity_source` runs parallel to it.** End-user departments come first. Where `entity_source` reads `contracting_entity_*` rather than `end_user`, that department is the buyer of record and not necessarily the customer — SSC and PSPC buy federal IT on behalf of others constantly. The file body spells this out too; don't quote a department as the customer without checking which one it was. An empty `department` with a `department_unresolved` value means the registry didn't recognise the entity — see the `jurisdiction` gotcha below, it's the same distinction.
