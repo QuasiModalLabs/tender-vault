@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -1070,6 +1071,123 @@ def test_coded_imputed_admission() -> None:
                                     "imputed_family": "8111", "imputer_model": "jev-1.13.0"})
     check("the AST scan catches the new threshold by name",
           len(_probability_hits("x = P.CODED_IMPUTER_THRESHOLD\n")), 1)
+    skill = (Path(__file__).parent.parent / ".claude" / "skills" / "tender-briefing"
+             / "SKILL.md").read_text(encoding="utf-8")
+    check("the briefing skill names the basis as provenance, never a quality tier",
+          ("imputed_over_codes" in skill, "provenance, never a quality signal" in skill),
+          (True, True))
+
+
+def test_surfaces_show_the_basis() -> None:
+    """
+    End to end, through the real path: filter_tenders -> build_chroma -> the
+    digest and list-corpus, read back from a real Chroma collection.
+
+    Behavioural, not a grep of the source, because the failure this guards is
+    silent: a marker that stops rendering looks exactly like ref-008 admitting
+    nothing. So the zero case and the non-zero case are both built, and the
+    marker is checked present on an admit over codes AND absent on a notice
+    admitted on its codes - a marker on every line would be as useless as none.
+    """
+    print("\nref-008 surfaces: digest marker, zero counts, list-corpus basis - end to end")
+    import contextlib
+    import io
+    from datetime import date
+    from types import SimpleNamespace
+    import digest as digest_mod
+    import tender_tools as tt
+    from family_imputer import gate as G
+    frozen = Q.load_frozen_payload()
+    key_of = {o["prefix"]: o["key"] for o in frozen["options"]}
+    criteria = ingest.parse_profile(ingest.DEFAULT_PROFILE)
+    families = criteria["unspsc_families"]
+
+    def build(tmp: Path, name: str, flagger):
+        # The uncoded notice is imputed (ref-006) in both builds, so the
+        # corpus holds `imputed` beside `imputed_over_codes` and list-corpus
+        # has to keep the two apart rather than merge them.
+        imputer = G.make_imputer(families, key="k", cache_path=tmp / f"u-{name}.db",
+                                 client=_SpyClient({key_of["8111"]: 0.20,
+                                                    key_of["8116"]: 0.20}))
+        df, cols = _feed_frame()
+        with contextlib.redirect_stdout(io.StringIO()):
+            out = ingest.filter_tenders(df, criteria, cols, as_of=date(2026, 9, 24),
+                                        imputer=imputer, flagger=flagger)
+            feed = tmp / f"{name}.csv"
+            feed.write_text("feed\n", encoding="utf-8")
+            ingest.build_chroma(out, tmp / f"chroma-{name}", cols, feed_path=feed)
+        return tmp / f"chroma-{name}"
+
+    def read_back(tmp: Path, db: Path, name: str):
+        digests = tmp / f"digests-{name}"
+        digests.mkdir()
+        # A committed snapshot naming none of these ids, so every notice is
+        # "new" and its line - with or without the marker - is rendered.
+        (digests / "corpus-latest.txt").write_text("SOMETHING-ELSE\n", encoding="utf-8")
+        original = (tt.paths.DIGESTS, tt.paths.DB_PATH,
+                    digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT)
+        try:
+            tt.paths.DB_PATH, tt.paths.DIGESTS = db, digests
+            digest_mod.DIGEST_DIR = digests
+            digest_mod.CORPUS_SNAPSHOT = digests / "corpus-latest.txt"
+            tt.corpus._reset_corpus_state()
+            content = digest_mod.generate_digest()
+            tt.corpus._reset_corpus_state()
+            rows = tt.cmd_list_corpus(SimpleNamespace(window=None))["corpus"]
+        finally:
+            tt.corpus._reset_corpus_state()
+            (tt.paths.DIGESTS, tt.paths.DB_PATH,
+             digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT) = original
+        return content, {r["tender_id"]: r for r in rows}
+
+    def line_for(content: str, notice_id: str) -> str:
+        return next((ln for ln in content.splitlines() if f"`{notice_id}`" in ln), "")
+
+    marker = digest_mod.OVER_CODES_MARKER
+    # mkdtemp + ignore_errors, as test_provenance does: on Windows Chroma keeps
+    # its segment files open, so a TemporaryDirectory cleanup raises.
+    tmp = Path(tempfile.mkdtemp(prefix="tender-vault-ref008-"))
+    try:
+
+        # --- zero: no flagger, so ref-008 admits nothing -------------------
+        content, rows = read_back(tmp, build(tmp, "zero", None), "zero")
+        check("zero: the frontmatter carries both ref-008 counts, at zero",
+              ('relevance_coded_imputed: "0"' in content,
+               'relevance_coded_not_evaluated: "0"' in content), (True, True))
+        check("zero: the digest's count line prints, at zero",
+              "**Admitted over their filed codes (ref-008):** 0" in content, True)
+        check("zero: the notice admitted on its codes is listed, unmarked",
+              (bool(line_for(content, "CODED-1")), marker in line_for(content, "CODED-1")),
+              (True, False))
+        check("zero: no marker anywhere", marker in content, False)
+        check("zero: list-corpus carries relevance_basis on every row, no get needed",
+              {tid: r["relevance_basis"] for tid, r in rows.items()},
+              {"CODED-1": "unspsc", "UNCODED-LIVE": "imputed"})
+
+        # --- one: the coded reject is admitted over its codes --------------
+        flagger = G.make_imputer(families, key="k", client=_SpyClient({key_of["8111"]: 0.95}),
+                                 cache_path=tmp / "g.db")
+        content, rows = read_back(tmp, build(tmp, "one", flagger), "one")
+        check("one: the frontmatter counts the admit over codes",
+              ('relevance_coded_imputed: "1"' in content,
+               'relevance_coded_not_evaluated: "0"' in content), (True, True))
+        check("one: the count line says 1",
+              "**Admitted over their filed codes (ref-008):** 1" in content, True)
+        check("one: THE MARKER RENDERS on the ref-008 admit",
+              line_for(content, "CODED-REJECT").endswith(marker), True)
+        check("one: ...and is ABSENT on the notice admitted on its codes",
+              (bool(line_for(content, "CODED-1")), marker in line_for(content, "CODED-1")),
+              (True, False))
+        check("one: list-corpus names the basis for each",
+              {tid: r["relevance_basis"] for tid, r in rows.items()},
+              {"CODED-1": "unspsc", "CODED-REJECT": "imputed_over_codes",
+               "UNCODED-LIVE": "imputed"})
+        check("one: no list-corpus row carries a mass or a band",
+              sorted({k for r in rows.values() for k in r
+                      if "mass" in k or "band" in k or "prob" in k}), [])
+    finally:
+        tt.corpus._reset_corpus_state()
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_flag_labelling() -> None:
@@ -1281,6 +1399,7 @@ def main() -> int:
     test_gate_in_the_ingest()
     test_coded_flags()
     test_coded_imputed_admission()
+    test_surfaces_show_the_basis()
     test_flag_labelling()
     test_sweep_definitions()
     test_wilson()

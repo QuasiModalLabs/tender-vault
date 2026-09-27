@@ -139,6 +139,12 @@ def _summarize_parked() -> str:
     return "\n\n".join(parts)
 
 
+# ref-008's basis, and the words the digest marks it with. Provenance only:
+# it says how a notice arrived, never how good it is.
+OVER_CODES_BASIS = "imputed_over_codes"
+OVER_CODES_MARKER = " — admitted over its filed codes"
+
+
 def generate_digest() -> str:
     """Build the digest markdown. Returns the file contents as a string."""
     tender_tools.load_collection()
@@ -236,6 +242,10 @@ def generate_digest() -> str:
     stamps += [(key, provenance[key])
                for key in ("imputer_status", "relevance_imputed",
                            "relevance_keyword_fallback",
+                           # ref-008: admits over rejecting codes, and coded
+                           # rejects the imputer never answered for. Counts.
+                           "relevance_coded_imputed",
+                           "relevance_coded_not_evaluated",
                            # ref-007: counts and a status, never a band or a mass
                            "flags_coded", "flags_not_evaluated", "flagger_status",
                            "flag_store_status")
@@ -259,10 +269,19 @@ def generate_digest() -> str:
         lines += [f'{key}: "{value}"' for key, value in stamps]
         lines += ["---", ""]
 
+    # How many arrived over their own filed codes (ref-008). Printed at zero:
+    # "none this time" and "the rule never ran" must not look alike. A count
+    # of a basis, never a mass or a band - the basis is provenance, not a tier.
+    over_codes = sum(1 for d in docs
+                     if d["metadata"].get("relevance_basis") == OVER_CODES_BASIS)
     lines += [
         f"# Digest — {today}",
         "",
         f"**Corpus size:** {total} tenders after filtering",
+        "",
+        f"**Admitted over their filed codes (ref-008):** {over_codes} — the "
+        f"publisher's codes put these outside our families; the model's reading "
+        f"of the text put them in. Marked below.",
         "",
     ]
 
@@ -286,7 +305,9 @@ def generate_digest() -> str:
         for d in new_docs[:15]:
             title = d["metadata"].get("title", "Untitled")[:70]
             closing = d["metadata"].get("closing_date", "?")
-            lines.append(f"- `{d['id']}` — {title} (closes {closing})")
+            marker = (OVER_CODES_MARKER
+                      if d["metadata"].get("relevance_basis") == OVER_CODES_BASIS else "")
+            lines.append(f"- `{d['id']}` — {title} (closes {closing}){marker}")
         if len(new_ids) > 15:
             lines.append(f"- …and {len(new_ids) - 15} more")
         lines.append("")

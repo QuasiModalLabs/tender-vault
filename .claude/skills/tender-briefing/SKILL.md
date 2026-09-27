@@ -378,6 +378,18 @@ not a positive finding. `prose_vehicle_name` means the vehicle was
 inferred from a title, not a cited arrangement number — flag those for
 confirmation.
 
+**Name how it arrived when the filed codes disagreed.** `relevance_basis:
+imputed_over_codes` means the publisher's own commodity codes put the
+notice outside our families, and it was admitted on the model's reading of
+its text. Say that in plain words beside the tender, e.g. *"Filed codes
+put this outside our families; admitted on the model's reading of the
+text."* Then assess it exactly as you would any other notice.
+
+**The basis is provenance, never a quality signal.** Don't read these
+first or last, don't trust them more or less, and don't group them as a
+tier. A reader who starts treating `imputed_over_codes` as a confidence
+tier has reintroduced the score these rules exist to prevent.
+
 **`unrecognised` is not `non_federal`.** Federal Crown corporations —
 CDIC, BDC, Canada Post — have no entry in a registry of departments. A
 registry miss is not evidence of anything. Never treat it as a reason
