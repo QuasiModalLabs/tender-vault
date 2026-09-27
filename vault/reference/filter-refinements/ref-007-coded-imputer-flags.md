@@ -437,3 +437,14 @@ written with the disposition, never before it, so the committed file can be
 read without the uncommitted `flag-queue.json`. The sheet, the queue and the
 revealed sheet are still uncommitted working files under
 `data/family_imputer/`.
+
+## Correction, 2026-09-26
+
+Added below everything above; nothing above is changed. The evidence caveats
+say **"PW, SSC and MX file no codes"**. They file no UNSPSC, which is what
+keeps them out of this coded-branch rule.
+- **PW and SSC** file a GSIN on essentially every notice (4,975 of 4,976 and
+  1,277 of 1,279 in the archive).
+- **MX genuinely files neither.**
+
+The details are in REF-004's correction of the same date.

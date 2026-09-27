@@ -6,7 +6,7 @@ Canadian government procurement is public, enormous, and almost impossible to re
 
 This project started as a way to read the tender feed faster. It ended up somewhere more interesting: an attempt to move backwards through the procurement lifecycle until you arrive *before* the RFP — at the point where a department is still deciding what it wants.
 
-Claude does the reasoning. An [Obsidian](https://obsidian.md) vault of plain markdown files is the memory. And [Jev](https://typesafe.ai) reads the notices the government forgot to classify.
+Claude does the reasoning. An [Obsidian](https://obsidian.md) vault of plain markdown files is the memory. And [Jev](https://typesafe.ai) reads the notices that come without a UNSPSC code.
 
 <details>
 <summary><strong>Briefing Outputs</strong></summary>
@@ -202,6 +202,7 @@ they're the government's.
   and largest federal IT buyer. **OAG** — Office of the Auditor General.
 - **MX, PW, SSC** (as source systems) — prefixes on a notice's reference number
   identifying the publishing system. These three file no UNSPSC codes at all.
+  PW and SSC file a GSIN instead, which the filter doesn't read; MX files neither.
 - **CKAN** — the open-source data portal software behind open.canada.ca. The
   audit layer pulls through its API.
 
@@ -290,7 +291,7 @@ I could see precision — the weekly briefing is a list of what survived, and I 
 
 So `scripts/filter_audit/` replays the filter over the notice archive and records why each of 30,527 notices landed where it did. Every number below is from that archive, which is **not** the population the live filter sees — `data/notices.db` holds every federal notice for the fiscal years ingested, including ones that were never in the open feed on a day this ran. Every replay says so in its own output and refuses to compare the two. Three things fell out of it.
 
-**The rejects are two different failures, not one.** 27,655 rejected, and the split that matters is 21,471 coded by the publisher into a commodity family we don't buy, against 6,121 that carry no codes and matched no keyword. They imply opposite fixes, and **no keyword refinement can touch the first group at all** — a notice with UNSPSC codes is judged on its codes and the competency list is never consulted. Half the improvements I'd have reached for would have been aimed at 22% of the problem. So the record refuses to collapse them into one `relevant: false`, and `sample-rejects --strategy coded_wrong_family` draws that branch spread across UNSPSC segments, because sampling it uniformly just keeps returning the biggest segment.
+**The rejects are two different failures, not one.** 27,655 rejected, and the split that matters is 21,471 coded by the publisher into a commodity family we don't buy, against 6,121 that carry no UNSPSC codes and matched no keyword. They imply opposite fixes, and **no keyword refinement can touch the first group at all** — a notice with UNSPSC codes is judged on its codes and the competency list is never consulted. Half the improvements I'd have reached for would have been aimed at 22% of the problem. So the record refuses to collapse them into one `relevant: false`, and `sample-rejects --strategy coded_wrong_family` draws that branch spread across UNSPSC segments, because sampling it uniformly just keeps returning the biggest segment.
 
 **Four of the five gates remove almost nothing the fifth wouldn't.** Closed, exclusion, construction and jurisdiction reject 3,041 notices between them, which looks load-bearing. But 2,978 of those fail the relevance gate independently — the funnel only ever credited the *first* gate to fire, which is whichever one happened to run earlier. Remove all four and **63 notices of 30,527** enter that otherwise wouldn't. They're still worth having; they're just worth having for their reasons — a construction notice is not IT work whatever its codes say — rather than for their volume.
 
@@ -304,9 +305,9 @@ What it still can't do is tell you what was in the feed on a past day. CanadaBuy
 
 ## Then I pointed a model at the branch keywords couldn't reach
 
-The audit named the problem and couldn't fix it. 6,121 of the rejects carry no commodity codes at all, so they fall to keyword matching, and three source systems — MX, PW and SSC — file no codes ever. One of them is the largest federal IT buyer in the country. `ref-002` is the whole failure in miniature: a notice rejected because the profile spelled a competency `cybersecurity` and the notice said `cyber security`. Refining the word list buys you the next spelling, not the branch.
+The audit named the problem and couldn't fix it. 6,121 of the rejects carry no UNSPSC codes, so they fall to keyword matching, and three source systems — MX, PW and SSC — never file UNSPSC. PW and SSC file a GSIN instead, on essentially every notice, which the filter doesn't read; MX files neither. One of them is the largest federal IT buyer in the country. `ref-002` is the whole failure in miniature: a notice rejected because the profile spelled a competency `cybersecurity` and the notice said `cyber security`. Refining the word list buys you the next spelling, not the branch.
 
-So the uncoded branch now asks a model the question the publisher didn't answer: **which commodity family is this?** Not *is this a fit* — the imputer never sees the profile, and a filed code and an imputed one are then judged by exactly the same rule. The profile stays the only place fit is decided, which is the same line the pre-mortem draws when it quotes the profile beside a probe instead of comparing them in code.
+So the uncoded branch now asks a model the question the publisher didn't answer in UNSPSC: **which commodity family is this?** Not *is this a fit* — the imputer never sees the profile, and a filed code and an imputed one are then judged by exactly the same rule. The profile stays the only place fit is decided, which is the same line the pre-mortem draws when it quotes the profile beside a probe instead of comparing them in code.
 
 The model is [TypeSafe's Jev](https://typesafe.ai), which returns typed probabilities instead of prose. It gets a title and a description in a frozen dataclass carrying nothing else, and returns one choice across 35 commodity options. The question's text and criteria are hashed and recorded as a literal; if the live hash and the literal disagree the run refuses, the same guard the backtest puts on the classifier's vocabulary. Editing the profile's families trips it too, which is correct: that is a different question.
 
@@ -558,7 +559,7 @@ flag to turn it on, and a test fails if one appears.
 
 **Four things are read out of prose, and prose rules are the fragile ones.** Results notices (postings that only announce who already qualified), call-ups whose notice type was filed as a plain RFP, provincial/territorial notices, and descriptions stating a submission deadline earlier than the closing-date field. Each is precision-first and each reports its evidence in `kind_basis`, because they are not equally strong: of the three call-ups the structured field missed, only one cites an arrangement number — the other two are recoverable only from the word "TBIPS" in the title. The arrangement numbers are a curated list, not a pattern; matching the PSPC number *format* relabelled a wharf reconstruction and a building demolition as IT call-ups, because solicitation numbers and supply-arrangement numbers are shaped identically.
 
-**Relevance leans on the publisher, and the publisher has gaps.** Tenders are filtered on their UNSPSC commodity codes where CanadaBuys files them, because guessing a procurement officer's vocabulary is how a boiling-liquid-expanding-vapour-explosion study ends up in a cloud search — "vapour cloud". But three source systems file no codes at all (MX, PW and SSC — 37 of 431 notices post-filter on the 2026-08-04 feed), and one of them is Shared Services Canada, the largest federal IT buyer. Those fall back to keyword matching, and the ingest funnel prints the split every run so the gap stays visible.
+**Relevance leans on the publisher, and the publisher has gaps.** Tenders are filtered on their UNSPSC commodity codes where CanadaBuys files them, because guessing a procurement officer's vocabulary is how a boiling-liquid-expanding-vapour-explosion study ends up in a cloud search — "vapour cloud". But three source systems file no UNSPSC at all (MX, PW and SSC — 37 of 431 notices post-filter on the 2026-08-04 feed), and one of them is Shared Services Canada, the largest federal IT buyer. PW and SSC file a GSIN instead, which the filter doesn't read; MX files neither. Those are decided by the imputer gate described above, which asks Jev for a commodity family, with keyword matching as the fallback when it can't answer, and the ingest funnel prints the split every run so the gap stays visible.
 
 **Recall is measurable now and still unmeasured.** The filter audit gives the rejects a surface — they can be replayed, sampled and reviewed blind — but a surface is not a finding. What has actually been reviewed is one case, and 21,471 of the rejects sit in a branch nobody has looked at. The honest statement is that I know the *shape* of what the filter throws away and not yet whether it's wrong.
 
@@ -596,7 +597,7 @@ The profile shipped here is a representative IT-consulting firm rather than a re
 
 Construction is dropped on `procurementCategory`, the one classification field populated on 100% of notices across every source system. That alone removes 78 notices, including the Defence Construction source lists and a fishermen's-wharf reconstruction that a keyword filter kept surfacing.
 
-`competencies` is the fallback for notices with no commodity code, matched on whole words so "aws" matches Amazon Web Services but not "flaws". Worth knowing before you tune it: on the live feed `AWS`, `Azure`, `DevOps`, `cybersecurity` and `data engineering` match **zero** notices between them. The government writes *informatics*, *TBIPS*, *information technology*. The full funnel — date, exclusions, construction, UNSPSC coverage, relevance — prints on every ingest, so you can tune against the live distribution rather than guessing.
+`competencies` is the fallback for notices with no UNSPSC code, matched on whole words so "aws" matches Amazon Web Services but not "flaws". Worth knowing before you tune it: on the live feed `AWS`, `Azure`, `DevOps`, `cybersecurity` and `data engineering` match **zero** notices between them. The government writes *informatics*, *TBIPS*, *information technology*. The full funnel — date, exclusions, construction, UNSPSC coverage, relevance — prints on every ingest, so you can tune against the live distribution rather than guessing.
 
 ## Running it
 

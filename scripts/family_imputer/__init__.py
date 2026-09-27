@@ -1,8 +1,24 @@
 """
-Jev as a UNSPSC family IMPUTER for notices that file no codes - evaluation only.
+Jev as a UNSPSC family IMPUTER. It names the commodity family a notice most
+resembles from its title and description. It never judges fit.
 
-See vault/reference/filter-refinements/ref-004-jev-family-imputer.md for the
-proposal and the decision rule, which was committed before any run.
+Used three ways, each recorded before its code in
+vault/reference/filter-refinements/:
+
+  * ref-004 - EVALUATION. Imputed blind to their codes over the coded archive
+    notices and scored against the keyword branch, under a decision rule
+    committed before any run (evaluate.py). The rule returned PROCEED.
+  * ref-006 - LIVE GATE on the uncoded branch. A notice that files no UNSPSC
+    is admitted at relevance when Jev's summed mass across the profile
+    families is at least 0.20. Keywords remain the fallback when the imputer
+    cannot answer (gate.py, handed to filter_tenders by ingest/cli.py).
+  * ref-007 - FLAGS on coded notices whose filed codes reject, at summed mass
+    of 0.90 or more. Flag only: the notice is not admitted and the corpus is
+    unchanged.
+
+"No UNSPSC" is not "no codes": PW and SSC file a GSIN instead, which the
+filter does not read, and MX files neither. See the 2026-09-26 correction in
+ref-004.
 
 ------------------------------------------------------------------------------
 WHAT JEV DOES HERE, AND WHAT IT DOES NOT
