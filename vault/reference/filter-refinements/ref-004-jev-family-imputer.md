@@ -354,3 +354,39 @@ PROPOSED, and naming no variant. Phase 1 is an evaluation of an imputer, not a
 filter variant, so `evaluate-refinement` has nothing to score and refuses. That
 is intended. A phase 2 variant would be written only if the rule above says
 PROCEED, or the human decides an INCONCLUSIVE result is worth it.
+
+## Correction, 2026-09-26: "no UNSPSC", not "no codes"
+
+Added below everything above. The pre-registered rule and every number above
+are unchanged.
+
+The summary ("notices that file no codes") and the heading ("the notices that
+file none") **overstated it**. The Problem section's own wording, "file no
+UNSPSC at all", was the accurate one.
+
+**What the notices actually carry.** The 7,204 PW, SSC and MX archive notices
+in `data/notices.db`:
+
+| source | notices | UNSPSC | GSIN (with an actual code) |
+|---|---|---|---|
+| PW | 4,976 | none | 4,975 |
+| SSC | 1,279 | none | 1,277 |
+| MX | 949 | none | **0** |
+
+So PW and SSC file a code the filter doesn't read. **MX genuinely files
+neither.**
+
+**Checked against the files as downloaded, not after parsing.**
+- In the fiscal-year archives (`.cache/notices/*-tender.csv`), the UNSPSC cell
+  is a bare `*` on 7,030 of these notices and empty on 174.
+- In the open-feed snapshot and the 2026-09-13 feed it is empty. GSIN is
+  present on every PW and SSC row there, and on no MX row.
+
+**None of this changes the measurement.** The imputer was blind to every code
+by design, and it still imputes a UNSPSC family where none was filed. What
+changes is the framing. For PW and SSC, the alternative to Jev is not only
+keywords but a publisher-filed GSIN that the filter ignores (see REF-003).
+
+One further point: the live-feed schema (`ingest.TENDER_COLUMNS`) maps no GSIN
+column, so feed-built `Notice` objects carry `gsin=None`. Only
+`notices_ingest.py` reads GSIN.

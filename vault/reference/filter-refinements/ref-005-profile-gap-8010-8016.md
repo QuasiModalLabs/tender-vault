@@ -114,3 +114,14 @@ dominate the counts, and Jev itself places most of them outside the profile
 PROPOSED, naming no variant. The profile is not edited. The next step, if
 wanted, is to choose which codes to trial (whole families, or specific L4s such
 as `80161604`), write that as a variant, and evaluate it against the golden set.
+
+## Correction, 2026-09-26
+
+Added below everything above; nothing above is changed. "What this does not
+establish" says **"PW, SSC and MX file no codes"**. They file no UNSPSC, which
+is the claim that matters here: a UNSPSC family change cannot affect them.
+- **PW and SSC** file a GSIN on essentially every notice (4,975 of 4,976 and
+  1,277 of 1,279 in the archive).
+- **MX genuinely files neither.**
+
+The details are in REF-004's correction of the same date.
