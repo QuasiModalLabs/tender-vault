@@ -62,7 +62,11 @@ def test_promote():
     assert len(files) == 1, f"expected 1 watching file, got {len(files)}"
     content = files[0].read_text(encoding="utf-8")
     assert f"tender_id: {FAKE_ID}" in content, "frontmatter missing tender_id"
-    assert "status: watching" in content, "frontmatter missing status"
+    # The folder is the only record of lifecycle state (issue #3): a status
+    # field written here would go stale the moment park or archive moved it.
+    frontmatter = content.split("---", 2)[1]
+    assert not any(line.startswith("status:") for line in frontmatter.splitlines()), \
+        "frontmatter must not carry status; the folder records state"
     return files[0].name
 
 
