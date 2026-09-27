@@ -448,3 +448,46 @@ keeps them out of this coded-branch rule.
 - **MX genuinely files neither.**
 
 The details are in REF-004's correction of the same date.
+
+## REF-008 admits on the same answers; this rule is unchanged, 2026-09-27
+
+Added below everything above; nothing above is changed. Where this section
+and "Structure" disagree, this section is current.
+
+REF-008 admits a coded notice whose codes reject when the summed profile mass
+is at least 0.60. **It does not promote, close or replace this rule.** This
+rule stays **flag-only**, promotion stays **NOT EVALUATED**, and the store,
+the label vocabulary, the n ≥ 20 minimum and the promotion procedure are all
+unchanged.
+
+**Why it stays.** This rule's flags exist to be read and labelled, so that the
+labels can say what kind of disagreement a strong one between the filed codes
+and Jev is: a miscode, Jev being wrong, a vehicle, or work outside the
+profile. REF-008 admits on the model's confidence, and admission cannot
+answer that question. A notice admitted at 0.97 is no more likely to be a
+miscode for having been admitted. A promotion here would still be a decision
+about the codes, and REF-008 does not make it.
+
+**What changes around it:**
+- **Every flag is now also admitted**, because 0.90 is at least 0.60. Flagged
+  notices therefore appear in briefings, and a labeller who has read the
+  briefing may recognise one on the blind sheet. The controls mostly sit below
+  0.60 and are not admitted, so appearing in the corpus leans toward "flag".
+  **The blinding is weakened, and that is recorded rather than designed away.**
+  Redrawing the controls from the 0.60–0.90 band would put them in the corpus
+  too. It was rejected, because it would make the control set a function of
+  the rule under test. That circularity is a subtler problem than the one it
+  fixes. No labels exist yet, so nothing already recorded is affected. Labels
+  remain content judgements about the notice, and the choice and band stay
+  withheld.
+- **The flagger's answers feed two consumers.** "Structure" says they go "to
+  predicates.coded_flag and nowhere else". From REF-008 they also go to
+  `stage_relevance`, for admission. `coded_flag` is unchanged and still
+  decides nothing.
+- **The "corpus unchanged" test is replaced, deliberately.** It asserted that
+  the corpus is identical with the flagger on, which is false under REF-008 by
+  design. It becomes two tests:
+  - Recording flags changes no admission.
+  - REF-008 admits exactly the coded rejects at or above 0.60.
+- **The funnel line drops "none admitted".** Flags still admit nothing
+  themselves; the line says how many flagged notices REF-008 also admitted.
