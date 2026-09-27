@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -806,13 +807,16 @@ def test_gate_in_the_ingest() -> None:
         raises("an edited frozen question is refused on load", Q.FrozenQuestionDrift,
                lambda: Q.load_frozen_payload(tampered))
 
+    # DELIBERATE CHANGE (ref-008). Until ref-008 an imputation on ANY coded
+    # notice was ignored. Now only codes that admit ignore it; codes that
+    # reject are overruled at CODED_IMPUTER_THRESHOLD - see test_coded_imputed_admission.
     n = P.Notice.from_frozen_row({"reference_number": "X", "title": "t", "description": "d",
-                                  "unspsc": "*72101504", "closing_date": None})
+                                  "unspsc": "*81111500", "closing_date": None})
     r = P.stage_relevance(n, {"unspsc_families": families, "competencies": []}, None,
-                          imputation=P.Imputation("8111", 1.0, "jev-1.13.0", "q"))
-    check("an imputation handed in for a coded notice is ignored and flagged",
+                          imputation=P.Imputation("8116", 0.0, "jev-1.13.0", "q"))
+    check("an imputation beside codes that ADMIT is ignored and flagged",
           (r.outcome, r.detail["relevance_basis"], r.detail["imputation_ignored_on_coded"]),
-          ("drop", "unspsc", True))
+          ("pass", "unspsc", True))
 
     # ref-006 defect: the float sum of 0.01-quantised probabilities lands one ulp
     # under the threshold. cb-97-2152788's profile options were 0.08/0.09/0.03.
@@ -827,7 +831,7 @@ def test_gate_in_the_ingest() -> None:
 
 
 def test_coded_flags() -> None:
-    print("\nref-007 flags: coded rejects only, after the imputer, never admitted")
+    print("\nref-007 flags: coded rejects only, after the imputer; a flag admits nothing")
     import argparse
     import contextlib
     import io
@@ -879,41 +883,75 @@ def test_coded_flags() -> None:
         check("a coded notice its codes admit produces no API call from either",
               "Application support services" in sent, False)
         check("...a closed coded reject produces none either", "Closed GIS work" in sent, False)
-        check("THE CORPUS IS UNCHANGED BY THE RULE: same rows, same columns, same values",
-              (list(out[tid]), out.equals(base)), (list(base[tid]), True))
-        check("...the flagged notice is not admitted", "CODED-REJECT" in set(out[tid]), False)
         records = out.attrs["_coded_flag_records"]
         check("one flag, at the one-ulp edge, in the lowest band",
               [(r["flag"].notice_id, r["flag"].mass_band, r["flag"].jev_choice)
                for r in records], [("CODED-REJECT", "0.90-0.95", "8111")])
-        check("the funnel prints the flag count",
-              "Coded flags (ref-007, flag only, none admitted): 1 of 1 coded rejects" in log, True)
+
+        # DELIBERATE CHANGE (ref-008). This used to assert THE CORPUS IS
+        # UNCHANGED with the flagger on. Under ref-008 that is false by design:
+        # the flagged notice is admitted - by ref-008, not by the flag. The
+        # ref-007 half of the old guarantee is kept as its own test: recording
+        # flags changes no admission. With coded_flag switched off entirely,
+        # the frame is identical.
+        check("...and the flagged notice IS admitted, by ref-008 not by the flag",
+              ("CODED-REJECT" in set(out[tid]),
+               out.loc[out[tid] == "CODED-REJECT", "_relevance_basis"].tolist()),
+              (True, ["imputed_over_codes"]))
+        original_flag = P.coded_flag
+        P.coded_flag = lambda *a, **k: None
+        try:
+            unflagged, _ = run(G.make_imputer(families, key="k", client=uncoded_client,
+                                              cache_path=t / "b.db"),
+                               G.make_imputer(families, key="k", client=flag_client,
+                                              cache_path=t / "b.db"))
+        finally:
+            P.coded_flag = original_flag
+        check("RECORDING FLAGS CHANGES NO ADMISSION: coded_flag off, same rows and values",
+              (list(unflagged[tid]), unflagged.equals(out),
+               len(unflagged.attrs["_coded_flag_records"])), (list(out[tid]), True, 0))
+        check("...and without the flagger the coded reject is rejected on its codes",
+              "CODED-REJECT" in set(base[tid]), False)
+        check("the funnel prints the ref-008 count and the flag count, apart",
+              ("Coded imputed admits (ref-008): 1 of 1 coded rejects at mass >= 0.6; "
+               "1 evaluated, 0 not evaluated" in log,
+               "Coded flags (ref-007, flag only): 1 of 1 coded rejects, 1 of them also "
+               "admitted under ref-008" in log,
+               "1 imputed over rejecting codes" in log), (True, True, True))
         check("provenance carries counts and a status, no band and no mass",
               (out.attrs["relevance_mode"]["flags_coded"],
-               any("mass" in k or "band" in k for k in out.attrs["relevance_mode"])), (1, False))
+               out.attrs["relevance_mode"]["relevance_coded_imputed"],
+               any("mass" in k or "band" in k for k in out.attrs["relevance_mode"])),
+              (1, 1, False))
 
         low = _SpyClient({key_of["8111"]: 0.89})
         out, log = run(None, G.make_imputer(families, key="k", client=low,
                                             cache_path=t / "c.db"))
-        check("mass 0.89 is not flagged, and the funnel says 0",
-              (len(out.attrs["_coded_flag_records"]),
-               "none admitted): 0 of 1 coded rejects; 1 evaluated" in log), (0, True))
+        check("mass 0.89 is not flagged, but ref-008 admits it",
+              (len(out.attrs["_coded_flag_records"]), "CODED-REJECT" in set(out[tid]),
+               "Coded flags (ref-007, flag only): 0 of 1 coded rejects" in log),
+              (0, True, True))
 
         _, log = run(None, None)
-        check("with no flagger the line still prints, at zero",
-              "none admitted): 0 of 1 coded rejects; 0 evaluated, 0 not evaluated" in log, True)
+        check("with no flagger both lines still print, at zero",
+              ("Coded imputed admits (ref-008): 0 of 1 coded rejects at mass >= 0.6; "
+               "0 evaluated, 0 not evaluated" in log,
+               "Coded flags (ref-007, flag only): 0 of 1 coded rejects" in log), (True, True))
 
         def exploding(items):
             raise RuntimeError("boom")
         out, log = run(G.make_imputer(families, key="k", client=_SpyClient(
             {key_of["8111"]: 0.20, key_of["8116"]: 0.20}), cache_path=t / "d.db"), exploding)
-        check("a flagger that raises changes nothing: the uncoded admit stands, the run completes",
-              ("UNCODED-LIVE" in set(out[tid]), "flagger raised RuntimeError" in log), (True, True))
+        check("a flagger that raises: the uncoded admit stands, the coded reject falls back "
+              "to its codes, the run completes",
+              ("UNCODED-LIVE" in set(out[tid]), "CODED-REJECT" in set(out[tid]),
+               "flagger raised RuntimeError" in log), (True, False, True))
         denied = _SpyClient(raise_with=client.JevAuthError("HTTP 401"))
-        _, log = run(None, G.make_imputer(families, key="k", client=denied,
-                                          cache_path=t / "e.db"))
-        check("an auth error leaves the coded reject counted as not evaluated",
-              "0 evaluated, 1 not evaluated" in log, True)
+        out, log = run(None, G.make_imputer(families, key="k", client=denied,
+                                            cache_path=t / "e.db"))
+        check("an auth error leaves the coded reject not evaluated, and rejected on its codes",
+              ("0 evaluated, 1 not evaluated" in log, "CODED-REJECT" in set(out[tid])),
+              (True, False))
 
     # --- the pure function and its type --------------------------------------
     imp = P.Imputation("8111", 0.95, "jev-1.13.0", "q", "c")
@@ -991,6 +1029,165 @@ def test_coded_flags() -> None:
     cli_src = (SCRIPTS / "ingest" / "cli.py").read_text(encoding="utf-8")
     check("...and the ingest puts it into relevance_mode, which provenance copies",
           '["flag_store_status"] = _record_flags(' in cli_src, True)
+
+
+def test_coded_imputed_admission() -> None:
+    print("\nref-008: coded rejects admitted at mass >= 0.60, the basis says so, no mass leaks")
+    from ingest.corpus import relevance_metadata
+    families = ingest.parse_profile(ingest.DEFAULT_PROFILE)["unspsc_families"]
+    criteria = {"unspsc_families": families, "competencies": []}
+    check("the threshold is 0.60, and the uncoded gate is untouched at 0.20",
+          (P.CODED_IMPUTER_THRESHOLD, P.IMPUTER_THRESHOLD), (0.60, 0.20))
+
+    reject = P.Notice.from_frozen_row({"reference_number": "R", "title": "t",
+                                       "description": "d", "unspsc": "*72101504",
+                                       "closing_date": None})
+
+    def decide(mass):
+        return P.stage_relevance(reject, criteria, None,
+                                 imputation=P.Imputation("8111", mass, "jev-1.13.0", "q"))
+
+    # Four 0.01-quantised profile probabilities that land one ulp under 0.60.
+    edge = 0.01 + 0.06 + 0.47 + 0.06
+    check("the edge is real: 0.01 + 0.06 + 0.47 + 0.06 < 0.60 in floats", edge < 0.60, True)
+    r = decide(edge)
+    check("...and a mass summing to 0.60 is admitted over the codes",
+          (r.outcome, r.detail["relevance_basis"], r.detail["family_result"]),
+          ("pass", "imputed_over_codes", "wrong_family"))
+    r = decide(0.59)
+    check("0.59 is rejected, on its codes", (r.outcome, r.detail["relevance_basis"]),
+          ("drop", "unspsc"))
+    check("...but the audit still records that the imputation was evaluated",
+          (r.detail["imputation_ignored_on_coded"], r.evidence["imputer_threshold"]),
+          (False, 0.60))
+    r = P.stage_relevance(reject, criteria, None, imputation=None)
+    check("no imputation: the codes decide, exactly as before ref-008",
+          (r.outcome, r.detail["relevance_basis"]), ("drop", "unspsc"))
+
+    row = {"_relevance_basis": "imputed_over_codes", "_imputed_family": "8111",
+           "_imputer_model": "jev-1.13.0"}
+    check("corpus metadata: basis, family and model - no mass, no band",
+          relevance_metadata(row), {"relevance_basis": "imputed_over_codes",
+                                    "imputed_family": "8111", "imputer_model": "jev-1.13.0"})
+    check("the AST scan catches the new threshold by name",
+          len(_probability_hits("x = P.CODED_IMPUTER_THRESHOLD\n")), 1)
+    skill = (Path(__file__).parent.parent / ".claude" / "skills" / "tender-briefing"
+             / "SKILL.md").read_text(encoding="utf-8")
+    check("the briefing skill names the basis as provenance, never a quality tier",
+          ("imputed_over_codes" in skill, "provenance, never a quality signal" in skill),
+          (True, True))
+
+
+def test_surfaces_show_the_basis() -> None:
+    """
+    End to end, through the real path: filter_tenders -> build_chroma -> the
+    digest and list-corpus, read back from a real Chroma collection.
+
+    Behavioural, not a grep of the source, because the failure this guards is
+    silent: a marker that stops rendering looks exactly like ref-008 admitting
+    nothing. So the zero case and the non-zero case are both built, and the
+    marker is checked present on an admit over codes AND absent on a notice
+    admitted on its codes - a marker on every line would be as useless as none.
+    """
+    print("\nref-008 surfaces: digest marker, zero counts, list-corpus basis - end to end")
+    import contextlib
+    import io
+    from datetime import date
+    from types import SimpleNamespace
+    import digest as digest_mod
+    import tender_tools as tt
+    from family_imputer import gate as G
+    frozen = Q.load_frozen_payload()
+    key_of = {o["prefix"]: o["key"] for o in frozen["options"]}
+    criteria = ingest.parse_profile(ingest.DEFAULT_PROFILE)
+    families = criteria["unspsc_families"]
+
+    def build(tmp: Path, name: str, flagger):
+        # The uncoded notice is imputed (ref-006) in both builds, so the
+        # corpus holds `imputed` beside `imputed_over_codes` and list-corpus
+        # has to keep the two apart rather than merge them.
+        imputer = G.make_imputer(families, key="k", cache_path=tmp / f"u-{name}.db",
+                                 client=_SpyClient({key_of["8111"]: 0.20,
+                                                    key_of["8116"]: 0.20}))
+        df, cols = _feed_frame()
+        with contextlib.redirect_stdout(io.StringIO()):
+            out = ingest.filter_tenders(df, criteria, cols, as_of=date(2026, 9, 24),
+                                        imputer=imputer, flagger=flagger)
+            feed = tmp / f"{name}.csv"
+            feed.write_text("feed\n", encoding="utf-8")
+            ingest.build_chroma(out, tmp / f"chroma-{name}", cols, feed_path=feed)
+        return tmp / f"chroma-{name}"
+
+    def read_back(tmp: Path, db: Path, name: str):
+        digests = tmp / f"digests-{name}"
+        digests.mkdir()
+        # A committed snapshot naming none of these ids, so every notice is
+        # "new" and its line - with or without the marker - is rendered.
+        (digests / "corpus-latest.txt").write_text("SOMETHING-ELSE\n", encoding="utf-8")
+        original = (tt.paths.DIGESTS, tt.paths.DB_PATH,
+                    digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT)
+        try:
+            tt.paths.DB_PATH, tt.paths.DIGESTS = db, digests
+            digest_mod.DIGEST_DIR = digests
+            digest_mod.CORPUS_SNAPSHOT = digests / "corpus-latest.txt"
+            tt.corpus._reset_corpus_state()
+            content = digest_mod.generate_digest()
+            tt.corpus._reset_corpus_state()
+            rows = tt.cmd_list_corpus(SimpleNamespace(window=None))["corpus"]
+        finally:
+            tt.corpus._reset_corpus_state()
+            (tt.paths.DIGESTS, tt.paths.DB_PATH,
+             digest_mod.DIGEST_DIR, digest_mod.CORPUS_SNAPSHOT) = original
+        return content, {r["tender_id"]: r for r in rows}
+
+    def line_for(content: str, notice_id: str) -> str:
+        return next((ln for ln in content.splitlines() if f"`{notice_id}`" in ln), "")
+
+    marker = digest_mod.OVER_CODES_MARKER
+    # mkdtemp + ignore_errors, as test_provenance does: on Windows Chroma keeps
+    # its segment files open, so a TemporaryDirectory cleanup raises.
+    tmp = Path(tempfile.mkdtemp(prefix="tender-vault-ref008-"))
+    try:
+
+        # --- zero: no flagger, so ref-008 admits nothing -------------------
+        content, rows = read_back(tmp, build(tmp, "zero", None), "zero")
+        check("zero: the frontmatter carries both ref-008 counts, at zero",
+              ('relevance_coded_imputed: "0"' in content,
+               'relevance_coded_not_evaluated: "0"' in content), (True, True))
+        check("zero: the digest's count line prints, at zero",
+              "**Admitted over their filed codes (ref-008):** 0" in content, True)
+        check("zero: the notice admitted on its codes is listed, unmarked",
+              (bool(line_for(content, "CODED-1")), marker in line_for(content, "CODED-1")),
+              (True, False))
+        check("zero: no marker anywhere", marker in content, False)
+        check("zero: list-corpus carries relevance_basis on every row, no get needed",
+              {tid: r["relevance_basis"] for tid, r in rows.items()},
+              {"CODED-1": "unspsc", "UNCODED-LIVE": "imputed"})
+
+        # --- one: the coded reject is admitted over its codes --------------
+        flagger = G.make_imputer(families, key="k", client=_SpyClient({key_of["8111"]: 0.95}),
+                                 cache_path=tmp / "g.db")
+        content, rows = read_back(tmp, build(tmp, "one", flagger), "one")
+        check("one: the frontmatter counts the admit over codes",
+              ('relevance_coded_imputed: "1"' in content,
+               'relevance_coded_not_evaluated: "0"' in content), (True, True))
+        check("one: the count line says 1",
+              "**Admitted over their filed codes (ref-008):** 1" in content, True)
+        check("one: THE MARKER RENDERS on the ref-008 admit",
+              line_for(content, "CODED-REJECT").endswith(marker), True)
+        check("one: ...and is ABSENT on the notice admitted on its codes",
+              (bool(line_for(content, "CODED-1")), marker in line_for(content, "CODED-1")),
+              (True, False))
+        check("one: list-corpus names the basis for each",
+              {tid: r["relevance_basis"] for tid, r in rows.items()},
+              {"CODED-1": "unspsc", "CODED-REJECT": "imputed_over_codes",
+               "UNCODED-LIVE": "imputed"})
+        check("one: no list-corpus row carries a mass or a band",
+              sorted({k for r in rows.values() for k in r
+                      if "mass" in k or "band" in k or "prob" in k}), [])
+    finally:
+        tt.corpus._reset_corpus_state()
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_flag_labelling() -> None:
@@ -1201,6 +1398,8 @@ def main() -> int:
     test_strip_and_ceiling()
     test_gate_in_the_ingest()
     test_coded_flags()
+    test_coded_imputed_admission()
+    test_surfaces_show_the_basis()
     test_flag_labelling()
     test_sweep_definitions()
     test_wilson()

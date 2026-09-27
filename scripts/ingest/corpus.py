@@ -32,10 +32,13 @@ RELEVANCE_METADATA_KEYS = ("relevance_basis", "imputed_family", "imputer_model")
 
 def relevance_metadata(row) -> dict:
     """How relevance was decided, for Chroma: basis always; family and model
-    only when the imputer decided. Omitted rather than blank when absent."""
+    only when the imputer decided - `imputed` where no UNSPSC was filed
+    (ref-006), `imputed_over_codes` where it overruled rejecting codes
+    (ref-008). Omitted rather than blank when absent. The basis is provenance,
+    never a quality tier."""
     basis = row.get("_relevance_basis") or "unspsc"
     out = {"relevance_basis": str(basis)}
-    if basis == "imputed":
+    if basis in ("imputed", "imputed_over_codes"):
         out["imputed_family"] = str(row.get("_imputed_family") or "")
         out["imputer_model"] = str(row.get("_imputer_model") or "")
     return out

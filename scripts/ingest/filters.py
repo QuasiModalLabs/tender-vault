@@ -98,11 +98,14 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     notice is decided by keywords, which is also what happens to any notice
     the imputer could not answer for.
 
-    flagger: the same kind of callable, for ref-007's flags - or None. It is
+    flagger: the same kind of callable, for coded rejects - or None. It is
     handed only coded notices past gates 1-4 whose codes REJECT, after the
-    imputer has run. Its answers become flags in df.attrs["_coded_flag_records"]
-    and change no admission: the frame returned is the frame that would be
-    returned without it, which tests/test_family_imputer.py asserts.
+    imputer has run. Its answers feed two consumers. Flags (ref-007) go to
+    df.attrs["_coded_flag_records"] and admit nothing: recording them changes
+    no row. Admission (ref-008) goes through stage_relevance, which admits a
+    coded reject at CODED_IMPUTER_THRESHOLD. None means every coded notice is
+    decided on its codes alone, as before ref-008. tests/test_family_imputer.py
+    asserts both halves.
     """
     from filter_audit import predicates as _pred
 
@@ -271,10 +274,13 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     # 2026-08-04 feed the OR form readmitted a boiling-liquid-expanding-vapour-
     # explosion study (coded 77101501, environmental) because the phrase
     # "vapour cloud" contains "cloud", plus an elevator modernization and an
-    # advertising RFSA. Codes present and not ours means not ours.
+    # advertising RFSA. Codes present and not ours means not ours - for
+    # KEYWORDS. The one thing that can overrule rejecting codes is the imputer
+    # at CODED_IMPUTER_THRESHOLD (ref-008, below); a word match never can.
     #
-    # Where no codes were filed there is nothing to defer to, so keywords carry
-    # those notices — 37 of 431, entirely from MX, PW and SSC.
+    # Where no UNSPSC was filed there is nothing to defer to - MX, PW and SSC
+    # (PW and SSC file a GSIN, which this filter does not read). Those go to the
+    # imputer, with keywords as the fallback when it cannot answer.
     # Stage 5 in filter_audit.predicates.stage_relevance, which keeps the two
     # reject modes apart — "coded into a family we don't buy" and "uncoded and
     # no keyword fired" imply different fixes and split 21,471 / 6,121 on the
@@ -283,8 +289,9 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     #
     # THE IMPUTER (ref-006). Uncoded notices that reached this point - after
     # closed, exclusion, construction and jurisdiction - go to the injected
-    # imputer, and ONLY those: a coded notice is judged on its codes and never
-    # produces a call. Where the imputer answers, stage_relevance admits on
+    # imputer, and ONLY those; coded rejects go to the flagger below, and a
+    # coded notice its codes admit never produces a call. Where the imputer
+    # answers, stage_relevance admits on
     # summed profile-family probability >= IMPUTER_THRESHOLD; where it does
     # not (no key, API error, drifted question, or no imputer at all), the
     # notice is decided by keywords exactly as before, and the funnel says how
@@ -308,22 +315,17 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
     elif imputer is not None:
         gate_note = "ok"
 
-    tid = df[cols["tender_id"]].apply(_pred._s)
-    df["_relevance_basis"] = [
-        "unspsc" if coded else ("imputed" if t in imputations else "keyword")
-        for t, coded in zip(tid, has_codes)]
-    df["_imputed_family"] = [imputations[t].family if t in imputations else ""
-                             for t in tid]
-    df["_imputer_model"] = [imputations[t].model if t in imputations else ""
-                            for t in tid]
-
-    # FLAGS ON CODED NOTICES (ref-007) - FLAG ONLY. Coded notices past gates 1-4
-    # whose codes REJECT go to the flagger, after the uncoded imputer has run
-    # and in a separate call, so the flag backfill can never spend the uncoded
-    # gate's time budget. A coded notice its codes admit is never sent: it
-    # cannot be flagged, so the call would be waste. The flagger's answers go
-    # to predicates.coded_flag and nowhere else - never into `imputations`,
-    # never into stage_mask - so they cannot reach an admission decision.
+    # FLAGS AND ADMISSIONS ON CODED REJECTS (ref-007, ref-008). Coded notices
+    # past gates 1-4 whose codes REJECT go to the flagger, after the uncoded
+    # imputer has run and in a separate call, so this backfill can never spend
+    # the uncoded gate's time budget. A coded notice its codes admit is never
+    # sent: it cannot be flagged or overruled, so the call would be waste.
+    #
+    # The flagger's answers feed TWO consumers, and neither knows the other:
+    #   predicates.coded_flag   -> flags (ref-007). Flag only; admits nothing.
+    #   stage_relevance         -> admission at CODED_IMPUTER_THRESHOLD (ref-008).
+    # A notice the flagger did not answer for is decided on its codes, exactly
+    # as before ref-008 - rejected - and counted as not evaluated.
     coded_rejects = (df.loc[has_codes & ~df["_unspsc_families"].apply(bool)]
                      if families else df.iloc[0:0])
     flag_records, flag_gate = [], None
@@ -345,24 +347,49 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
         flag_note = "ok"
     n_flag_asked = len(coded_rejects) if flagger is not None else 0
     n_flag_answered = len(flag_gate.imputations) if flag_gate is not None else 0
+    coded_imputations = flag_gate.imputations if flag_gate is not None else {}
 
+    # One imputation per notice: uncoded from the imputer, coded rejects from
+    # the flagger. The two populations are disjoint by construction.
+    relevance_imputations = {**imputations, **coded_imputations}
+    tid = df[cols["tender_id"]].apply(_pred._s)
     if families or criteria["competencies"]:
-        keep = _pred.stage_mask(df, cols, criteria, _pred.stage_relevance,
-                                imputations=imputations)
-        relevant = pd.Series(keep, index=df.index)
-        imputed_mask = df["_relevance_basis"] == "imputed"
-        keyword_mask = df["_relevance_basis"] == "keyword"
-        df = df[relevant]
-        kept_coded = int((has_codes & relevant).sum())
+        # The basis is read off stage_relevance's own result rather than
+        # recomputed here, so the threshold comparison exists in one place.
+        results = [_pred.stage_relevance(n, criteria, None,
+                                         imputation=relevance_imputations.get(n.notice_id))
+                   for n in _pred.notices_from_frame(df, cols)]
+        relevant = pd.Series([not r.drops for r in results], index=df.index)
+        df["_relevance_basis"] = [r.detail["relevance_basis"] for r in results]
+    else:
+        relevant = None
+        df["_relevance_basis"] = [
+            "unspsc" if coded else ("imputed" if t in imputations else "keyword")
+            for t, coded in zip(tid, has_codes)]
+    imputed_basis = df["_relevance_basis"].isin(("imputed", "imputed_over_codes"))
+    df["_imputed_family"] = [relevance_imputations[t].family if b else ""
+                             for t, b in zip(tid, imputed_basis)]
+    df["_imputer_model"] = [relevance_imputations[t].model if b else ""
+                            for t, b in zip(tid, imputed_basis)]
+
+    imputed_mask = df["_relevance_basis"] == "imputed"
+    keyword_mask = df["_relevance_basis"] == "keyword"
+    over_codes_mask = df["_relevance_basis"] == "imputed_over_codes"
+    flagged_ids = {r["flag"].notice_id for r in flag_records}
+    if relevant is not None:
+        unspsc_mask = df["_relevance_basis"] == "unspsc"
+        kept_unspsc = int((unspsc_mask & relevant).sum())
+        kept_over_codes = int((over_codes_mask & relevant).sum())
         kept_imputed = int((imputed_mask & relevant).sum())
         kept_keyword = int((keyword_mask & relevant).sum())
+        flagged_admitted = int((tid.isin(flagged_ids) & relevant).sum())
+        df = df[relevant]
         print(f"  After relevance filter: {len(df):,}  "
-              f"({kept_coded:,} by UNSPSC family, {kept_imputed:,} by imputed "
-              f"family, {kept_keyword:,} by keyword where no codes were filed)")
+              f"({kept_unspsc:,} by UNSPSC family, {kept_over_codes:,} imputed over "
+              f"rejecting codes, {kept_imputed:,} by imputed family where no UNSPSC "
+              f"was filed, {kept_keyword:,} by keyword where no UNSPSC was filed)")
     else:
-        imputed_mask = df["_relevance_basis"] == "imputed"
-        keyword_mask = df["_relevance_basis"] == "keyword"
-        kept_imputed = kept_keyword = 0
+        kept_over_codes = kept_imputed = kept_keyword = flagged_admitted = 0
 
     # ALWAYS printed, including at zero - an absent line would make "the
     # imputer decided nothing" indistinguishable from "the imputer never ran".
@@ -388,11 +415,20 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
         relevance_mode["imputer_model"] = gate.model
         relevance_mode["imputer_question_sha256"] = gate.question_sha256
 
-    # ALWAYS printed, including at zero, for the same reason as the line above.
-    # Counts only: the store holds the flags, and a count is not a probability.
-    print(f"  Coded flags (ref-007, flag only, none admitted): {len(flag_records):,} "
-          f"of {len(coded_rejects):,} coded rejects; {n_flag_answered:,} evaluated, "
+    # ALWAYS printed, including at zero, for the same reason as the line above,
+    # and kept apart from the uncoded line: admissions over the publisher's own
+    # codes (ref-008) and admissions where no UNSPSC was filed (ref-006) are
+    # different rules with different evidence, and one count would merge them.
+    print(f"  Coded imputed admits (ref-008): {kept_over_codes:,} of "
+          f"{len(coded_rejects):,} coded rejects at mass >= "
+          f"{_pred.CODED_IMPUTER_THRESHOLD}; {n_flag_answered:,} evaluated, "
           f"{n_flag_asked - n_flag_answered:,} not evaluated  [flagger: {flag_note}]")
+    # Counts only: the store holds the flags, and a count is not a probability.
+    # Flags admit nothing themselves; ref-008 admits every flagged notice, and
+    # the line says how many so "flagged" is never read as "rejected".
+    print(f"  Coded flags (ref-007, flag only): {len(flag_records):,} of "
+          f"{len(coded_rejects):,} coded rejects, {flagged_admitted:,} of them also "
+          f"admitted under ref-008")
     if flag_gate is not None and (flag_gate.called or flag_gate.cached):
         print(f"    flagger calls {flag_gate.called:,}, cached {flag_gate.cached:,}, "
               f"input tokens {flag_gate.input_tokens:,}")
@@ -400,6 +436,8 @@ def filter_tenders(df: pd.DataFrame, criteria: dict, cols: dict,
         print("    not evaluated: " + "; ".join(
             f"{k} {v}" for k, v in sorted(flag_gate.fallback.items())))
     relevance_mode.update({
+        "relevance_coded_imputed": kept_over_codes,
+        "relevance_coded_not_evaluated": n_flag_asked - n_flag_answered,
         "flags_coded": len(flag_records),
         "flags_coded_rejects": len(coded_rejects),
         "flags_not_evaluated": n_flag_asked - n_flag_answered,

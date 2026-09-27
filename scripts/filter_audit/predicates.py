@@ -463,6 +463,15 @@ def stage_jurisdiction(notice: Notice, criteria: dict, as_of) -> StageResult:
 # corpus. Anything Claude reads must never see a probability - see ref-006.
 IMPUTER_THRESHOLD = 0.20
 
+# CODED notices whose filed codes reject are admitted at this mass (ref-008).
+# The same imputation the ref-007 flagger already asks for; no extra call.
+# 0.60 is where the 8011 staff-augmentation share breaks on the archive - 23%
+# of the 0.50-0.60 band against 8% of 0.60-0.70, largely TBIPS call-ups filed
+# as temporary personnel - so widening below it skews toward body-shop work
+# rather than merely adding noise. An archive rate with nothing observed below
+# 0.90; see ref-008 for the caveats and the review it is committed to.
+CODED_IMPUTER_THRESHOLD = 0.60
+
 
 def mass_reaches(mass: float, threshold: float) -> bool:
     """
@@ -495,9 +504,15 @@ def stage_relevance(notice: Notice, criteria: dict, as_of,
     Publisher first; for uncoded notices, the imputer where one answered and
     keywords where none did.
 
-    `relevance_basis` in the detail says which decided: `unspsc`, `imputed` or
-    `keyword`. An imputation handed in for a CODED notice is ignored and
-    flagged - codes are the publisher's answer and nothing overrides them.
+    `relevance_basis` in the detail says which decided: `unspsc`, `imputed`,
+    `imputed_over_codes` or `keyword`.
+
+    CODED NOTICES (ref-008). Codes that admit decide, and an imputation handed
+    in beside them is ignored and flagged. Codes that REJECT are overruled only
+    by an imputation at CODED_IMPUTER_THRESHOLD or above, and the result says
+    so as `imputed_over_codes` while `family_result` stays `wrong_family`, so
+    the audit still sees what the publisher said. With no imputation the codes
+    decide exactly as they did before ref-008.
 
     NOT COLLAPSED TO ONE BOOLEAN, and that is the single most important thing in
     this module. "Coded into a family we don't buy" and "uncoded and no keyword
@@ -533,6 +548,15 @@ def stage_relevance(notice: Notice, criteria: dict, as_of,
         branch = "coded"
         relevance_basis = "unspsc"
         basis = "unspsc"
+        if not matched_families and imputation is not None:
+            imputed_evidence = {"imputed_family": imputation.family,
+                                "imputed_mass": imputation.mass,
+                                "imputer_model": imputation.model,
+                                "imputer_threshold": CODED_IMPUTER_THRESHOLD}
+            if mass_reaches(imputation.mass, CODED_IMPUTER_THRESHOLD):
+                relevant = True
+                relevance_basis = "imputed_over_codes"
+                basis = "imputed family mass over rejecting codes"
     elif imputation is not None:
         family_result = "no_codes_filed"
         keyword_result = "matched" if matched_keywords else "no_hit"
@@ -561,7 +585,9 @@ def stage_relevance(notice: Notice, criteria: dict, as_of,
                   **imputed_evidence},
         detail={
             "relevance_basis": relevance_basis,
-            "imputation_ignored_on_coded": has_codes and imputation is not None,
+            # Only where the codes admit: on a coded reject the imputation is
+            # evaluated (ref-008), whether or not it reaches the threshold.
+            "imputation_ignored_on_coded": bool(matched_families) and imputation is not None,
             "branch": branch,
             "has_codes": has_codes,
             "expected_families": list(families),
@@ -582,8 +608,11 @@ def stage_relevance(notice: Notice, criteria: dict, as_of,
 #
 # A coded notice whose filed codes reject, and which the imputer places in the
 # profile's families with summed mass >= FLAG_THRESHOLD, is recorded as a
-# flag. It is NOT admitted: stage_relevance ignores any imputation on a coded
-# notice, and this function is not a stage and is never consulted by one.
+# flag. The flag admits nothing: this function is not a stage and is never
+# consulted by one. Since ref-008, stage_relevance reads the same imputation
+# and admits at CODED_IMPUTER_THRESHOLD, so every flagged notice is also
+# admitted - by ref-008, not by the flag. ref-007 stays flag-only and NOT
+# EVALUATED; its record says why.
 #
 # THE MASS STOPS HERE. CodedFlag carries a band, not the mass, and has no
 # admit field, so nothing downstream of this function can hold the number or

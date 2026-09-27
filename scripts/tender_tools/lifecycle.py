@@ -61,6 +61,11 @@ def cmd_list_corpus(args) -> dict:
             "kind_basis": meta.get("kind_basis", "unclassified"),
             "matched_competencies": meta.get("matched_competencies", ""),
             "unspsc_families": meta.get("unspsc_families", ""),
+            # How the notice got into the corpus: `unspsc`, `imputed` (no
+            # UNSPSC filed), `imputed_over_codes` (ref-008: admitted over
+            # rejecting codes) or `keyword`. PROVENANCE, NEVER A QUALITY TIER:
+            # the briefing names it and never ranks, discounts or trusts on it.
+            "relevance_basis": meta.get("relevance_basis") or "unrecorded",
             "in_watching": (paths.WATCHING / f"{_slugify(doc['id'])}.md").exists(),
         })
 
