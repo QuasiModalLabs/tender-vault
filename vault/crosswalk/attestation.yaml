@@ -27,7 +27,7 @@ names:
     - tender_contracting
     count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Canadian Armed Forces:
     key: dnd
     sources:
@@ -41,9 +41,9 @@ names:
     - oag
     - tender_contracting
     - tender_end_user
-    count: 22
+    count: 23
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Canadian Transportation Accident Investigation and Safety Board:
     sources:
     - tender_contracting
@@ -75,22 +75,22 @@ names:
     - tender_end_user
     count: 4
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Department of Foreign Affairs, Trade and Development:
     key: gac
     sources:
     - tender_contracting
     count: 5
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Department of Industry:
     key: ised
     sources:
     - tender_contracting
     - tender_end_user
-    count: 7
+    count: 6
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Department of Public Safety and Emergency Preparedness:
     key: public-safety
     sources:
@@ -103,9 +103,9 @@ names:
     sources:
     - tender_contracting
     - tender_end_user
-    count: 494
+    count: 486
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Department of the Environment:
     key: eccc
     sources:
@@ -113,7 +113,7 @@ names:
     - tender_end_user
     count: 10
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Elections Canada:
     key: elections-canada
     sources:
@@ -128,22 +128,22 @@ names:
     - tender_end_user
     count: 2
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Immigration Refugee Board:
     key: irb
     sources:
     - tender_contracting
     count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Immigration and Refugee Board:
     key: irb
     sources:
     - tender_contracting
     - tender_end_user
-    count: 5
+    count: 6
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Infrastructure Canada:
     key: housing-infrastructure
     sources:
@@ -166,15 +166,15 @@ names:
     - tender_end_user
     count: 4
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Parks Canada Agency:
     key: parks-canada
     sources:
     - tender_contracting
     - tender_end_user
-    count: 26
+    count: 24
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Polar Knowledge Canada:
     key: polar
     sources:
@@ -182,7 +182,7 @@ names:
     - tender_end_user
     count: 1
     first_seen: '2026-08-03'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Public Works and Government Services Canada:
     key: pspc
     sources:
@@ -190,16 +190,16 @@ names:
     - tender_end_user
     count: 23
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Royal Canadian Mounted Police:
     key: rcmp
     sources:
     - oag
     - tender_contracting
     - tender_end_user
-    count: 30
+    count: 29
     first_seen: '2026-08-09'
-    last_seen: '2026-10-06'
+    last_seen: '2026-10-07'
   Treasury Board:
     key: tbs
     sources:
