@@ -25,9 +25,9 @@ names:
     sources:
     - oag
     - tender_contracting
-    count: 3
+    count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Canadian Armed Forces:
     key: dnd
     sources:
@@ -41,16 +41,16 @@ names:
     - oag
     - tender_contracting
     - tender_end_user
-    count: 28
+    count: 26
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Canadian Transportation Accident Investigation and Safety Board:
     key: tsb
     sources:
     - tender_contracting
     count: 1
     first_seen: '2026-08-03'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Correctional Service Canada:
     key: csc
     sources:
@@ -73,7 +73,7 @@ names:
     - tender_end_user
     count: 4
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Department of Foreign Affairs, Trade and Development:
     key: gac
     sources:
@@ -81,7 +81,7 @@ names:
     - tender_end_user
     count: 9
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Department of Industry:
     key: ised
     sources:
@@ -89,7 +89,7 @@ names:
     - tender_end_user
     count: 4
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Department of Public Safety and Emergency Preparedness:
     key: public-safety
     sources:
@@ -97,7 +97,7 @@ names:
     - tender_end_user
     count: 5
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Department of Public Works and Government Services:
     key: pspc
     sources:
@@ -105,22 +105,22 @@ names:
     - tender_end_user
     count: 506
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Department of the Environment:
     key: eccc
     sources:
     - tender_contracting
     - tender_end_user
-    count: 17
+    count: 19
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Elections Canada:
     key: elections-canada
     sources:
     - tender_contracting
     count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Foreign Affairs, Trade And Development:
     key: gac
     sources:
@@ -128,14 +128,14 @@ names:
     - tender_end_user
     count: 2
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Immigration Refugee Board:
     key: irb
     sources:
     - tender_contracting
     count: 1
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Immigration and Refugee Board:
     key: irb
     sources:
@@ -143,7 +143,7 @@ names:
     - tender_end_user
     count: 2
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Infrastructure Canada:
     key: housing-infrastructure
     sources:
@@ -157,24 +157,24 @@ names:
     - tender_contracting
     count: 2
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Parks Canada:
     key: parks-canada
     sources:
     - oag
     - tender_contracting
     - tender_end_user
-    count: 17
+    count: 3
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Parks Canada Agency:
     key: parks-canada
     sources:
     - tender_contracting
     - tender_end_user
-    count: 32
+    count: 35
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Polar Knowledge Canada:
     key: polar
     sources:
@@ -190,22 +190,22 @@ names:
     - tender_end_user
     count: 23
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Royal Canadian Mounted Police:
     key: rcmp
     sources:
     - oag
     - tender_contracting
     - tender_end_user
-    count: 32
+    count: 22
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
   Treasury Board:
     key: tbs
     sources:
     - oag
     - tender_contracting
     - tender_end_user
-    count: 18
+    count: 2
     first_seen: '2026-08-09'
-    last_seen: '2026-11-23'
+    last_seen: '2026-11-24'
